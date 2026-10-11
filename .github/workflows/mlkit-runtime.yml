@@ -33,22 +33,26 @@ jobs:
         run: ./gradlew :app:testDebugUnitTest --tests 'app.mangalate.local.*' --stacktrace
       - name: Enable KVM
         run: |
+          ./gradlew --stop
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - name: Test OCR and offline translation on Android
+        timeout-minutes: 15
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          api-level: 30
           target: google_apis
           arch: x86_64
           profile: pixel_6
           disable-animations: true
+          emulator-boot-timeout: 300
+          ram-size: 2048M
           script: |
             adb install -r app/build/outputs/apk/release/app-x86_64-release.apk
             adb install -r app/build/outputs/apk/androidTest/release/app-release-androidTest.apk
             adb logcat -c
-            adb shell am instrument -w -r -e class app.mangalate.local.MlKitRuntimeTest app.mangalate.test/androidx.test.runner.AndroidJUnitRunner | tee runtime-results.txt
+            timeout 420s adb shell am instrument -w -r -e class app.mangalate.local.MlKitRuntimeTest app.mangalate.test/androidx.test.runner.AndroidJUnitRunner | tee runtime-results.txt
             adb logcat -d > runtime-logcat.txt
             test "$(grep -c 'OK (3 tests)' runtime-results.txt)" -eq 1
       - name: Keep diagnostics
