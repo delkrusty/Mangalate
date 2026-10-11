@@ -6,6 +6,17 @@ internal data class GuideArticle(val title: String, val text: String)
 internal object MangalateGuides {
     val help = listOf(
         GuideArticle(
+            "Preparar o tradutor local e configurar DeepL",
+            "Em Mais › Tradução (Mangalate), escolha No celular, selecione os idiomas e toque em Preparar idiomas. " +
+                "Na primeira vez, mantenha internet até aparecer OCR e idiomas prontos; depois pode traduzir offline.\n\n" +
+                "Para DeepL, escolha esse modo e cole sua chave DeepL API Free ou API Pro no campo Chave DeepL API. " +
+                "Use Testar tradução para confirmar acesso real à API. Esse teste traduz somente Hello. " +
+                "Use Testar OCR para verificar o reconhecimento local, sem enviar páginas nem gastar a cota do DeepL.\n\n" +
+                "Uma assinatura do tradutor web não substitui a chave de API. Chave recusada: confira a chave inteira. " +
+                "Cota esgotada: revise os limites na conta DeepL. Falha no OCR: reinicie o app e repita Testar OCR; " +
+                "informe o resultado e os idiomas se persistir. Não compartilhe sua chave em prints.",
+        ),
+        GuideArticle(
             "Começar a ler e traduzir",
             "Abra um mangá na biblioteca e escolha um capítulo. Toque no centro da página para mostrar " +
                 "a barra do leitor e toque em 文A. Escolha o idioma em que o mangá foi escrito, o idioma de " +
@@ -112,6 +123,13 @@ internal object MangalateGuides {
 
     val privacy = listOf(
         GuideArticle(
+            "DeepL",
+            "O reconhecimento da imagem acontece no celular. O texto reconhecido e o contexto das falas são enviados " +
+                "à API oficial do DeepL; a imagem da página não é enviada pelo modo DeepL. " +
+                "A chave fica nas configurações privadas do aplicativo e não é embutida no APK. " +
+                "O tratamento dos textos enviados depende dos termos da sua conta DeepL.",
+        ),
+        GuideArticle(
             "Modo No celular",
             "O OCR, a tradução e a limpeza da página são executados no aparelho. O serviço de tradução precisa baixar " +
                 "os modelos de idioma inicialmente. Nesse modo, o Mangalate não envia a página ao Gemini nem ao servidor de tradução.",
@@ -140,6 +158,14 @@ internal object MangalateGuides {
     )
 
     val changes = listOf(
+        GuideArticle(
+            "0.5.1: tradução local e DeepL",
+            "Retorno à base 0.5.0 sem alterar limpeza, enquadramento ou composição dos balões. " +
+                "DeepL com chave API Free/Pro e teste real de tradução. Preparação dos idiomas e teste de OCR no app. " +
+                "Inicialização e preservação dos componentes ML Kit no APK minificado, com acesso serializado aos clientes. " +
+                "Falhas de tradução deixam de ser salvas silenciosamente como texto original. " +
+                "Somente páginas do modo No celular e DeepL precisam ser retraduzidas; o cache do Gemini fica preservado.",
+        ),
         GuideArticle(
             "Limpeza completa dos balões",
             "Nova identificação do interior dos balões de fundo uniforme e contorno fechado. " +
