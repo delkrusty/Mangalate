@@ -145,7 +145,7 @@ data class MangalateSettings(
     fun cacheSignature(): String = when (mode) {
         TranslateMode.SERVER -> "server|" + toServerConfig()
         else -> listOf(
-            "lettering-v4", mode.name, sourceLanguage.name, targetLanguage.code,
+            "bubble-interior-v5", mode.name, sourceLanguage.name, targetLanguage.code,
             if (mode == TranslateMode.GEMINI) effectiveGeminiModel else "",
             ignoreOutsideBubbles, uppercase, fontSizeOffset,
         ).joinToString("|")

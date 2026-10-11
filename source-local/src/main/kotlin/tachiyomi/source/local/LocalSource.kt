@@ -404,7 +404,7 @@ class LocalSource(
 
     companion object {
         const val ID = 0L
-        const val HELP_URL = "https://mihon.app/docs/guides/local-source/"
+        const val HELP_URL = "https://github.com/delkrusty/Mangalate/blob/main/HELP.md"
 
         private val LATEST_THRESHOLD = 7.days.inWholeMilliseconds
     }

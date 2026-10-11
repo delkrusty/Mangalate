@@ -3,7 +3,6 @@ package eu.kanade.presentation.more
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import eu.kanade.presentation.more.settings.widget.SwitchPreferenceWidget
 import eu.kanade.presentation.more.settings.widget.TextPreferenceWidget
@@ -20,7 +19,6 @@ import mihon.icons.materialsymbols.rounded.Settings
 import mihon.icons.materialsymbols.rounded.Translate
 import mihon.icons.materialsymbols.rounded.Storage
 import mihon.icons.materialsymbols.roundedfilled.VolunteerActivism
-import tachiyomi.core.common.Constants
 import tachiyomi.i18n.MR
 import tachiyomi.presentation.core.components.ScrollbarLazyColumn
 import tachiyomi.presentation.core.components.material.Scaffold
@@ -42,9 +40,8 @@ fun MoreScreen(
     onClickMangalate: () -> Unit = {},
     onClickSupport: () -> Unit,
     onClickAbout: () -> Unit,
+    onClickHelp: () -> Unit,
 ) {
-    val uriHandler = LocalUriHandler.current
-
     Scaffold { contentPadding ->
         ScrollbarLazyColumn(contentPadding = contentPadding) {
             item {
@@ -143,23 +140,25 @@ fun MoreScreen(
             }
             item {
                 TextPreferenceWidget(
-                    title = stringResource(MR.strings.label_support_us),
+                    title = "Sugestões para o Mangalate",
+                    subtitle = "Relate problemas ou proponha melhorias",
                     icon = MaterialSymbols.RoundedFilled.VolunteerActivism,
                     onPreferenceClick = onClickSupport,
                 )
             }
             item {
                 TextPreferenceWidget(
-                    title = stringResource(MR.strings.pref_category_about),
+                    title = "Sobre o Mangalate",
                     icon = MaterialSymbols.Rounded.Info,
                     onPreferenceClick = onClickAbout,
                 )
             }
             item {
                 TextPreferenceWidget(
-                    title = stringResource(MR.strings.label_help),
+                    title = "Ajuda do Mangalate",
+                    subtitle = "Manuais e soluções de problemas, disponíveis offline",
                     icon = MaterialSymbols.AutoMirroredRounded.Help,
-                    onPreferenceClick = { uriHandler.openUri(Constants.URL_HELP) },
+                    onPreferenceClick = onClickHelp,
                 )
             }
         }

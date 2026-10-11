@@ -24,9 +24,8 @@ import kotlin.math.roundToInt
 /**
  * Limpa o texto original e diagrama a tradução no lugar.
  *
- * Balões lisos: a cor do fundo é estimada pela borda da área do texto, os traços das letras
- * são detectados pela diferença de cor e repintados; um preenchimento por inundação encontra
- * o interior do balão para descobrir quanto espaço há para o texto traduzido.
+ * Balões fechados e lisos: segmenta todo o interior e limpa inclusive caracteres
+ * que o OCR não localizou, preservando o contorno. Regiões incertas usam limpeza local.
  *
  * Texto sobre a arte: a área é reconstruída de fora para dentro (difusão a partir das bordas)
  * e o texto é desenhado com contorno para ficar legível.
@@ -38,6 +37,7 @@ object PageRenderer {
         val layout: RectF,
         val textColor: Int,
         val strokeColor: Int?,
+        val wholeBubble: Boolean = false,
     )
 
     @Volatile
@@ -64,7 +64,27 @@ object PageRenderer {
         // 1) limpar tudo primeiro, para uma limpeza não apagar o texto de outro balão
         for (region in regions) {
             val plan = clean(page, region, s) ?: continue
-            plans += plan
+            val previous = plans.indexOfFirst { existing ->
+                if (!plan.wholeBubble || !existing.wholeBubble) {
+                    false
+                } else {
+                    val intersection = RectF(plan.layout)
+                    intersection.intersect(existing.layout) &&
+                        intersection.width() * intersection.height() >
+                        min(plan.layout.width() * plan.layout.height(), existing.layout.width() * existing.layout.height()) * 0.85f
+                }
+            }
+            if (previous < 0) {
+                plans += plan
+            } else {
+                // Vários blocos de OCR no mesmo balão viram uma fala, sem duas legendas sobrepostas.
+                val old = plans[previous]
+                val merged = old.region.copy(
+                    original = old.region.original + " " + plan.region.original,
+                    translation = old.region.translation + " " + plan.region.translation,
+                )
+                plans[previous] = Plan(merged, old.layout, old.textColor, old.strokeColor, true)
+            }
         }
         // 2) diagramar
         val canvas = Canvas(page)
@@ -93,6 +113,30 @@ object PageRenderer {
         val eh = e.height()
         val px = IntArray(ew * eh)
         page.getPixels(px, 0, ew, e.left, e.top, ew, eh)
+
+        if (!region.overArt) {
+            val segmented = BubbleSegmenter.identify(
+                px,
+                ew,
+                eh,
+                BubbleGeometry.Box(r.left - e.left, r.top - e.top, r.right - e.left, r.bottom - e.top),
+            )
+            if (segmented != null) {
+                val safe = BubbleGeometry.fit(segmented.interior, ew, eh, r.centerX() - e.left, r.centerY() - e.top)
+                if (safe != null) {
+                    for (i in px.indices) if (segmented.interior[i]) px[i] = segmented.background
+                    page.setPixels(px, 0, ew, e.left, e.top, ew, eh)
+                    val box = RectF(
+                        safe.left + e.left.toFloat(),
+                        safe.top + e.top.toFloat(),
+                        safe.right + e.left.toFloat(),
+                        safe.bottom + e.top.toFloat(),
+                    )
+                    val color = if (luma(segmented.background) < 110) Color.WHITE else Color.rgb(20, 20, 20)
+                    return Plan(region, box, color, null, wholeBubble = true)
+                }
+            }
+        }
 
         // área do texto (com folga) em coordenadas locais
         val pad = max(3, (min(r.width(), r.height()) * 0.06f).toInt())

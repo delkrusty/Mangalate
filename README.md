@@ -54,6 +54,14 @@ A faixa grátis tem limite de pedidos por minuto. Se aparecer aviso de limite, e
 - As páginas antigas em cache não são reutilizadas pela nova diagramação. Nos modos online, abra novamente os capítulos com internet antes de ler offline.
 - DeepL removido, inclusive a chave antiga salva no aparelho. Quem usava esse modo migra para Gemini se já tiver uma chave, ou para o modo offline.
 
+## Limpeza e identidade na versão 0.5.0
+
+- Segmentação do interior completo de balões de fundo uniforme e contorno fechado. Remove inclusive caracteres fora da caixa do OCR e preserva a borda e a arte externa.
+- Blocos detectados no mesmo balão são compostos como uma única fala para evitar sobreposição.
+- Sobre, novidades e privacidade próprios do Mangalate; os créditos legais da base continuam preservados.
+- Ajuda pesquisável dentro do app, com manuais e soluções de problemas disponíveis offline. Consulte também [HELP.md](HELP.md).
+- Regiões com contorno aberto, textura ou baixa confiança usam a limpeza conservadora. A limpeza total não é aplicada indiscriminadamente à arte.
+
 ## Compilar
 
 O GitHub Actions compila a cada push em `main` e publica o APK em Releases. Para compilar localmente: JDK 21 e Android SDK, depois:

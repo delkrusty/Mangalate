@@ -82,6 +82,6 @@ jobs:
         run: |
           TAG="build-${{ github.run_number }}"
           gh release create "$TAG" dist/*.apk \
-            --title "Mangalate 0.4.0 (build ${{ github.run_number }})" \
-            --notes "Encaixe do texto com margens seguras e limite de fonte; hifenização silábica em português (DivSilab); sem cortes arbitrários dentro de palavras; DeepL removido. Modos: Gemini, offline e servidor. Páginas em cache da versão anterior serão retraduzidas com a nova diagramação, exigindo conexão nos modos online. APK gerado a partir de ${GITHUB_SHA::7}. Baixe **Mangalate-arm64-v8a.apk** (celulares atuais) ou **Mangalate-universal.apk**." \
+            --title "Mangalate 0.5.0 (build ${{ github.run_number }})" \
+            --notes "Segmentação e limpeza do interior completo de balões de fundo uniforme e contorno fechado; fallback conservador para arte e contornos incertos; composição única por balão. Sobre e Ajuda próprios do Mangalate, com manuais pesquisáveis e privacidade offline. Links de suporte e atualização direcionados ao nosso projeto. Páginas antigas serão retraduzidas; nos modos online, prepare novamente os capítulos com internet antes de ler offline. APK gerado a partir de ${GITHUB_SHA::7}. Baixe **Mangalate-arm64-v8a.apk** (celulares atuais) ou **Mangalate-universal.apk**." \
             --latest
