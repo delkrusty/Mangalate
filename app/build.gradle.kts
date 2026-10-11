@@ -38,12 +38,18 @@ android {
         applicationId = "app.mangalate"
 
         versionCode = System.getenv("MANGALATE_VERSION_CODE")?.toIntOrNull() ?: 1
-        versionName = "0.6.0"
+        versionName = "0.5.1"
 
         buildConfigField("boolean", "TELEMETRY_INCLUDED", "${Config.includeTelemetry}")
         buildConfigField("boolean", "UPDATER_ENABLED", "${Config.enableUpdater}")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // Os testes de runtime precisam exercitar o APK minificado, não apenas debug.
+    if (providers.gradleProperty("runtimeCheck").isPresent) {
+        testBuildType = "release"
+        defaultConfig.testProguardFiles("runtime-test-keep.pro")
     }
 
     if (System.getenv("MIHON_GITHUB_RELEASE").toBoolean()) {
@@ -75,6 +81,9 @@ android {
         }
         val release = getByName("release") {
             isMinifyEnabled = true
+            if (providers.gradleProperty("runtimeCheck").isPresent) {
+                proguardFile("runtime-test-keep.pro")
+            }
             isShrinkResources = true
 
             signingConfig = debug.signingConfig
@@ -129,6 +138,7 @@ android {
             isUniversalApk = true
             reset()
             include("armeabi-v7a", "arm64-v8a")
+            if (providers.gradleProperty("runtimeCheck").isPresent) include("x86_64")
         }
     }
 
@@ -333,6 +343,10 @@ dependencies {
 
     // Tests
     testImplementation(libs.bundles.test)
+    testImplementation("org.json:json:20250517")
+    testImplementation("com.squareup.okhttp3:mockwebserver:${libs.versions.okhttp.get()}")
+    androidTestImplementation(libs.androidx.test.junit)
+    androidTestImplementation("androidx.test:runner:1.7.0")
     testRuntimeOnly(libs.junit.platform.launcher)
 
     // For detecting memory leaks; see https://square.github.io/leakcanary/

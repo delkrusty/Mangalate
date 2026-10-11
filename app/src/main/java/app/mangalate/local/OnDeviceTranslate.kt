@@ -7,14 +7,20 @@ import com.google.mlkit.nl.translate.TranslateLanguage
 import com.google.mlkit.nl.translate.Translation
 import com.google.mlkit.nl.translate.Translator
 import com.google.mlkit.nl.translate.TranslatorOptions
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Tradução offline do ML Kit. Os modelos de idioma são baixados uma única vez.
  */
 object OnDeviceTranslate {
 
-    private val translators = HashMap<String, Translator>()
-    private val ready = HashSet<String>()
+    private class ClientState(val translator: Translator) {
+        val mutex = Mutex()
+        var ready = false
+    }
+    private val translators = ConcurrentHashMap<String, ClientState>()
 
     private fun src(l: SourceLanguage) = when (l) {
         SourceLanguage.JA -> TranslateLanguage.JAPANESE
@@ -46,16 +52,23 @@ object OnDeviceTranslate {
         val d = dst(target)
         if (s == d) return texts
         val key = "$s>$d"
-        val translator = synchronized(translators) {
+        val state = synchronized(translators) {
             translators.getOrPut(key) {
-                Translation.getClient(TranslatorOptions.Builder().setSourceLanguage(s).setTargetLanguage(d).build())
+                ClientState(Translation.getClient(TranslatorOptions.Builder().setSourceLanguage(s).setTargetLanguage(d).build()))
             }
         }
-        if (key !in ready) {
-            onDownload()
-            translator.downloadModelIfNeeded(DownloadConditions.Builder().build()).awaitTask()
-            synchronized(ready) { ready += key }
+        return state.mutex.withLock {
+            if (!state.ready) {
+                onDownload()
+                state.translator.downloadModelIfNeeded(DownloadConditions.Builder().build()).awaitTask()
+                state.ready = true
+            }
+            // Erros não viram texto original silenciosamente nem são salvos como sucesso.
+            texts.map { text -> state.translator.translate(text).awaitTask() }
         }
-        return texts.map { t -> runCatching { translator.translate(t).awaitTask() }.getOrDefault(t) }
+    }
+
+    suspend fun prepare(source: SourceLanguage, target: TargetLanguage) {
+        translate(emptyList(), source, target) {}
     }
 }

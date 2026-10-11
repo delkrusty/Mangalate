@@ -24,7 +24,6 @@ internal object BubbleSegmenter {
         width: Int,
         height: Int,
         text: BubbleGeometry.Box,
-        closureRadius: Int = 1,
     ): Result? {
         require(pixels.size == width * height)
         if (width < 12 || height < 12 || text.width < 2 || text.height < 2) return null
@@ -55,8 +54,7 @@ internal object BubbleSegmenter {
         val brightness = luma(background)
         if (brightness in 75..179) return null
         val open = BooleanArray(pixels.size) { distance(pixels[it], background) < 55 }
-        val radius = closureRadius.coerceIn(1, 2)
-        val closed = closeContour(open, width, height, radius)
+        val closed = closeContour(open, width, height)
 
         val cx = (x0 + x1) / 2
         val cy = (y0 + y1) / 2
@@ -94,7 +92,7 @@ internal object BubbleSegmenter {
             val x = i % width
             val y = i / width
             // Inclui também bordas de página: não apagamos uma região sem contorno completo.
-            if (x <= radius || x >= width - 1 - radius || y <= radius || y >= height - 1 - radius) return null
+            if (x <= 1 || x >= width - 2 || y <= 1 || y >= height - 2) return null
             left = min(left, x)
             right = max(right, x)
             top = min(top, y)
@@ -105,9 +103,8 @@ internal object BubbleSegmenter {
             visit(i + width)
         }
         val textArea = (x1 - x0).toLong() * (y1 - y0)
-        if (tail < textArea * 0.30 || tail > pixels.size * 0.60 || tail > textArea * 18) return null
+        if (tail < textArea * 0.30 || tail > pixels.size * 0.70) return null
         if (right - left < text.width * 0.55 || bottom - top < text.height * 0.55) return null
-        if (right - left > text.width * 4.5 + 12 || bottom - top > text.height * 4.5 + 12) return null
 
         // O complemento conectado ao exterior contém contorno e arte. Apenas
         // buracos inteiramente dentro do balão (letras) são incorporados à máscara.
@@ -172,16 +169,16 @@ internal object BubbleSegmenter {
             filled++
             if (distance(pixels[i], background) < 40) uniform++
         }
-        if (filled == 0 || uniform < filled * 0.78 || filled > textArea * 20 || filled > pixels.size * 0.65) return null
+        if (filled == 0 || uniform < filled * 0.78) return null
         return Result(silhouette, background, BubbleGeometry.Box(left, top, right + 1, bottom + 1))
     }
 
     /** Fechamento morfológico 3x3 do contorno (abertura da região clara). */
-    private fun closeContour(open: BooleanArray, width: Int, height: Int, radius: Int): BooleanArray {
+    private fun closeContour(open: BooleanArray, width: Int, height: Int): BooleanArray {
         val eroded = BooleanArray(open.size)
-        for (y in radius until height - radius) for (x in radius until width - radius) {
+        for (y in 1 until height - 1) for (x in 1 until width - 1) {
             var allOpen = true
-            loop@ for (dy in -radius..radius) for (dx in -radius..radius) {
+            loop@ for (dy in -1..1) for (dx in -1..1) {
                 if (!open[(y + dy) * width + x + dx]) {
                     allOpen = false
                     break@loop
@@ -190,9 +187,9 @@ internal object BubbleSegmenter {
             eroded[y * width + x] = allOpen
         }
         val restored = BooleanArray(open.size)
-        for (y in radius until height - radius) for (x in radius until width - radius) {
+        for (y in 1 until height - 1) for (x in 1 until width - 1) {
             var anyOpen = false
-            loop@ for (dy in -radius..radius) for (dx in -radius..radius) {
+            loop@ for (dy in -1..1) for (dx in -1..1) {
                 if (eroded[(y + dy) * width + x + dx]) {
                     anyOpen = true
                     break@loop

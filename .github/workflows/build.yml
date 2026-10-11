@@ -81,7 +81,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="build-${{ github.run_number }}"
+          release_flags=(--latest)
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            release_flags=(--draft)
+          fi
           gh release create "$TAG" dist/*.apk \
-            --title "Mangalate 0.6.0 (build ${{ github.run_number }})" \
-            --notes "Revisão de segurança da arte: limites contra falsos balões gigantes; detecção sobre o original imutável; sem preenchimento retangular ou difusão em textos soltos; limpeza seletiva de letras confirmadas por OCR. Limpeza completa mantida nos balões seguros. Onomatopeias desativadas por padrão, com opção em Mais > Tradução > Preservar a arte. No servidor, o padrão também preserva textos soltos fora de balões. Cache anterior invalidado; prepare novamente as páginas com internet nos modos online. APK gerado a partir de ${GITHUB_SHA::7}. Baixe **Mangalate-arm64-v8a.apk** ou **Mangalate-universal.apk**." \
-            --latest
+            --target "$GITHUB_SHA" \
+            --title "Mangalate 0.5.1 (build ${{ github.run_number }})" \
+            --notes "Base restaurada da 0.5.0, mantendo sua limpeza e diagramação sem alterações. DeepL reincluído com chave API Free/Pro, botão Colar e teste real de tradução. Preparação dos idiomas offline e teste de OCR no aplicativo. Preservação dos componentes de inicialização do ML Kit no APK minificado; acesso serializado aos clientes locais. Falhas de tradução não são mais ocultadas como texto original. Cache renovado somente para No celular e DeepL; Gemini e servidor mantidos. APK gerado a partir de ${GITHUB_SHA::7}. Baixe **Mangalate-arm64-v8a.apk** (celulares atuais) ou **Mangalate-universal.apk**. Chaves pessoais não são incluídas no APK." \
+            "${release_flags[@]}"

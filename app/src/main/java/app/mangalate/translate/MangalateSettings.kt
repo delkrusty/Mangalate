@@ -16,6 +16,11 @@ enum class TranslateMode(val label: String, val badge: String, val description: 
         "Melhor qualidade",
         "A IA do Google lê e traduz a página inteira com contexto. Precisa de uma chave grátis.",
     ),
+    DEEPL(
+        "DeepL",
+        "Com chave API",
+        "OCR no celular e tradução pela API do DeepL. Aceita chave API Free ou Pro.",
+    ),
     SERVER(
         "Servidor próprio",
         "Avançado",
@@ -117,6 +122,7 @@ data class MangalateSettings(
     val geminiKey: String = "",
     val geminiModel: String = DEFAULT_GEMINI_MODEL,
     val geminiFast: Boolean = true,
+    val deeplKey: String = "",
     val translateOnDownload: Boolean = false,
     val setupDone: Boolean = false,
     val serverUrl: String = "",
@@ -126,7 +132,6 @@ data class MangalateSettings(
     val quality: QualityProfile = QualityProfile.HIGH,
     val typeset: TypesetMode = TypesetMode.AUTO,
     val ignoreOutsideBubbles: Boolean = false,
-    val translateSoundEffects: Boolean = false,
     val uppercase: Boolean = false,
     val fontSizeOffset: Int = 0,
     val maskDilation: Int = 0,
@@ -135,6 +140,7 @@ data class MangalateSettings(
         get() = when (mode) {
             TranslateMode.ON_DEVICE -> true
             TranslateMode.GEMINI -> geminiKey.isNotBlank()
+            TranslateMode.DEEPL -> deeplKey.isNotBlank()
             TranslateMode.SERVER -> serverUrl.isNotBlank()
         }
 
@@ -144,11 +150,12 @@ data class MangalateSettings(
 
     /** Identifica a configuração que afeta o resultado (para o cache). */
     fun cacheSignature(): String = when (mode) {
-        TranslateMode.SERVER -> "server-artwork-v6|${sourceLanguage.name}|$translateSoundEffects|" + toServerConfig()
+        TranslateMode.SERVER -> "server|" + toServerConfig()
         else -> listOf(
-            "artwork-safe-v6", mode.name, sourceLanguage.name, targetLanguage.code,
+            if (mode == TranslateMode.ON_DEVICE || mode == TranslateMode.DEEPL) "sdk-translation-v5.1" else "bubble-interior-v5",
+            mode.name, sourceLanguage.name, targetLanguage.code,
             if (mode == TranslateMode.GEMINI) effectiveGeminiModel else "",
-            ignoreOutsideBubbles, translateSoundEffects, uppercase, fontSizeOffset,
+            ignoreOutsideBubbles, uppercase, fontSizeOffset,
         ).joinToString("|")
     }
 

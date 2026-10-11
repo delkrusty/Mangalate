@@ -76,6 +76,7 @@ object MangalateTranslator {
     private val semaphores = mapOf(
         TranslateMode.ON_DEVICE to Semaphore(2),
         TranslateMode.GEMINI to Semaphore(3),
+        TranslateMode.DEEPL to Semaphore(3),
         TranslateMode.SERVER to Semaphore(2),
     )
 
@@ -99,16 +100,6 @@ object MangalateTranslator {
         synchronized(this) {
             if (prefs != null) return
             val p = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            // Retira credenciais de um provedor removido e migra a seleção antiga.
-            val migration = p.edit().remove("deepl_key")
-            if (p.getString("mode", null) == "DEEPL") {
-                migration.putString(
-                    "mode",
-                    if (p.getString("gemini_key", "").isNullOrBlank()) "ON_DEVICE" else "GEMINI",
-                )
-            }
-            if (p.getString("engine", null) == "deepl") migration.putString("engine", "gemini")
-            migration.apply()
             prefs = p
             _settings.value = read(p)
             _enabled.value = p.getBoolean("enabled", false) && _settings.value.isConfigured
@@ -122,6 +113,7 @@ object MangalateTranslator {
         geminiModel = p.getString("gemini_model", null) ?: MangalateSettings.DEFAULT_GEMINI_MODEL,
         setupDone = p.getBoolean("setup_done", false),
         geminiFast = p.getBoolean("gemini_fast", true),
+        deeplKey = p.getString("deepl_key", "") ?: "",
         translateOnDownload = p.getBoolean("translate_on_download", false),
         serverUrl = p.getString("server_url", "") ?: "",
         accessKey = p.getString("access_key", "") ?: "",
@@ -130,7 +122,6 @@ object MangalateTranslator {
         quality = QualityProfile.fromName(p.getString("quality", null)),
         typeset = TypesetMode.fromName(p.getString("typeset", null)),
         ignoreOutsideBubbles = p.getBoolean("ignore_outside_bubbles", false),
-        translateSoundEffects = p.getBoolean("translate_sound_effects", false),
         uppercase = p.getBoolean("uppercase", false),
         fontSizeOffset = p.getInt("font_size_offset", 0),
         maskDilation = p.getInt("mask_dilation", 0),
@@ -147,6 +138,7 @@ object MangalateTranslator {
             ?.putString("gemini_model", new.geminiModel)
             ?.putBoolean("setup_done", new.setupDone)
             ?.putBoolean("gemini_fast", new.geminiFast)
+            ?.putString("deepl_key", new.deeplKey)
             ?.putBoolean("translate_on_download", new.translateOnDownload)
             ?.putString("server_url", new.serverUrl)
             ?.putString("access_key", new.accessKey)
@@ -155,7 +147,6 @@ object MangalateTranslator {
             ?.putString("quality", new.quality.name)
             ?.putString("typeset", new.typeset.name)
             ?.putBoolean("ignore_outside_bubbles", new.ignoreOutsideBubbles)
-            ?.putBoolean("translate_sound_effects", new.translateSoundEffects)
             ?.putBoolean("uppercase", new.uppercase)
             ?.putInt("font_size_offset", new.fontSizeOffset)
             ?.putInt("mask_dilation", new.maskDilation)
@@ -239,9 +230,7 @@ object MangalateTranslator {
                         _activeJobs.update { it + 1 }
                         try {
                             val result = when (s.mode) {
-                                TranslateMode.SERVER -> app.mangalate.local.ServerArtworkGuard.preserve(
-                                    image, request(s, s.toServerConfig(), image), s,
-                                )
+                                TranslateMode.SERVER -> request(s, s.toServerConfig(), image)
                                 else -> LocalPipeline.process(context.applicationContext, image, s) { _status.value = it }
                             }
                             writeCache(context, cacheFile, result)

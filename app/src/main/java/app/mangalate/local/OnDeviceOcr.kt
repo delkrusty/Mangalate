@@ -19,6 +19,7 @@ import kotlin.math.min
 object OnDeviceOcr {
 
     private val recognizers = HashMap<SourceLanguage, TextRecognizer>()
+    private val mutex = kotlinx.coroutines.sync.Mutex()
 
     private fun recognizer(lang: SourceLanguage): TextRecognizer = synchronized(recognizers) {
         recognizers.getOrPut(lang) {
@@ -34,6 +35,32 @@ object OnDeviceOcr {
     private class Line(val rect: Rect, val text: String)
 
     suspend fun detect(page: Bitmap, lang: SourceLanguage): List<TextRegion> {
+        mutex.lock()
+        try {
+            return detectLocked(page, lang)
+        } finally {
+            mutex.unlock()
+        }
+    }
+
+    /** Confere o mesmo cliente de OCR, com uma imagem sintética que não sai do celular. */
+    suspend fun verify(lang: SourceLanguage) {
+        val page = Bitmap.createBitmap(1000, 300, Bitmap.Config.ARGB_8888)
+        try {
+            val canvas = android.graphics.Canvas(page)
+            canvas.drawColor(android.graphics.Color.WHITE)
+            val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.BLACK
+                textSize = 70f
+            }
+            canvas.drawText("HELLO WORLD", 80f, 160f, paint)
+            if (detect(page, lang).isEmpty()) throw FriendlyException("OCR não reconheceu o texto de teste. Reinicie o app e tente novamente.")
+        } finally {
+            page.recycle()
+        }
+    }
+
+    private suspend fun detectLocked(page: Bitmap, lang: SourceLanguage): List<TextRegion> {
         val lines = ArrayList<Line>()
         for (tile in PageTiles.split(page.width, page.height)) {
             val bmp = if (tile.top == 0 && tile.height() == page.height) {
@@ -91,7 +118,6 @@ object OnDeviceOcr {
                 rect = rect,
                 original = ordered.joinToString(sep) { it.text.trim() }.let(::normalizeCaps),
                 vertical = vertical,
-                glyphBoxes = members.map { Rect(it.rect) },
             )
         }.filter { it.original.isNotBlank() }
     }
