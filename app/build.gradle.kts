@@ -340,7 +340,7 @@ dependencies {
     // Tests
     testImplementation(libs.bundles.test)
     testImplementation("org.json:json:20250517")
-    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("com.squareup.okhttp3:mockwebserver:${libs.versions.okhttp.get()}")
     androidTestImplementation(libs.androidx.test.junit)
     androidTestImplementation("androidx.test:runner:1.7.0")
     testRuntimeOnly(libs.junit.platform.launcher)
