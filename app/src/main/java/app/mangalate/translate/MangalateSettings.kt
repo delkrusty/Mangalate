@@ -16,6 +16,11 @@ enum class TranslateMode(val label: String, val badge: String, val description: 
         "Melhor qualidade",
         "A IA do Google lê e traduz a página inteira com contexto. Precisa de uma chave grátis.",
     ),
+    DEEPL(
+        "DeepL",
+        "Com chave API",
+        "OCR no celular e tradução pela API do DeepL. Aceita chave API Free ou Pro.",
+    ),
     SERVER(
         "Servidor próprio",
         "Avançado",
@@ -75,6 +80,7 @@ enum class TranslatorEngine(
 ) {
     DEEPSEEK("deepseek", "DeepSeek", "Muito barato e bom com contexto. Recomendado.", true),
     GEMINI("gemini", "Gemini", "Google. Tem faixa gratuita nos modelos Flash.", true),
+    DEEPL("deepl", "DeepL", "Chave da API configurada no servidor.", true),
     OPENAI("chatgpt", "OpenAI", "Modelos GPT. Ótima qualidade, custo maior.", true),
     GROQ("groq", "Groq", "Rápido, com cota gratuita generosa.", true),
     CUSTOM("custom_openai", "Compatível OpenAI", "Ollama, LM Studio, OpenRouter etc.", false),
@@ -117,6 +123,7 @@ data class MangalateSettings(
     val geminiKey: String = "",
     val geminiModel: String = DEFAULT_GEMINI_MODEL,
     val geminiFast: Boolean = true,
+    val deeplKey: String = "",
     val translateOnDownload: Boolean = false,
     val setupDone: Boolean = false,
     val serverUrl: String = "",
@@ -134,6 +141,7 @@ data class MangalateSettings(
         get() = when (mode) {
             TranslateMode.ON_DEVICE -> true
             TranslateMode.GEMINI -> geminiKey.isNotBlank()
+            TranslateMode.DEEPL -> deeplKey.isNotBlank()
             TranslateMode.SERVER -> serverUrl.isNotBlank()
         }
 
@@ -145,7 +153,8 @@ data class MangalateSettings(
     fun cacheSignature(): String = when (mode) {
         TranslateMode.SERVER -> "server|" + toServerConfig()
         else -> listOf(
-            "bubble-interior-v5", mode.name, sourceLanguage.name, targetLanguage.code,
+            if (mode == TranslateMode.ON_DEVICE || mode == TranslateMode.DEEPL) "sdk-translation-v5.1" else "bubble-interior-v5",
+            mode.name, sourceLanguage.name, targetLanguage.code,
             if (mode == TranslateMode.GEMINI) effectiveGeminiModel else "",
             ignoreOutsideBubbles, uppercase, fontSizeOffset,
         ).joinToString("|")

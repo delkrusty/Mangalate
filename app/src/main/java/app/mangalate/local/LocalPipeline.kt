@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import app.mangalate.translate.MangalateSettings
 import app.mangalate.translate.TranslateMode
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.IOException
@@ -31,14 +32,27 @@ object LocalPipeline {
             val regions = when (s.mode) {
                 TranslateMode.GEMINI -> GeminiClient.detectAndTranslate(page, s)
                 else -> {
-                    val found = OnDeviceOcr.detect(page, s.sourceLanguage)
+                    val found = stage("reconhecimento do texto (OCR)") {
+                        MlKitSupport.initialize(context)
+                        OnDeviceOcr.detect(page, s.sourceLanguage)
+                    }
                     if (found.isEmpty()) {
                         emptyList()
                     } else {
                         val texts = found.map { it.original }
-                        val translated = OnDeviceTranslate.translate(texts, s.sourceLanguage, s.targetLanguage) {
-                            status("Baixando o tradutor (só na primeira vez)…")
-                        }.also { status(null) }
+                        val translated = if (s.mode == TranslateMode.DEEPL) {
+                            DeepLClient.translate(s.deeplKey, texts, s.sourceLanguage, s.targetLanguage)
+                        } else {
+                            try {
+                                stage("tradução no celular; confira os idiomas em Configurações > Mangalate") {
+                                    OnDeviceTranslate.translate(texts, s.sourceLanguage, s.targetLanguage) {
+                                        status("Baixando o tradutor (só na primeira vez)…")
+                                    }
+                                }
+                            } finally {
+                                status(null)
+                            }
+                        }
                         found.zip(translated) { r, t -> r.copy(translation = t) }
                     }
                 }
@@ -52,5 +66,13 @@ object LocalPipeline {
         } finally {
             page.recycle()
         }
+    }
+
+    private suspend fun <T> stage(name: String, block: suspend () -> T): T = try {
+        block()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        throw FriendlyException("Falha no $name: ${e.message ?: e.javaClass.simpleName}").apply { initCause(e) }
     }
 }

@@ -66,6 +66,10 @@ import androidx.compose.ui.unit.dp
 import app.mangalate.translate.MangalateSettings
 import app.mangalate.translate.MangalateTranslator
 import app.mangalate.local.GeminiClient
+import app.mangalate.local.DeepLClient
+import app.mangalate.local.MlKitSupport
+import app.mangalate.local.OnDeviceOcr
+import app.mangalate.local.OnDeviceTranslate
 import app.mangalate.translate.QualityProfile
 import app.mangalate.translate.SourceLanguage
 import app.mangalate.translate.TranslateMode
@@ -76,6 +80,10 @@ import eu.kanade.presentation.components.AppBar
 import eu.kanade.presentation.util.LocalBackPress
 import eu.kanade.presentation.util.Screen
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import mihon.icons.materialsymbols.MaterialSymbols
 import mihon.icons.materialsymbols.rounded.AutoAwesome
 import mihon.icons.materialsymbols.rounded.Brush as BrushIcon
@@ -127,6 +135,12 @@ class SettingsMangalateScreen : Screen() {
                 item { ModeSection(settings = settings, onChange = ::update) }
                 if (settings.mode == TranslateMode.GEMINI) {
                     item { GeminiSection(settings = settings, onChange = ::update) }
+                }
+                if (settings.mode == TranslateMode.DEEPL) {
+                    item { DeepLSection(settings = settings, onChange = ::update) }
+                }
+                if (settings.mode == TranslateMode.ON_DEVICE || settings.mode == TranslateMode.DEEPL) {
+                    item { LocalPreparationSection(settings) }
                 }
                 item { OfflineSection(settings = settings, onChange = ::update) }
                 item { LanguageSection(settings = settings, onChange = ::update) }
@@ -197,6 +211,8 @@ private fun HeroCard(
                             settings.summary
                         } else if (settings.mode == TranslateMode.GEMINI) {
                             "Cole sua chave do Gemini abaixo"
+                        } else if (settings.mode == TranslateMode.DEEPL) {
+                            "Cole sua chave da API do DeepL abaixo"
                         } else {
                             "Informe o endereço do servidor"
                         },
@@ -846,6 +862,180 @@ private fun StepRow(n: Int, text: String) {
         }
         Spacer(Modifier.width(12.dp))
         Text(text, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
+private fun DeepLSection(
+    settings: MangalateSettings,
+    onChange: ((MangalateSettings) -> MangalateSettings) -> Unit,
+) {
+    val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
+    val scope = rememberCoroutineScope()
+    var key by remember { mutableStateOf(settings.deeplKey) }
+    var running by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var success by remember { mutableStateOf(false) }
+
+    fun save(value: String) {
+        key = value.trim()
+        message = null
+        onChange { it.copy(deeplKey = key) }
+    }
+
+    SectionCard(
+        icon = MaterialSymbols.Rounded.Translate,
+        title = "Chave da API do DeepL",
+        subtitle = "Tradução online, sem montar servidor",
+    ) {
+        Text("Use uma chave DeepL API Free ou API Pro. A conta do tradutor web não substitui a API.")
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            OutlinedButton(onClick = { uriHandler.openUri("https://www.deepl.com/your-account/keys") }) {
+                Text("Obter chave")
+            }
+            FilledTonalButton(
+                enabled = !running,
+                onClick = {
+                    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                        as android.content.ClipboardManager
+                    clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()?.let(::save)
+                },
+            ) { Text("Colar") }
+        }
+        OutlinedTextField(
+            value = key,
+            onValueChange = ::save,
+            enabled = !running,
+            label = { Text("Chave DeepL API") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Button(
+            enabled = key.isNotBlank() && !running,
+            onClick = {
+                val testedKey = key
+                running = true
+                message = null
+                scope.launch {
+                    try {
+                        val result = withTimeout(180_000) { DeepLClient.testTranslation(testedKey) }
+                        val quota = DeepLClient.usage(testedKey).getOrNull()
+                        success = true
+                        message = "Tradução confirmada: Hello → $result." +
+                            if (quota != null) " Uso: ${quota.first} de ${quota.second} caracteres." else ""
+                    } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                        success = false
+                        message = "O teste do DeepL demorou demais. Confira a conexão e tente novamente."
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        success = false
+                        message = e.message ?: "Não foi possível testar o DeepL."
+                    } finally {
+                        running = false
+                    }
+                }
+            },
+        ) {
+            if (running) {
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(8.dp))
+            }
+            Text("Testar tradução")
+        }
+        TestMessage(message, success)
+        Text(
+            "O teste envia apenas a palavra Hello. Ao ler, o OCR funciona no celular e somente o texto " +
+                "reconhecido é enviado ao DeepL. A chave fica nas configurações privadas deste app.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
+}
+
+@Composable
+private fun LocalPreparationSection(settings: MangalateSettings) {
+    val context = LocalContext.current.applicationContext
+    val scope = rememberCoroutineScope()
+    var running by remember { mutableStateOf(false) }
+    var message by remember(settings.mode, settings.sourceLanguage, settings.targetLanguage) {
+        mutableStateOf<String?>(null)
+    }
+    var success by remember { mutableStateOf(false) }
+    SectionCard(
+        icon = MaterialSymbols.Rounded.Language,
+        title = if (settings.mode == TranslateMode.ON_DEVICE) "Preparar tradução no celular" else "Testar reconhecimento do texto",
+        subtitle = "${settings.sourceLanguage.label} → ${settings.targetLanguage.label}",
+    ) {
+        Text(
+            if (settings.mode == TranslateMode.ON_DEVICE) {
+                "Antes da primeira leitura, conecte à internet e toque abaixo. Depois de baixar os idiomas, pode traduzir offline."
+            } else {
+                "Este teste verifica o OCR usado pelo DeepL, sem enviar imagem ou consumir sua cota."
+            },
+        )
+        Button(
+            enabled = !running,
+            onClick = {
+                val selected = settings
+                running = true
+                message = "Testando reconhecimento do texto…"
+                scope.launch {
+                    var stage = "OCR"
+                    try {
+                        withTimeout(360_000) {
+                            withContext(Dispatchers.Default) {
+                                MlKitSupport.initialize(context)
+                                OnDeviceOcr.verify(selected.sourceLanguage)
+                            }
+                            if (selected.mode == TranslateMode.ON_DEVICE) {
+                                stage = "download dos idiomas"
+                                message = "Baixando ou verificando os idiomas. Aguarde com internet…"
+                                OnDeviceTranslate.prepare(selected.sourceLanguage, selected.targetLanguage)
+                            }
+                        }
+                        success = true
+                        message = if (selected.mode == TranslateMode.ON_DEVICE) {
+                            "OCR e idiomas prontos. Pode abrir um capítulo e tocar em 文A, inclusive offline."
+                        } else {
+                            "Reconhecimento do texto funcionando. Teste também sua chave do DeepL acima."
+                        }
+                    } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+                        success = false
+                        message = "O $stage demorou demais. Confira a conexão e tente novamente."
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        success = false
+                        message = "Falha no $stage: ${e.message ?: e.javaClass.simpleName}"
+                    } finally {
+                        running = false
+                    }
+                }
+            },
+        ) {
+            if (running) {
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(8.dp))
+            }
+            Text(if (settings.mode == TranslateMode.ON_DEVICE) "Preparar idiomas" else "Testar OCR")
+        }
+        TestMessage(message, success)
+    }
+}
+
+@Composable
+private fun TestMessage(message: String?, success: Boolean) {
+    if (message != null) {
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = if (success) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(message, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodyMedium)
+        }
     }
 }
 

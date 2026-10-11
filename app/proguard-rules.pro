@@ -1,5 +1,11 @@
 -dontobfuscate
 
+# ML Kit discovers component registrars and factories through manifest/reflection.
+# Preserve their implementations in the minified APK used by OCR and offline translation.
+-keep class com.google.mlkit.** { *; }
+-keep class com.google.android.gms.internal.mlkit_** { *; }
+-keep class com.google.firebase.components.** { *; }
+
 # Injekt reads the injected type from the generic superclass of its type tokens
 -keepattributes Signature
 -keep,allowshrinking class * extends uy.kohesive.injekt.api.FullTypeReference
