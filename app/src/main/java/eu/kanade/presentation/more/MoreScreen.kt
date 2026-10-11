@@ -17,6 +17,7 @@ import mihon.icons.materialsymbols.rounded.Eyeglasses2
 import mihon.icons.materialsymbols.rounded.Info
 import mihon.icons.materialsymbols.rounded.QueryStats
 import mihon.icons.materialsymbols.rounded.Settings
+import mihon.icons.materialsymbols.rounded.Translate
 import mihon.icons.materialsymbols.rounded.Storage
 import mihon.icons.materialsymbols.roundedfilled.VolunteerActivism
 import tachiyomi.core.common.Constants
@@ -38,6 +39,7 @@ fun MoreScreen(
     onClickStats: () -> Unit,
     onClickDataAndStorage: () -> Unit,
     onClickSettings: () -> Unit,
+    onClickMangalate: () -> Unit = {},
     onClickSupport: () -> Unit,
     onClickAbout: () -> Unit,
 ) {
@@ -98,6 +100,14 @@ fun MoreScreen(
                     },
                     icon = MaterialSymbols.Rounded.Download,
                     onPreferenceClick = onClickDownloadQueue,
+                )
+            }
+            item {
+                TextPreferenceWidget(
+                    title = "Tradução (Mangalate)",
+                    subtitle = "Idiomas, modo grátis ou Gemini",
+                    icon = MaterialSymbols.Rounded.Translate,
+                    onPreferenceClick = onClickMangalate,
                 )
             }
             item {

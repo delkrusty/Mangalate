@@ -34,6 +34,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -142,6 +143,9 @@ class ReaderActivity : BaseActivity() {
 
     var isScrollingThroughPages = false
         private set
+
+    /** Mangalate: mostra o assistente de primeira tradução. */
+    private var showMangalateSetup by androidx.compose.runtime.mutableStateOf(false)
 
     /**
      * Called when the activity is created. Initializes the presenter and configuration.
@@ -281,6 +285,16 @@ class ReaderActivity : BaseActivity() {
             )
 
             AppBars(state = state)
+        }
+
+        if (showMangalateSetup) {
+            app.mangalate.ui.MangalateQuickSetupDialog(
+                onDismiss = { showMangalateSetup = false },
+                onStart = {
+                    showMangalateSetup = false
+                    applyMangalateEnabled(true)
+                },
+            )
         }
 
         val onDismissRequest = viewModel::closeDialog
@@ -538,15 +552,21 @@ class ReaderActivity : BaseActivity() {
     private fun toggleMangalateTranslation() {
         val translator = app.mangalate.translate.MangalateTranslator
         translator.init(this)
-        menuToggleToast?.cancel()
-        if (!translator.settings.value.isConfigured) {
-            menuToggleToast = toast("Configure o servidor em Mais › Configurações › Mangalate")
+        val s = translator.settings.value
+        if (!translator.enabled.value && (!s.setupDone || !s.isConfigured)) {
+            showMangalateSetup = true
             return
         }
-        val enabled = translator.setEnabled(this, !translator.enabled.value)
+        applyMangalateEnabled(!translator.enabled.value)
+    }
+
+    private fun applyMangalateEnabled(value: Boolean) {
+        val translator = app.mangalate.translate.MangalateTranslator
+        val enabled = translator.setEnabled(this, value)
+        menuToggleToast?.cancel()
         menuToggleToast = toast(
             if (enabled) {
-                "Tradução ativada · ${translator.settings.value.targetLanguage.label}"
+                "Tradução ligada · ${translator.settings.value.summary}"
             } else {
                 "Mostrando páginas originais"
             },

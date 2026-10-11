@@ -24,6 +24,7 @@ import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import app.mangalate.local.LocalPipeline
 import okio.Buffer
 import okio.BufferedSource
 import java.io.File
@@ -59,6 +60,11 @@ object MangalateTranslator {
 
     /** Número de páginas sendo traduzidas agora (para o indicador do leitor). */
     val activeJobs: StateFlow<Int> = _activeJobs.asStateFlow()
+
+    private val _status = MutableStateFlow<String?>(null)
+
+    /** Mensagem extra para o indicador do leitor (ex.: baixando o tradutor). */
+    val status: StateFlow<String?> = _status.asStateFlow()
 
     private val _settings = MutableStateFlow(MangalateSettings())
     val settings: StateFlow<MangalateSettings> = _settings.asStateFlow()
@@ -96,6 +102,11 @@ object MangalateTranslator {
     }
 
     private fun read(p: SharedPreferences) = MangalateSettings(
+        mode = TranslateMode.fromName(p.getString("mode", null)),
+        sourceLanguage = SourceLanguage.fromName(p.getString("source_lang", null)),
+        geminiKey = p.getString("gemini_key", "") ?: "",
+        geminiModel = p.getString("gemini_model", null) ?: MangalateSettings.DEFAULT_GEMINI_MODEL,
+        setupDone = p.getBoolean("setup_done", false),
         serverUrl = p.getString("server_url", "") ?: "",
         accessKey = p.getString("access_key", "") ?: "",
         targetLanguage = TargetLanguage.fromCode(p.getString("target_lang", null)),
@@ -113,6 +124,11 @@ object MangalateTranslator {
         val new = transform(_settings.value)
         _settings.value = new
         prefs?.edit()
+            ?.putString("mode", new.mode.name)
+            ?.putString("source_lang", new.sourceLanguage.name)
+            ?.putString("gemini_key", new.geminiKey)
+            ?.putString("gemini_model", new.geminiModel)
+            ?.putBoolean("setup_done", new.setupDone)
             ?.putString("server_url", new.serverUrl)
             ?.putString("access_key", new.accessKey)
             ?.putString("target_lang", new.targetLanguage.code)
@@ -177,10 +193,10 @@ object MangalateTranslator {
     suspend fun translate(context: Context, image: ByteArray): ByteArray {
         init(context)
         val s = _settings.value
-        if (!s.isConfigured) throw IOException("Servidor do Mangalate não configurado")
-        val config = s.toServerConfig()
-        val key = sha256(image) + "_" + sha256(config.toByteArray()).take(16)
-        val cacheFile = File(cacheDir(context), "$key.png")
+        if (!s.isConfigured) throw IOException("Tradução não configurada")
+        val signature = s.cacheSignature()
+        val key = sha256(image) + "_" + sha256(signature.toByteArray()).take(16)
+        val cacheFile = File(cacheDir(context), "$key.img")
 
         if (cacheFile.exists() && cacheFile.length() > 0) {
             cacheFile.setLastModified(System.currentTimeMillis())
@@ -195,7 +211,10 @@ object MangalateTranslator {
                     semaphore.withPermit {
                         _activeJobs.update { it + 1 }
                         try {
-                            val result = request(s, config, image)
+                            val result = when (s.mode) {
+                                TranslateMode.SERVER -> request(s, s.toServerConfig(), image)
+                                else -> LocalPipeline.process(context.applicationContext, image, s) { _status.value = it }
+                            }
                             writeCache(context, cacheFile, result)
                             result
                         } finally {
@@ -311,7 +330,11 @@ object MangalateTranslator {
         if (now - lastErrorToastAt < 8_000) return
         lastErrorToastAt = now
         val app = context.applicationContext
-        val msg = "Mangalate: não foi possível traduzir (${e.message ?: e.javaClass.simpleName})"
+        val msg = when (e) {
+            is app.mangalate.local.FriendlyException -> "Mangalate: ${e.message}"
+            is java.net.UnknownHostException -> "Mangalate: sem internet para traduzir esta página"
+            else -> "Mangalate: não foi possível traduzir (${e.message ?: e.javaClass.simpleName})"
+        }
         mainHandler.post { Toast.makeText(app, msg, Toast.LENGTH_LONG).show() }
     }
 

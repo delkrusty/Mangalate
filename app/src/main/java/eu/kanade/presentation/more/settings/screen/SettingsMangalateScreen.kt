@@ -65,7 +65,10 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import app.mangalate.translate.MangalateSettings
 import app.mangalate.translate.MangalateTranslator
+import app.mangalate.local.GeminiClient
 import app.mangalate.translate.QualityProfile
+import app.mangalate.translate.SourceLanguage
+import app.mangalate.translate.TranslateMode
 import app.mangalate.translate.TargetLanguage
 import app.mangalate.translate.TranslatorEngine
 import app.mangalate.translate.TypesetMode
@@ -96,6 +99,7 @@ class SettingsMangalateScreen : Screen() {
         remember { MangalateTranslator.init(context) }
         val settings by MangalateTranslator.settings.collectAsState()
         val enabled by MangalateTranslator.enabled.collectAsState()
+        var advanced by remember { mutableStateOf(false) }
 
         fun update(block: (MangalateSettings) -> MangalateSettings) =
             MangalateTranslator.updateSettings(context, block)
@@ -120,12 +124,23 @@ class SettingsMangalateScreen : Screen() {
                         onToggle = { MangalateTranslator.setEnabled(context, it) },
                     )
                 }
-                item { ServerSection(settings = settings, onChange = ::update) }
+                item { ModeSection(settings = settings, onChange = ::update) }
+                if (settings.mode == TranslateMode.GEMINI) {
+                    item { GeminiSection(settings = settings, onChange = ::update) }
+                }
                 item { LanguageSection(settings = settings, onChange = ::update) }
-                item { EngineSection(settings = settings, onChange = ::update) }
-                item { QualitySection(settings = settings, onChange = ::update) }
-                item { TypesetSection(settings = settings, onChange = ::update) }
-                item { CacheSection() }
+                if (settings.mode == TranslateMode.SERVER) {
+                    item { ServerSection(settings = settings, onChange = ::update) }
+                    item { EngineSection(settings = settings, onChange = ::update) }
+                    item { QualitySection(settings = settings, onChange = ::update) }
+                }
+                item {
+                    AdvancedToggle(expanded = advanced, onClick = { advanced = !advanced })
+                }
+                if (advanced) {
+                    item { TypesetSection(settings = settings, onChange = ::update) }
+                    item { CacheSection() }
+                }
                 item { Spacer(Modifier.height(24.dp)) }
             }
         }
@@ -178,9 +193,11 @@ private fun HeroCard(
                     )
                     Text(
                         text = if (settings.isConfigured) {
-                            "${settings.engine.label} → ${settings.targetLanguage.label}"
+                            settings.summary
+                        } else if (settings.mode == TranslateMode.GEMINI) {
+                            "Cole sua chave do Gemini abaixo"
                         } else {
-                            "Configure o servidor para começar"
+                            "Informe o endereço do servidor"
                         },
                         style = MaterialTheme.typography.bodyMedium,
                         color = cs.onPrimary.copy(alpha = 0.85f),
@@ -193,9 +210,8 @@ private fun HeroCard(
                 )
             }
             Text(
-                text = "Detecta os balões, apaga o texto original, reconstrói a arte e " +
-                    "diagrama a tradução no lugar. Use o botão de tradução na barra do leitor " +
-                    "para alternar entre original e traduzido a qualquer momento.",
+                text = "Ligue aqui ou no botão 文A da barra do leitor. O Mangalate encontra os balões, " +
+                    "apaga o texto original e escreve a tradução no lugar. Toque de novo para ver o original.",
                 style = MaterialTheme.typography.bodySmall,
                 color = cs.onPrimary.copy(alpha = 0.85f),
             )
@@ -368,9 +384,25 @@ private fun LanguageSection(
 ) {
     SectionCard(
         icon = MaterialSymbols.Rounded.Language,
-        title = "Traduzir para",
-        subtitle = "O idioma de origem é detectado automaticamente",
+        title = "Idiomas",
     ) {
+        if (settings.mode != TranslateMode.SERVER) {
+            Text("O mangá está em", style = MaterialTheme.typography.labelLarge)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                SourceLanguage.entries.forEach { lang ->
+                    FilterChip(
+                        selected = settings.sourceLanguage == lang,
+                        onClick = { onChange { it.copy(sourceLanguage = lang) } },
+                        label = { Text(lang.label) },
+                        shape = RoundedCornerShape(12.dp),
+                    )
+                }
+            }
+        }
+        Text("Traduzir para", style = MaterialTheme.typography.labelLarge)
         FlowRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -509,27 +541,29 @@ private fun TypesetSection(
         title = "Tipografia",
         subtitle = "Encaixe do texto traduzido no balão",
     ) {
-        val modes = TypesetMode.entries
-        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-            modes.forEachIndexed { index, mode ->
-                SegmentedButton(
-                    selected = settings.typeset == mode,
-                    onClick = { onChange { it.copy(typeset = mode) } },
-                    shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size),
-                ) {
-                    Text(mode.label, maxLines = 1)
+        if (settings.mode == TranslateMode.SERVER) {
+            val modes = TypesetMode.entries
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                modes.forEachIndexed { index, mode ->
+                    SegmentedButton(
+                        selected = settings.typeset == mode,
+                        onClick = { onChange { it.copy(typeset = mode) } },
+                        shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size),
+                    ) {
+                        Text(mode.label, maxLines = 1)
+                    }
                 }
             }
+            Text(
+                when (settings.typeset) {
+                    TypesetMode.AUTO -> "Diagramação de mangá para idiomas latinos, clássica para os demais."
+                    TypesetMode.MANGA -> "Quebra de linha e tamanho calculados para preencher o balão."
+                    TypesetMode.CLASSIC -> "Mantém a área e a direção do texto original."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
-        Text(
-            when (settings.typeset) {
-                TypesetMode.AUTO -> "Diagramação de mangá para idiomas latinos, clássica para os demais."
-                TypesetMode.MANGA -> "Quebra de linha e tamanho calculados para preencher o balão."
-                TypesetMode.CLASSIC -> "Mantém a área e a direção do texto original."
-            },
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
         Text("Ajuste do tamanho da fonte: ${signed(settings.fontSizeOffset)}", style = MaterialTheme.typography.bodyMedium)
         Slider(
             value = settings.fontSizeOffset.toFloat(),
@@ -543,6 +577,14 @@ private fun TypesetSection(
             checked = settings.uppercase,
             onChecked = { v -> onChange { it.copy(uppercase = v) } },
         )
+        if (settings.mode != TranslateMode.SERVER) {
+            SwitchRow(
+                title = "Só traduzir texto dentro de balões",
+                subtitle = "Ignora onomatopeias e textos soltos sobre a arte",
+                checked = settings.ignoreOutsideBubbles,
+                onChecked = { v -> onChange { it.copy(ignoreOutsideBubbles = v) } },
+            )
+        }
     }
 }
 
@@ -595,3 +637,203 @@ private fun SwitchRow(
 }
 
 private fun signed(v: Int) = if (v > 0) "+$v" else "$v"
+
+@Composable
+private fun ModeSection(
+    settings: MangalateSettings,
+    onChange: ((MangalateSettings) -> MangalateSettings) -> Unit,
+) {
+    SectionCard(
+        icon = MaterialSymbols.Rounded.AutoAwesome,
+        title = "Como traduzir",
+        subtitle = "Pode trocar quando quiser",
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            TranslateMode.entries.forEach { mode ->
+                ChoiceCard(
+                    selected = settings.mode == mode,
+                    title = mode.label,
+                    badge = mode.badge,
+                    description = mode.description,
+                    onClick = { onChange { it.copy(mode = mode) } },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChoiceCard(
+    selected: Boolean,
+    title: String,
+    badge: String?,
+    description: String,
+    onClick: () -> Unit,
+) {
+    val border by animateColorAsState(
+        if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
+        label = "choiceBorder",
+    )
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHigh
+        },
+        border = BorderStroke(2.dp, border),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .clickable(onClick = onClick),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioButton(selected = selected, onClick = onClick)
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    if (badge != null) {
+                        Spacer(Modifier.width(8.dp))
+                        Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.tertiaryContainer) {
+                            Text(
+                                badge,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                            )
+                        }
+                    }
+                }
+                Text(
+                    description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GeminiSection(
+    settings: MangalateSettings,
+    onChange: ((MangalateSettings) -> MangalateSettings) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val uriHandler = LocalUriHandler.current
+    val context = LocalContext.current
+    var key by remember { mutableStateOf(settings.geminiKey) }
+    var test by remember { mutableStateOf<TestState>(TestState.Idle) }
+
+    fun save(value: String) {
+        key = value.trim()
+        test = TestState.Idle
+        onChange { it.copy(geminiKey = value.trim()) }
+    }
+
+    SectionCard(
+        icon = MaterialSymbols.Rounded.Translate,
+        title = "Chave grátis do Gemini",
+        subtitle = "Leva 1 minuto e é feito uma única vez",
+    ) {
+        StepRow(1, "Toque em Pegar chave grátis e entre com sua conta Google.")
+        StepRow(2, "Toque em Criar chave de API e depois em copiar.")
+        StepRow(3, "Volte aqui e toque em Colar.")
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(onClick = { uriHandler.openUri("https://aistudio.google.com/apikey") }) {
+                Text("Pegar chave grátis")
+            }
+            FilledTonalButton(
+                onClick = {
+                    val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                        as android.content.ClipboardManager
+                    cm.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()?.let(::save)
+                },
+            ) { Text("Colar") }
+        }
+        OutlinedTextField(
+            value = key,
+            onValueChange = ::save,
+            label = { Text("Chave do Gemini") },
+            placeholder = { Text("AIza…") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedButton(
+            enabled = key.isNotBlank() && test != TestState.Running,
+            onClick = {
+                test = TestState.Running
+                scope.launch {
+                    test = GeminiClient.testKey(key, settings.geminiModel).fold(
+                        onSuccess = { TestState.Ok(0) },
+                        onFailure = { TestState.Fail(it.message ?: it.javaClass.simpleName) },
+                    )
+                }
+            },
+        ) {
+            if (test == TestState.Running) {
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(8.dp))
+            }
+            Text("Testar chave")
+        }
+        AnimatedVisibility(visible = test is TestState.Ok || test is TestState.Fail) {
+            val ok = test is TestState.Ok
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = if (ok) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.errorContainer,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    text = when (val t = test) {
+                        is TestState.Ok -> "Tudo certo. Pode abrir um capítulo e tocar em 文A."
+                        is TestState.Fail -> t.message
+                        else -> ""
+                    },
+                    modifier = Modifier.padding(12.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+        }
+        Text(
+            "A faixa grátis do Gemini tem limite por minuto; se aparecer aviso de limite, espere um pouco. " +
+                "Páginas já traduzidas ficam salvas e não gastam de novo.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun StepRow(n: Int, text: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .size(26.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primary),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("$n", color = MaterialTheme.colorScheme.onPrimary, style = MaterialTheme.typography.labelLarge)
+        }
+        Spacer(Modifier.width(12.dp))
+        Text(text, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
+private fun AdvancedToggle(expanded: Boolean, onClick: () -> Unit) {
+    TextButton(
+        onClick = onClick,
+        modifier = Modifier.padding(horizontal = 16.dp),
+    ) {
+        Icon(MaterialSymbols.Rounded.Tune, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(8.dp))
+        Text(if (expanded) "Esconder ajustes avançados" else "Ajustes avançados")
+    }
+}

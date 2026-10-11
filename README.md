@@ -8,62 +8,37 @@ Leitor de mangá para Android, baseado no [Mihon](https://github.com/mihonapp/mi
 
 </div>
 
-## Como funciona
+## Como usar (3 passos)
 
-1. Você lê normalmente: biblioteca, extensões, downloads e leitor do Mihon continuam iguais.
-2. No leitor, toque no botão **de tradução** (ícone 文A na barra inferior).
-3. Cada página é enviada ao **servidor do Mangalate**, que:
-   - detecta textos e balões (detector de quadrinhos CTD ou DBNet);
-   - faz OCR do texto original (modelo 48px, japonês/chinês/coreano/inglês);
-   - cria uma máscara dos caracteres com margem adaptativa, sem apagar o balão inteiro;
-   - reconstrói o fundo com LaMa (retículas, degradês e traços da arte);
-   - traduz todas as falas da página juntas, com contexto e verificação pós-tradução;
-   - diagrama o texto traduzido no balão, ajustando tamanho e quebra de linha.
-4. A página traduzida fica em cache no celular. Toque no botão de novo para ver o original.
+1. **Instale** o APK em [Releases](https://github.com/delkrusty/Mangalate/releases/latest) (`Mangalate-arm64-v8a.apk` serve na maioria dos celulares; se não instalar, use `Mangalate-universal.apk`).
+2. **Abra um capítulo** e toque no botão **文A** na barra de baixo do leitor.
+3. Escolha **o idioma do mangá** e **para qual idioma traduzir** e toque em **Traduzir**. Pronto.
 
-As páginas vizinhas são traduzidas em segundo plano enquanto você lê, então o capítulo vai ficando pronto à frente.
+Não precisa de servidor, conta nem configuração. Para desligar e ver o original, toque em 文A de novo.
 
-## Instalar
+## Os três modos
 
-Baixe o APK mais recente em **[Releases](https://github.com/delkrusty/Mangalate/releases/latest)**:
-
-- `Mangalate-arm64-v8a.apk` para a maioria dos celulares atuais;
-- `Mangalate-universal.apk` se não souber qual escolher.
-
-Todos os builds são assinados com a mesma chave, então dá para atualizar sem desinstalar.
-
-## Servidor de tradução
-
-O trabalho pesado (OCR, reconstrução e tradução) roda num servidor, não no celular. Há duas opções:
-
-| Opção | Custo | Quando usar |
+| Modo | Precisa de quê | Qualidade |
 |---|---|---|
-| [Google Colab](server/README.md#opção-a--google-colab-gpu-grátis) | Grátis (GPU T4) | Para testar ou ler algumas horas por dia |
-| [Docker no PC](server/README.md#opção-b--docker-no-seu-pc) | Seu PC | Uso diário, rede de casa, GPU NVIDIA opcional |
+| **No celular** (padrão) | Nada. Baixa o tradutor uma vez (~30 MB) | Boa para inglês; razoável para japonês, coreano e chinês |
+| **Gemini** | Uma chave grátis do Google, colada no app em 1 minuto | Tradução natural, com contexto, lê texto vertical |
+| **Servidor próprio** | Rodar o servidor no PC ou no Colab ([guia](server/README.md)) | Melhor reconstrução da arte |
 
-Depois, no app: **Mais › Configurações › Mangalate**, cole o endereço e a chave, e toque em **Testar conexão**.
+### Como pegar a chave grátis do Gemini
 
-### Motores de tradução
+1. No app: **Mais › Tradução (Mangalate)** e escolha **Gemini**.
+2. Toque em **Pegar chave grátis**, entre com sua conta Google e toque em **Criar chave de API**. Copie a chave.
+3. Volte ao app, toque em **Colar** e depois em **Testar chave**.
 
-| Motor | Observação |
-|---|---|
-| DeepSeek | Recomendado: muito barato e bom com contexto |
-| Gemini | Faixa gratuita nos modelos Flash |
-| DeepL | Plano Free com 500 mil caracteres/mês |
-| OpenAI, Groq | Alternativas com chave |
-| Compatível OpenAI | Ollama, LM Studio, OpenRouter |
-| Offline (NLLB) | Roda no servidor, sem chave |
+A faixa grátis tem limite de pedidos por minuto. Se aparecer aviso de limite, espere um pouco. As páginas já traduzidas ficam salvas e não contam de novo.
 
-As chaves ficam **só no servidor** (`server/.env` ou Secrets do Colab), nunca dentro do APK.
+## O que acontece em cada página
 
-## Configurações no app
-
-- Idioma de destino (PT-BR, inglês, espanhol e outros);
-- Qualidade da limpeza: **Rápida**, **Alta** (padrão) ou **Máxima** (super-resolução 2x);
-- Margem da máscara: aumente se sobrarem restos de letras, diminua se estiver apagando arte;
-- Traduzir só dentro de balões (ignora onomatopeias);
-- Diagramação automática/mangá/clássica, tamanho da fonte e caixa alta;
-- Cache das páginas traduzidas.
+1. O texto é localizado (OCR no celular ou leitura pelo Gemini).
+2. As falas são traduzidas.
+3. Nos balões, a cor do fundo é estimada, só os traços das letras são repintados e o app mede o interior do balão para saber quanto espaço tem.
+4. O texto traduzido é diagramado no balão em fonte de quadrinho, com tamanho e quebra de linha ajustados automaticamente.
+5. A página fica salva no celular. As páginas seguintes já vão sendo traduzidas enquanto você lê.
 
 ## Compilar
 
@@ -75,6 +50,8 @@ O GitHub Actions compila a cada push em `main` e publica o APK em Releases. Para
 
 ## Limitações conhecidas
 
+- No modo **No celular**, o OCR de japonês vertical e de letras estilizadas pode errar; para raws japonesas, o modo **Gemini** é bem melhor.
+- Nos modos do celular e Gemini, texto sobre a arte é reconstruído por difusão (fica suavizado); o modo servidor usa LaMa e fica melhor.
 - Onomatopeias desenhadas sobre rostos, cabelos ou cenários muito detalhados podem ficar com área suavizada.
 - O renderizador WebGPU experimental do Mihon é trocado pelo leitor clássico enquanto a tradução está ligada.
 - O app não inclui fontes de conteúdo; extensões são instaladas por você, como no Mihon.
@@ -82,7 +59,8 @@ O GitHub Actions compila a cada push em `main` e publica o APK em Releases. Para
 ## Créditos e licença
 
 - Baseado no [Mihon](https://github.com/mihonapp/mihon) (Apache 2.0).
-- Pipeline de tradução: [manga-image-translator](https://github.com/zyddnys/manga-image-translator) (GPL-3.0), executado como serviço separado.
+- OCR e tradução no celular: Google ML Kit. Fonte Comic Neue (SIL OFL 1.1).
+- Modo servidor: [manga-image-translator](https://github.com/zyddnys/manga-image-translator) (GPL-3.0), executado como serviço separado.
 - Ícones: Material Symbols (Apache 2.0).
 
 Distribuído sob a licença Apache 2.0, ver [LICENSE](LICENSE).

@@ -3,19 +3,60 @@ package app.mangalate.translate
 import org.json.JSONObject
 
 /**
+ * Como a página é traduzida.
+ */
+enum class TranslateMode(val label: String, val badge: String, val description: String) {
+    ON_DEVICE(
+        "No celular",
+        "Grátis",
+        "Funciona sem configurar nada. Na primeira vez baixa o tradutor (cerca de 30 MB).",
+    ),
+    GEMINI(
+        "Gemini",
+        "Melhor qualidade",
+        "A IA do Google lê e traduz a página inteira com contexto. Precisa de uma chave grátis.",
+    ),
+    SERVER(
+        "Servidor próprio",
+        "Avançado",
+        "Para quem roda o servidor do Mangalate no PC ou no Colab. Melhor reconstrução da arte.",
+    ),
+    ;
+
+    companion object {
+        fun fromName(name: String?) = entries.firstOrNull { it.name == name } ?: ON_DEVICE
+    }
+}
+
+/**
+ * Idioma em que o mangá está escrito (usado pelo OCR do celular).
+ */
+enum class SourceLanguage(val label: String, val geminiName: String) {
+    JA("Japonês", "Japanese"),
+    KO("Coreano", "Korean"),
+    ZH("Chinês", "Chinese"),
+    EN("Inglês", "English"),
+    ;
+
+    companion object {
+        fun fromName(name: String?) = entries.firstOrNull { it.name == name } ?: JA
+    }
+}
+
+/**
  * Idiomas de destino suportados pelo servidor (códigos do manga-image-translator).
  */
-enum class TargetLanguage(val code: String, val label: String, val latin: Boolean) {
-    PT_BR("PTB", "Português (Brasil)", true),
-    EN("ENG", "Inglês", true),
-    ES("ESP", "Espanhol", true),
-    FR("FRA", "Francês", true),
-    DE("DEU", "Alemão", true),
-    IT("ITA", "Italiano", true),
-    RU("RUS", "Russo", false),
-    JA("JPN", "Japonês", false),
-    KO("KOR", "Coreano", false),
-    ZH("CHS", "Chinês simplificado", false),
+enum class TargetLanguage(val code: String, val label: String, val latin: Boolean, val englishName: String) {
+    PT_BR("PTB", "Português (Brasil)", true, "Brazilian Portuguese"),
+    EN("ENG", "Inglês", true, "English"),
+    ES("ESP", "Espanhol", true, "Spanish"),
+    FR("FRA", "Francês", true, "French"),
+    DE("DEU", "Alemão", true, "German"),
+    IT("ITA", "Italiano", true, "Italian"),
+    RU("RUS", "Russo", false, "Russian"),
+    JA("JPN", "Japonês", false, "Japanese"),
+    KO("KOR", "Coreano", false, "Korean"),
+    ZH("CHS", "Chinês simplificado", false, "Simplified Chinese"),
     ;
 
     companion object {
@@ -72,6 +113,11 @@ enum class TypesetMode(val label: String) {
 }
 
 data class MangalateSettings(
+    val mode: TranslateMode = TranslateMode.ON_DEVICE,
+    val sourceLanguage: SourceLanguage = SourceLanguage.JA,
+    val geminiKey: String = "",
+    val geminiModel: String = DEFAULT_GEMINI_MODEL,
+    val setupDone: Boolean = false,
     val serverUrl: String = "",
     val accessKey: String = "",
     val targetLanguage: TargetLanguage = TargetLanguage.PT_BR,
@@ -83,7 +129,30 @@ data class MangalateSettings(
     val fontSizeOffset: Int = 0,
     val maskDilation: Int = 0,
 ) {
-    val isConfigured: Boolean get() = serverUrl.isNotBlank()
+    val isConfigured: Boolean
+        get() = when (mode) {
+            TranslateMode.ON_DEVICE -> true
+            TranslateMode.GEMINI -> geminiKey.isNotBlank()
+            TranslateMode.SERVER -> serverUrl.isNotBlank()
+        }
+
+    /** Resumo curto mostrado no app, ex.: "Japonês → Português (Brasil) · No celular". */
+    val summary: String
+        get() = "${sourceLanguage.label} → ${targetLanguage.label} · ${mode.label}"
+
+    /** Identifica a configuração que afeta o resultado (para o cache). */
+    fun cacheSignature(): String = when (mode) {
+        TranslateMode.SERVER -> "server|" + toServerConfig()
+        else -> listOf(
+            "v2", mode.name, sourceLanguage.name, targetLanguage.code,
+            if (mode == TranslateMode.GEMINI) geminiModel else "",
+            ignoreOutsideBubbles, uppercase, fontSizeOffset,
+        ).joinToString("|")
+    }
+
+    companion object {
+        const val DEFAULT_GEMINI_MODEL = "gemini-flash-latest"
+    }
 
     val normalizedUrl: String
         get() = serverUrl.trim().trimEnd('/').let {

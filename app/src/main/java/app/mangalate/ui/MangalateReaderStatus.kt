@@ -32,6 +32,7 @@ import mihon.icons.materialsymbols.rounded.Translate
 fun MangalateReaderStatus(modifier: Modifier = Modifier) {
     val enabled by MangalateTranslator.enabled.collectAsState()
     val jobs by MangalateTranslator.activeJobs.collectAsState()
+    val status by MangalateTranslator.status.collectAsState()
 
     AnimatedVisibility(
         visible = enabled && jobs > 0,
@@ -57,7 +58,7 @@ fun MangalateReaderStatus(modifier: Modifier = Modifier) {
                     modifier = Modifier.size(16.dp),
                 )
                 Text(
-                    text = if (jobs == 1) "Traduzindo página…" else "Traduzindo $jobs páginas…",
+                    text = status ?: if (jobs == 1) "Traduzindo página…" else "Traduzindo $jobs páginas…",
                     style = MaterialTheme.typography.labelMedium,
                 )
                 CircularProgressIndicator(

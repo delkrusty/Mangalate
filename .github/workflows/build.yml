@@ -79,6 +79,6 @@ jobs:
         run: |
           TAG="build-${{ github.run_number }}"
           gh release create "$TAG" dist/*.apk \
-            --title "Mangalate 0.1.0 (build ${{ github.run_number }})" \
+            --title "Mangalate 0.2.0 (build ${{ github.run_number }})" \
             --notes "APK gerado automaticamente a partir de ${GITHUB_SHA::7}. Baixe **Mangalate-arm64-v8a.apk** (celulares atuais) ou **Mangalate-universal.apk**." \
             --latest

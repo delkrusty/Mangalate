@@ -38,7 +38,7 @@ android {
         applicationId = "app.mangalate"
 
         versionCode = System.getenv("MANGALATE_VERSION_CODE")?.toIntOrNull() ?: 1
-        versionName = "0.1.0"
+        versionName = "0.2.0"
 
         buildConfigField("boolean", "TELEMETRY_INCLUDED", "${Config.includeTelemetry}")
         buildConfigField("boolean", "UPDATER_ENABLED", "${Config.enableUpdater}")
@@ -213,6 +213,13 @@ dependencies {
     implementation(projects.core.metro)
     implementation(projects.coreMetadata)
     implementation(projects.sourceApi)
+
+    // Mangalate: OCR e tradução no próprio celular
+    implementation("com.google.mlkit:text-recognition:16.0.1")
+    implementation("com.google.mlkit:text-recognition-japanese:16.0.1")
+    implementation("com.google.mlkit:text-recognition-korean:16.0.1")
+    implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
+    implementation("com.google.mlkit:translate:17.0.3")
     implementation(projects.sourceLocal)
     implementation(projects.data)
     implementation(projects.domain)
