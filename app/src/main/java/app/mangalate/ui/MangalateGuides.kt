@@ -162,7 +162,7 @@ internal object MangalateGuides {
             "0.5.1: tradução local e DeepL",
             "Retorno à base 0.5.0 sem alterar limpeza, enquadramento ou composição dos balões. " +
                 "DeepL com chave API Free/Pro e teste real de tradução. Preparação dos idiomas e teste de OCR no app. " +
-                "Inicialização e preservação dos componentes ML Kit no APK minificado, com acesso serializado aos clientes. " +
+                "Preservação dos componentes de inicialização do ML Kit no APK minificado, com acesso serializado aos clientes. " +
                 "Falhas de tradução deixam de ser salvas silenciosamente como texto original. " +
                 "Somente páginas do modo No celular e DeepL precisam ser retraduzidas; o cache do Gemini fica preservado.",
         ),

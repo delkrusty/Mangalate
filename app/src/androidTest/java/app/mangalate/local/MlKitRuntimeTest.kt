@@ -7,7 +7,6 @@ import android.graphics.Paint
 import app.mangalate.translate.SourceLanguage
 import app.mangalate.translate.TargetLanguage
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertFalse
@@ -19,7 +18,6 @@ import org.junit.runner.RunWith
 /** Testa o runtime real do ML Kit no APK release minificado, com texto sintético. */
 @RunWith(AndroidJUnit4::class)
 class MlKitRuntimeTest {
-    private fun initialize() = MlKitSupport.initialize(InstrumentationRegistry.getInstrumentation().targetContext)
     private fun page(): Bitmap = Bitmap.createBitmap(1000, 360, Bitmap.Config.ARGB_8888).apply {
         val canvas = Canvas(this)
         canvas.drawColor(Color.WHITE)
@@ -33,7 +31,6 @@ class MlKitRuntimeTest {
 
     @Test
     fun englishOcrWorksInRelease() = runBlocking {
-        initialize()
         val image = page()
         try {
             val regions = withTimeout(90_000) { OnDeviceOcr.detect(image, SourceLanguage.EN) }
@@ -46,7 +43,6 @@ class MlKitRuntimeTest {
 
     @Test
     fun japaneseKoreanAndChineseClientsInitializeInRelease() = runBlocking {
-        initialize()
         val image = page()
         try {
             for (language in listOf(SourceLanguage.JA, SourceLanguage.KO, SourceLanguage.ZH)) {
@@ -60,7 +56,6 @@ class MlKitRuntimeTest {
 
     @Test
     fun offlineModelDownloadsAndTranslatesInRelease() = runBlocking {
-        initialize()
         val original = "Hello, how are you?"
         val result = withTimeout(300_000) {
             OnDeviceTranslate.translate(listOf(original), SourceLanguage.EN, TargetLanguage.PT_BR) {}

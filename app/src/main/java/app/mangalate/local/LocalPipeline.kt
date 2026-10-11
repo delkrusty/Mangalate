@@ -33,7 +33,6 @@ object LocalPipeline {
                 TranslateMode.GEMINI -> GeminiClient.detectAndTranslate(page, s)
                 else -> {
                     val found = stage("reconhecimento do texto (OCR)") {
-                        MlKitSupport.initialize(context)
                         OnDeviceOcr.detect(page, s.sourceLanguage)
                     }
                     if (found.isEmpty()) {

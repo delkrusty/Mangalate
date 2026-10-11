@@ -67,7 +67,6 @@ import app.mangalate.translate.MangalateSettings
 import app.mangalate.translate.MangalateTranslator
 import app.mangalate.local.GeminiClient
 import app.mangalate.local.DeepLClient
-import app.mangalate.local.MlKitSupport
 import app.mangalate.local.OnDeviceOcr
 import app.mangalate.local.OnDeviceTranslate
 import app.mangalate.translate.QualityProfile
@@ -957,7 +956,6 @@ private fun DeepLSection(
 
 @Composable
 private fun LocalPreparationSection(settings: MangalateSettings) {
-    val context = LocalContext.current.applicationContext
     val scope = rememberCoroutineScope()
     var running by remember { mutableStateOf(false) }
     var message by remember(settings.mode, settings.sourceLanguage, settings.targetLanguage) {
@@ -987,7 +985,6 @@ private fun LocalPreparationSection(settings: MangalateSettings) {
                     try {
                         withTimeout(360_000) {
                             withContext(Dispatchers.Default) {
-                                MlKitSupport.initialize(context)
                                 OnDeviceOcr.verify(selected.sourceLanguage)
                             }
                             if (selected.mode == TranslateMode.ON_DEVICE) {

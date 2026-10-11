@@ -5,7 +5,6 @@
 -keep class org.junit.** { *; }
 -keep class org.hamcrest.** { *; }
 -keep class app.mangalate.local.MlKitRuntimeTest { *; }
--keep class app.mangalate.local.MlKitSupport { *; }
 -keep class app.mangalate.local.OnDeviceOcr { *; }
 -keep class app.mangalate.local.OnDeviceTranslate { *; }
 -keep class app.mangalate.translate.SourceLanguage { *; }
