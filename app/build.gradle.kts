@@ -49,6 +49,7 @@ android {
     // Os testes de runtime precisam exercitar o APK minificado, não apenas debug.
     if (providers.gradleProperty("runtimeCheck").isPresent) {
         testBuildType = "release"
+        defaultConfig.testProguardFiles("runtime-test-keep.pro")
     }
 
     if (System.getenv("MIHON_GITHUB_RELEASE").toBoolean()) {
@@ -80,6 +81,9 @@ android {
         }
         val release = getByName("release") {
             isMinifyEnabled = true
+            if (providers.gradleProperty("runtimeCheck").isPresent) {
+                proguardFile("runtime-test-keep.pro")
+            }
             isShrinkResources = true
 
             signingConfig = debug.signingConfig
