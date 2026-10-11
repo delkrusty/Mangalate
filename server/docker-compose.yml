@@ -1,0 +1,51 @@
+# Servidor de tradução do Mangalate
+#
+#   CPU:  docker compose --profile cpu up -d
+#   GPU:  docker compose --profile gpu up -d      (NVIDIA + nvidia-container-toolkit)
+#
+# O app conversa com a porta 5003 (Caddy), que exige a chave MANGALATE_KEY
+# e repassa para o manga-image-translator.
+
+x-translator: &translator
+  image: zyddnys/manga-image-translator:main
+  entrypoint: python
+  ipc: host
+  restart: unless-stopped
+  env_file: .env
+  volumes:
+    - models:/app/models
+  expose:
+    - "8001"
+
+services:
+  translator-cpu:
+    <<: *translator
+    profiles: ["cpu"]
+    command: server/main.py --start-instance --host=0.0.0.0 --port=8001
+    networks: { default: { aliases: [translator] } }
+
+  translator-gpu:
+    <<: *translator
+    profiles: ["gpu"]
+    command: server/main.py --start-instance --host=0.0.0.0 --port=8001 --use-gpu
+    networks: { default: { aliases: [translator] } }
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  gateway:
+    image: caddy:2-alpine
+    profiles: ["cpu", "gpu"]
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "5003:5003"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+
+volumes:
+  models:

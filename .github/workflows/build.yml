@@ -1,0 +1,84 @@
+name: Build Mangalate APK
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'server/**'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version-file: .github/.java-version
+          distribution: temurin
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Prepare signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.MANGALATE_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/mangalate.jks"
+            echo "MIHON_GITHUB_RELEASE=true" >> "$GITHUB_ENV"
+            echo "storeFile=$RUNNER_TEMP/mangalate.jks" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build app
+        env:
+          MANGALATE_VERSION_CODE: ${{ github.run_number }}
+          storePassword: ${{ secrets.MANGALATE_KEYSTORE_PASSWORD }}
+          keyPassword: ${{ secrets.MANGALATE_KEYSTORE_PASSWORD }}
+          keyAlias: mangalate
+        run: ./gradlew :app:assembleRelease -Pdist=local --stacktrace
+
+      - name: Rename APKs
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-arm64-v8a-release.apk dist/Mangalate-arm64-v8a.apk
+          cp app/build/outputs/apk/release/app-armeabi-v7a-release.apk dist/Mangalate-armeabi-v7a.apk
+          cp app/build/outputs/apk/release/app-universal-release.apk dist/Mangalate-universal.apk
+          ls -la dist
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mangalate-${{ github.run_number }}
+          path: dist/*.apk
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="build-${{ github.run_number }}"
+          gh release create "$TAG" dist/*.apk \
+            --title "Mangalate 0.1.0 (build ${{ github.run_number }})" \
+            --notes "APK gerado automaticamente a partir de ${GITHUB_SHA::7}. Baixe **Mangalate-arm64-v8a.apk** (celulares atuais) ou **Mangalate-universal.apk**." \
+            --latest
