@@ -85,6 +85,7 @@ import eu.kanade.tachiyomi.util.system.toShareIntent
 import eu.kanade.tachiyomi.util.system.toast
 import eu.kanade.tachiyomi.util.view.setComposeContent
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
@@ -208,6 +209,20 @@ class ReaderActivity : BaseActivity() {
             .distinctUntilChanged()
             .onEach(::setProgressDialog)
             .launchIn(lifecycleScope)
+
+        // Mangalate: pré-traduz as próximas páginas enquanto a pessoa lê
+        lifecycleScope.launch {
+            combine(
+                app.mangalate.translate.MangalateTranslator.enabled,
+                viewModel.state.map { it.currentChapter to it.currentPage }.distinctUntilChanged(),
+            ) { enabled, position -> Triple(enabled, position.first, position.second) }
+                .distinctUntilChanged()
+                .collectLatest { (enabled, chapter, page) ->
+                    if (!enabled || chapter == null || page < 1) return@collectLatest
+                    kotlinx.coroutines.delay(300)
+                    app.mangalate.translate.MangalatePrefetcher.prefetch(this@ReaderActivity, chapter, page - 1)
+                }
+        }
 
         viewModel.state
             .map { it.manga }

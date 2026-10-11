@@ -21,7 +21,8 @@ Não precisa de servidor, conta nem configuração. Para desligar e ver o origin
 | Modo | Precisa de quê | Qualidade |
 |---|---|---|
 | **No celular** (padrão) | Nada. Baixa o tradutor uma vez (~30 MB) | Boa para inglês; razoável para japonês, coreano e chinês |
-| **Gemini** | Uma chave grátis do Google, colada no app em 1 minuto | Tradução natural, com contexto, lê texto vertical |
+| **Gemini** | Uma chave grátis do Google, colada no app em 1 minuto | Tradução natural, com contexto, lê texto vertical. Modo Rápido (Flash-Lite) ou Melhor qualidade (Flash) |
+| **DeepL** | Uma chave grátis do DeepL API Free (500 mil caracteres/mês) | O mais rápido: o celular lê o texto e o DeepL traduz |
 | **Servidor próprio** | Rodar o servidor no PC ou no Colab ([guia](server/README.md)) | Melhor reconstrução da arte |
 
 ### Como pegar a chave grátis do Gemini
@@ -31,6 +32,12 @@ Não precisa de servidor, conta nem configuração. Para desligar e ver o origin
 3. Volte ao app, toque em **Colar** e depois em **Testar chave**.
 
 A faixa grátis tem limite de pedidos por minuto. Se aparecer aviso de limite, espere um pouco. As páginas já traduzidas ficam salvas e não contam de novo.
+
+## Mais rápido e offline
+
+- **Pré-tradução:** com a tradução ligada, as próximas 6 páginas já vão sendo traduzidas enquanto você lê a atual. Ao virar a página, ela já está pronta.
+- **Baixar já traduzido:** ligue **Traduzir capítulos ao baixar** (em Mais › Tradução). Quando você baixar um capítulo pelo botão de download de sempre, o Mangalate traduz todas as páginas junto, com uma notificação de progresso. Depois dá para ler traduzido **sem internet**.
+- As páginas traduzidas de capítulos baixados ficam guardadas até você apagá-las na mesma tela.
 
 ## O que acontece em cada página
 

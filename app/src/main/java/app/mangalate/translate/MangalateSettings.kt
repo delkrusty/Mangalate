@@ -16,6 +16,11 @@ enum class TranslateMode(val label: String, val badge: String, val description: 
         "Melhor qualidade",
         "A IA do Google lê e traduz a página inteira com contexto. Precisa de uma chave grátis.",
     ),
+    DEEPL(
+        "DeepL",
+        "Mais rápido",
+        "Lê o texto no celular e traduz com DeepL. 500 mil caracteres por mês grátis.",
+    ),
     SERVER(
         "Servidor próprio",
         "Avançado",
@@ -117,6 +122,9 @@ data class MangalateSettings(
     val sourceLanguage: SourceLanguage = SourceLanguage.JA,
     val geminiKey: String = "",
     val geminiModel: String = DEFAULT_GEMINI_MODEL,
+    val geminiFast: Boolean = true,
+    val deeplKey: String = "",
+    val translateOnDownload: Boolean = false,
     val setupDone: Boolean = false,
     val serverUrl: String = "",
     val accessKey: String = "",
@@ -133,6 +141,7 @@ data class MangalateSettings(
         get() = when (mode) {
             TranslateMode.ON_DEVICE -> true
             TranslateMode.GEMINI -> geminiKey.isNotBlank()
+            TranslateMode.DEEPL -> deeplKey.isNotBlank()
             TranslateMode.SERVER -> serverUrl.isNotBlank()
         }
 
@@ -145,13 +154,18 @@ data class MangalateSettings(
         TranslateMode.SERVER -> "server|" + toServerConfig()
         else -> listOf(
             "v2", mode.name, sourceLanguage.name, targetLanguage.code,
-            if (mode == TranslateMode.GEMINI) geminiModel else "",
+            if (mode == TranslateMode.GEMINI) effectiveGeminiModel else "",
             ignoreOutsideBubbles, uppercase, fontSizeOffset,
         ).joinToString("|")
     }
 
+    /** Modelo efetivo: Flash-Lite no modo rápido, Flash no modo qualidade. */
+    val effectiveGeminiModel: String
+        get() = if (geminiFast) FAST_GEMINI_MODEL else geminiModel.ifBlank { DEFAULT_GEMINI_MODEL }
+
     companion object {
         const val DEFAULT_GEMINI_MODEL = "gemini-flash-latest"
+        const val FAST_GEMINI_MODEL = "gemini-flash-lite-latest"
     }
 
     val normalizedUrl: String

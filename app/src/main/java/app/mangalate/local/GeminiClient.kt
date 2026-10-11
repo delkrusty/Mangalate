@@ -29,7 +29,11 @@ class FriendlyException(message: String) : IOException(message)
 object GeminiClient {
 
     private const val BASE = "https://generativelanguage.googleapis.com/v1beta/models/"
-    private val FALLBACK_MODELS = listOf("gemini-flash-latest", "gemini-flash-lite-latest", "gemini-2.5-flash")
+    private val FAST_MODELS = listOf("gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-2.5-flash-lite", "gemini-flash-latest")
+    private val QUALITY_MODELS = listOf("gemini-flash-latest", "gemini-2.5-flash", "gemini-flash-lite-latest")
+
+    /** Modelos que recusaram thinkingConfig (não enviamos mais para eles). */
+    private val noThinking = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -60,7 +64,7 @@ object GeminiClient {
     }
 
     private suspend fun requestTile(bmp: Bitmap, s: MangalateSettings): List<TextRegion> {
-        val scale = min(1f, 1600f / max(bmp.width, bmp.height))
+        val scale = min(1f, 1400f / max(bmp.width, bmp.height))
         val send = if (scale < 1f) {
             Bitmap.createScaledBitmap(bmp, (bmp.width * scale).roundToInt(), (bmp.height * scale).roundToInt(), true)
         } else {
@@ -98,7 +102,7 @@ object GeminiClient {
                     .put("responseMimeType", "application/json"),
             )
         }
-        val (_, text) = call(s.geminiKey.trim(), s.geminiModel, body)
+        val (_, text) = call(s.geminiKey.trim(), s.effectiveGeminiModel, body)
         return parse(text, bmp.width, bmp.height)
     }
 
@@ -161,17 +165,23 @@ object GeminiClient {
     /** Chama o Gemini com novas tentativas para limite de uso e troca de modelo se não existir. */
     private suspend fun call(key: String, model: String, body: JSONObject): Pair<String, String> {
         if (key.isBlank()) throw FriendlyException("Cole sua chave do Gemini nas configurações do Mangalate")
-        val models = (listOf(model.ifBlank { FALLBACK_MODELS[0] }) + FALLBACK_MODELS).distinct()
+        val fallbacks = if (model.contains("lite")) FAST_MODELS else QUALITY_MODELS
+        val models = (listOf(model.ifBlank { fallbacks[0] }) + fallbacks).distinct()
         var lastError: Exception? = null
         for (m in models) {
             var attempt = 0
             while (attempt < 4) {
                 attempt++
+                val payload = JSONObject(body.toString())
+                if (m !in noThinking) {
+                    val gen = payload.optJSONObject("generationConfig") ?: JSONObject().also { payload.put("generationConfig", it) }
+                    gen.put("thinkingConfig", JSONObject().put("thinkingLevel", "low"))
+                }
                 val (code, text) = withContext(Dispatchers.IO) {
                     val req = Request.Builder()
                         .url("$BASE$m:generateContent")
                         .header("x-goog-api-key", key)
-                        .post(body.toString().toRequestBody("application/json".toMediaType()))
+                        .post(payload.toString().toRequestBody("application/json".toMediaType()))
                         .build()
                     client.newCall(req).execute().use { it.code to it.body.string() }
                 }
@@ -189,6 +199,11 @@ object GeminiClient {
                             },
                         )
                         delay(longArrayOf(6_000, 15_000, 30_000, 45_000)[attempt - 1])
+                    }
+                    code == 400 && m !in noThinking && text.contains("thinking", ignoreCase = true) -> {
+                        // modelo não aceita nível de pensamento: tenta de novo sem
+                        noThinking += m
+                        attempt--
                     }
                     code == 404 -> {
                         lastError = FriendlyException("Modelo $m não disponível")

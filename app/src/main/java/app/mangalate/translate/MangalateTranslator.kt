@@ -72,8 +72,13 @@ object MangalateTranslator {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val inFlight = ConcurrentHashMap<String, Deferred<ByteArray>>()
 
-    // O servidor processa em fila; 2 envios simultâneos mantêm a fila cheia sem sobrecarregar.
-    private val semaphore = Semaphore(2)
+    // Páginas traduzidas ao mesmo tempo, por modo (o Gemini grátis tem limite por minuto).
+    private val semaphores = mapOf(
+        TranslateMode.ON_DEVICE to Semaphore(2),
+        TranslateMode.GEMINI to Semaphore(3),
+        TranslateMode.DEEPL to Semaphore(4),
+        TranslateMode.SERVER to Semaphore(2),
+    )
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -107,6 +112,9 @@ object MangalateTranslator {
         geminiKey = p.getString("gemini_key", "") ?: "",
         geminiModel = p.getString("gemini_model", null) ?: MangalateSettings.DEFAULT_GEMINI_MODEL,
         setupDone = p.getBoolean("setup_done", false),
+        geminiFast = p.getBoolean("gemini_fast", true),
+        deeplKey = p.getString("deepl_key", "") ?: "",
+        translateOnDownload = p.getBoolean("translate_on_download", false),
         serverUrl = p.getString("server_url", "") ?: "",
         accessKey = p.getString("access_key", "") ?: "",
         targetLanguage = TargetLanguage.fromCode(p.getString("target_lang", null)),
@@ -129,6 +137,9 @@ object MangalateTranslator {
             ?.putString("gemini_key", new.geminiKey)
             ?.putString("gemini_model", new.geminiModel)
             ?.putBoolean("setup_done", new.setupDone)
+            ?.putBoolean("gemini_fast", new.geminiFast)
+            ?.putString("deepl_key", new.deeplKey)
+            ?.putBoolean("translate_on_download", new.translateOnDownload)
             ?.putString("server_url", new.serverUrl)
             ?.putString("access_key", new.accessKey)
             ?.putString("target_lang", new.targetLanguage.code)
@@ -190,17 +201,24 @@ object MangalateTranslator {
     }
 
     /** Traduz os bytes de uma imagem, usando cache em disco e deduplicação. */
-    suspend fun translate(context: Context, image: ByteArray): ByteArray {
+    suspend fun translate(context: Context, image: ByteArray, keepOffline: Boolean = false): ByteArray {
         init(context)
         val s = _settings.value
         if (!s.isConfigured) throw IOException("Tradução não configurada")
         val signature = s.cacheSignature()
         val key = sha256(image) + "_" + sha256(signature.toByteArray()).take(16)
-        val cacheFile = File(cacheDir(context), "$key.img")
+        val offlineFile = File(offlineDir(context), "$key.img")
+        val cacheFile = if (keepOffline) offlineFile else File(cacheDir(context), "$key.img")
 
-        if (cacheFile.exists() && cacheFile.length() > 0) {
-            cacheFile.setLastModified(System.currentTimeMillis())
-            return withContext(Dispatchers.IO) { cacheFile.readBytes() }
+        if (offlineFile.exists() && offlineFile.length() > 0) {
+            return withContext(Dispatchers.IO) { offlineFile.readBytes() }
+        }
+        val tempFile = File(cacheDir(context), "$key.img")
+        if (tempFile.exists() && tempFile.length() > 0) {
+            tempFile.setLastModified(System.currentTimeMillis())
+            val bytes = withContext(Dispatchers.IO) { tempFile.readBytes() }
+            if (keepOffline) withContext(Dispatchers.IO) { runCatching { offlineFile.writeBytes(bytes) } }
+            return bytes
         }
 
         // A tarefa roda num escopo próprio: se o usuário passar a página antes do fim,
@@ -208,7 +226,7 @@ object MangalateTranslator {
         val deferred = inFlight.getOrPut(key) {
             scope.async {
                 try {
-                    semaphore.withPermit {
+                    semaphores.getValue(s.mode).withPermit {
                         _activeJobs.update { it + 1 }
                         try {
                             val result = when (s.mode) {
@@ -226,7 +244,11 @@ object MangalateTranslator {
                 }
             }
         }
-        return deferred.await()
+        val result = deferred.await()
+        if (keepOffline && !offlineFile.exists()) {
+            withContext(Dispatchers.IO) { runCatching { offlineFile.writeBytes(result) } }
+        }
+        return result
     }
 
     private fun request(s: MangalateSettings, config: String, image: ByteArray): ByteArray {
@@ -296,7 +318,19 @@ object MangalateTranslator {
     private fun cacheDir(context: Context): File =
         File(context.applicationContext.cacheDir, CACHE_DIR).apply { mkdirs() }
 
+    /** Páginas de capítulos baixados: não são apagadas automaticamente (leitura offline). */
+    private fun offlineDir(context: Context): File =
+        File(context.applicationContext.filesDir, "mangalate_offline").apply { mkdirs() }
+
+    fun offlineSize(context: Context): Long =
+        offlineDir(context).listFiles()?.sumOf { it.length() } ?: 0L
+
+    fun clearOffline(context: Context) {
+        offlineDir(context).listFiles()?.forEach { it.delete() }
+    }
+
     private fun writeCache(context: Context, file: File, bytes: ByteArray) {
+        file.parentFile?.mkdirs()
         runCatching {
             val tmp = File(file.parentFile, file.name + ".tmp")
             tmp.writeBytes(bytes)

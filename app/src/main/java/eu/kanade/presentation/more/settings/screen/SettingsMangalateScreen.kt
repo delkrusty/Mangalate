@@ -128,6 +128,10 @@ class SettingsMangalateScreen : Screen() {
                 if (settings.mode == TranslateMode.GEMINI) {
                     item { GeminiSection(settings = settings, onChange = ::update) }
                 }
+                if (settings.mode == TranslateMode.DEEPL) {
+                    item { DeepLSection(settings = settings, onChange = ::update) }
+                }
+                item { OfflineSection(settings = settings, onChange = ::update) }
                 item { LanguageSection(settings = settings, onChange = ::update) }
                 if (settings.mode == TranslateMode.SERVER) {
                     item { ServerSection(settings = settings, onChange = ::update) }
@@ -769,7 +773,7 @@ private fun GeminiSection(
             onClick = {
                 test = TestState.Running
                 scope.launch {
-                    test = GeminiClient.testKey(key, settings.geminiModel).fold(
+                    test = GeminiClient.testKey(key, settings.effectiveGeminiModel).fold(
                         onSuccess = { TestState.Ok(0) },
                         onFailure = { TestState.Fail(it.message ?: it.javaClass.simpleName) },
                     )
@@ -800,6 +804,28 @@ private fun GeminiSection(
                 )
             }
         }
+        Text("Velocidade", style = MaterialTheme.typography.labelLarge)
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+            SegmentedButton(
+                selected = settings.geminiFast,
+                onClick = { onChange { it.copy(geminiFast = true) } },
+                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+            ) { Text("Rápido") }
+            SegmentedButton(
+                selected = !settings.geminiFast,
+                onClick = { onChange { it.copy(geminiFast = false) } },
+                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+            ) { Text("Melhor qualidade") }
+        }
+        Text(
+            if (settings.geminiFast) {
+                "Usa o Gemini Flash-Lite: responde bem mais rápido e cabe melhor no limite grátis."
+            } else {
+                "Usa o Gemini Flash: tradução um pouco melhor, mas cada página demora mais."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         Text(
             "A faixa grátis do Gemini tem limite por minuto; se aparecer aviso de limite, espere um pouco. " +
                 "Páginas já traduzidas ficam salvas e não gastam de novo.",
@@ -835,5 +861,143 @@ private fun AdvancedToggle(expanded: Boolean, onClick: () -> Unit) {
         Icon(MaterialSymbols.Rounded.Tune, contentDescription = null, modifier = Modifier.size(18.dp))
         Spacer(Modifier.width(8.dp))
         Text(if (expanded) "Esconder ajustes avançados" else "Ajustes avançados")
+    }
+}
+
+@Composable
+private fun DeepLSection(
+    settings: MangalateSettings,
+    onChange: ((MangalateSettings) -> MangalateSettings) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val uriHandler = LocalUriHandler.current
+    val context = LocalContext.current
+    var key by remember { mutableStateOf(settings.deeplKey) }
+    var test by remember { mutableStateOf<TestState>(TestState.Idle) }
+    var usageText by remember { mutableStateOf("") }
+
+    fun save(value: String) {
+        key = value.trim()
+        test = TestState.Idle
+        onChange { it.copy(deeplKey = value.trim()) }
+    }
+
+    SectionCard(
+        icon = MaterialSymbols.Rounded.Translate,
+        title = "Chave grátis do DeepL",
+        subtitle = "Plano DeepL API Free: 500 mil caracteres por mês",
+    ) {
+        StepRow(1, "Toque em Criar conta grátis e escolha o plano DeepL API Free.")
+        StepRow(2, "Depois, em Chaves de API, copie a sua chave (termina com :fx).")
+        StepRow(3, "Volte aqui e toque em Colar.")
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(onClick = { uriHandler.openUri("https://www.deepl.com/pro-api") }) { Text("Criar conta grátis") }
+            FilledTonalButton(
+                onClick = {
+                    val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                        as android.content.ClipboardManager
+                    cm.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()?.let(::save)
+                },
+            ) { Text("Colar") }
+        }
+        TextButton(onClick = { uriHandler.openUri("https://www.deepl.com/your-account/keys") }) {
+            Text("Já tenho conta: abrir minhas chaves")
+        }
+        OutlinedTextField(
+            value = key,
+            onValueChange = ::save,
+            label = { Text("Chave do DeepL") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedButton(
+            enabled = key.isNotBlank() && test != TestState.Running,
+            onClick = {
+                test = TestState.Running
+                scope.launch {
+                    test = app.mangalate.local.DeepLClient.usage(key).fold(
+                        onSuccess = { (used, limit) ->
+                            usageText = "Tudo certo. Usado este mês: " +
+                                "%,d de %,d caracteres.".format(used, limit).replace(',', '.')
+                            TestState.Ok(0)
+                        },
+                        onFailure = { TestState.Fail(it.message ?: it.javaClass.simpleName) },
+                    )
+                }
+            },
+        ) {
+            if (test == TestState.Running) {
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                Spacer(Modifier.width(8.dp))
+            }
+            Text("Testar chave")
+        }
+        AnimatedVisibility(visible = test is TestState.Ok || test is TestState.Fail) {
+            val ok = test is TestState.Ok
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = if (ok) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.errorContainer,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    text = when (val t = test) {
+                        is TestState.Ok -> usageText
+                        is TestState.Fail -> t.message
+                        else -> ""
+                    },
+                    modifier = Modifier.padding(12.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+        }
+        Text(
+            "O DeepL traduz só o texto; quem lê as letras da página é o celular. " +
+                "Para raws em japonês com texto vertical, o Gemini costuma ler melhor.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun OfflineSection(
+    settings: MangalateSettings,
+    onChange: ((MangalateSettings) -> MangalateSettings) -> Unit,
+) {
+    val context = LocalContext.current
+    var size by remember { mutableLongStateOf(MangalateTranslator.offlineSize(context)) }
+    SectionCard(
+        icon = MaterialSymbols.Rounded.Dns,
+        title = "Ler offline",
+        subtitle = "Baixe o capítulo e ele já vem traduzido",
+    ) {
+        SwitchRow(
+            title = "Traduzir capítulos ao baixar",
+            subtitle = "Ao baixar um capítulo, todas as páginas são traduzidas junto. " +
+                "Depois é só ler, mesmo sem internet.",
+            checked = settings.translateOnDownload,
+            onChecked = { v -> onChange { it.copy(translateOnDownload = v) } },
+        )
+        Text(
+            "Use o botão de download da lista de capítulos, como sempre. Uma notificação mostra o progresso " +
+                "da tradução. Se você mudar o idioma ou o modo depois, as páginas são traduzidas de novo na leitura.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "${Formatter.formatShortFileSize(context, size)} de páginas traduzidas guardadas",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(
+                onClick = {
+                    MangalateTranslator.clearOffline(context)
+                    size = MangalateTranslator.offlineSize(context)
+                },
+            ) { Text("Apagar") }
+        }
     }
 }

@@ -492,6 +492,14 @@ class Downloader(
                 return
             }
 
+            // Mangalate: traduz as páginas agora para ler traduzido sem internet
+            app.mangalate.translate.MangalateDownloadTranslator.translateFolder(
+                context,
+                tmpDir,
+                download.chapter.name,
+                download.manga.title,
+            )
+
             createComicInfoFile(
                 tmpDir,
                 download.manga,
