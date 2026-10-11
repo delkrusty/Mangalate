@@ -130,6 +130,7 @@ class SettingsMangalateScreen : Screen() {
                 }
                 item { OfflineSection(settings = settings, onChange = ::update) }
                 item { LanguageSection(settings = settings, onChange = ::update) }
+                item { ArtworkOptionsSection(settings = settings, onChange = ::update) }
                 if (settings.mode == TranslateMode.SERVER) {
                     item { ServerSection(settings = settings, onChange = ::update) }
                     item { EngineSection(settings = settings, onChange = ::update) }
@@ -525,7 +526,7 @@ private fun QualitySection(
         )
         SwitchRow(
             title = "Só traduzir texto dentro de balões",
-            subtitle = "Ignora onomatopeias e textos soltos sobre a arte",
+            subtitle = "Também ignora legendas de narração fora de balões",
             checked = settings.ignoreOutsideBubbles,
             onChecked = { v -> onChange { it.copy(ignoreOutsideBubbles = v) } },
         )
@@ -581,7 +582,7 @@ private fun TypesetSection(
         if (settings.mode != TranslateMode.SERVER) {
             SwitchRow(
                 title = "Só traduzir texto dentro de balões",
-                subtitle = "Ignora onomatopeias e textos soltos sobre a arte",
+                subtitle = "Também ignora legendas de narração fora de balões",
                 checked = settings.ignoreOutsideBubbles,
                 onChecked = { v -> onChange { it.copy(ignoreOutsideBubbles = v) } },
             )
@@ -611,6 +612,35 @@ private fun CacheSection() {
                 },
             ) { Text("Limpar") }
         }
+    }
+}
+
+@Composable
+private fun ArtworkOptionsSection(
+    settings: MangalateSettings,
+    onChange: ((MangalateSettings) -> MangalateSettings) -> Unit,
+) {
+    SectionCard(
+        icon = MaterialSymbols.Rounded.BrushIcon,
+        title = "Preservar a arte",
+        subtitle = "Diálogos traduzidos; efeitos sonoros mantidos como no original",
+    ) {
+        SwitchRow(
+            title = "Traduzir onomatopeias",
+            subtitle = "Opcional. Efeitos como CLAP, BANG e letras desenhadas podem alterar o visual da página.",
+            checked = settings.translateSoundEffects,
+            onChecked = { enabled -> onChange { it.copy(translateSoundEffects = enabled) } },
+        )
+        Text(
+            if (settings.mode == TranslateMode.SERVER) {
+                "No servidor, o padrão seguro também preserva textos soltos sobre a arte, conforme o suporte do backend."
+            } else {
+                "A limpeza completa é aplicada só a balões confirmados. Fora deles, o app remove apenas letras " +
+                    "identificadas; se a região for duvidosa, preserva o trecho original."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

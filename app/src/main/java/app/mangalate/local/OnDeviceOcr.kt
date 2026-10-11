@@ -91,6 +91,7 @@ object OnDeviceOcr {
                 rect = rect,
                 original = ordered.joinToString(sep) { it.text.trim() }.let(::normalizeCaps),
                 vertical = vertical,
+                glyphBoxes = members.map { Rect(it.rect) },
             )
         }.filter { it.original.isNotBlank() }
     }

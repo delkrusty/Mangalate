@@ -130,6 +130,7 @@ object MangalateTranslator {
         quality = QualityProfile.fromName(p.getString("quality", null)),
         typeset = TypesetMode.fromName(p.getString("typeset", null)),
         ignoreOutsideBubbles = p.getBoolean("ignore_outside_bubbles", false),
+        translateSoundEffects = p.getBoolean("translate_sound_effects", false),
         uppercase = p.getBoolean("uppercase", false),
         fontSizeOffset = p.getInt("font_size_offset", 0),
         maskDilation = p.getInt("mask_dilation", 0),
@@ -154,6 +155,7 @@ object MangalateTranslator {
             ?.putString("quality", new.quality.name)
             ?.putString("typeset", new.typeset.name)
             ?.putBoolean("ignore_outside_bubbles", new.ignoreOutsideBubbles)
+            ?.putBoolean("translate_sound_effects", new.translateSoundEffects)
             ?.putBoolean("uppercase", new.uppercase)
             ?.putInt("font_size_offset", new.fontSizeOffset)
             ?.putInt("mask_dilation", new.maskDilation)

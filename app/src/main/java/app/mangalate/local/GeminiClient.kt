@@ -116,6 +116,7 @@ object GeminiClient {
         }
         append(". Ignore page numbers, watermarks and scanlator credits.\n")
         append("For each text return:\n")
+        append("- kind: speech (dialogue), narration (captions), or sfx (sound effects/onomatopoeia)\n")
         append("- box_2d: [ymin, xmin, ymax, xmax] normalized 0-1000, tightly around the original characters only (not the whole bubble)\n")
         append("- original: the exact original text\n")
         append("- translation: a natural, fluent ${s.targetLanguage.englishName} translation, as a professional ")
@@ -126,7 +127,13 @@ object GeminiClient {
         append("List items in reading order (manga: right-to-left, top-to-bottom).\n")
         append("Keep each translation as one plain paragraph: no manual line breaks, soft hyphens, ")
         append("or syllable splitting. The app will handle lettering. Never merge separate bubbles.\n")
-        append("Reply only with JSON: {\"blocks\":[{\"box_2d\":[0,0,0,0],\"original\":\"\",\"translation\":\"\",\"over_art\":false,\"vertical\":false}]}")
+        if (!s.translateSoundEffects) {
+            append("Do NOT include sound effects, onomatopoeia, repeated CLAP/TAP, or stylized noises in blocks. ")
+            append("Leave them untouched even if they have a verbal translation. Keep actual dialogue and narration captions.\n")
+        }
+        append("Coordinates must cover only the characters, not the panel, nearby faces or artwork. ")
+        append("Mark unboxed captions over_art=true. Never create a balloon around unboxed text.\n")
+        append("Reply only with JSON: {\"blocks\":[{\"kind\":\"speech\",\"box_2d\":[0,0,0,0],\"original\":\"\",\"translation\":\"\",\"over_art\":false,\"vertical\":false}]}")
     }
 
     private fun parse(text: String, w: Int, h: Int): List<TextRegion> {
@@ -159,6 +166,7 @@ object GeminiClient {
                 translation = translation,
                 overArt = o.optBoolean("over_art", false),
                 vertical = o.optBoolean("vertical", false),
+                kind = TextKind.parse(o.optString("kind")),
             )
         }
         return result

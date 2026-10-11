@@ -15,34 +15,24 @@ import androidx.core.content.res.ResourcesCompat
 import app.mangalate.translate.MangalateSettings
 import app.mangalate.translate.TargetLanguage
 import eu.kanade.tachiyomi.R
-import java.util.ArrayDeque
-import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.roundToInt
 
 /**
- * Limpa o texto original e diagrama a tradução no lugar.
- *
- * Balões fechados e lisos: segmenta todo o interior e limpa inclusive caracteres
- * que o OCR não localizou, preservando o contorno. Regiões incertas usam limpeza local.
- *
- * Texto sobre a arte: a área é reconstruída de fora para dentro (difusão a partir das bordas)
- * e o texto é desenhado com contorno para ficar legível.
+ * Balão confirmado: interior completo. Fora dele: só componentes de letras
+ * validados, sem preenchimento retangular nem difusão sobre rostos/arte.
+ * Toda detecção usa a imagem original imutável, nunca uma página já apagada.
  */
 object PageRenderer {
-
     private class Plan(
         val region: TextRegion,
         val layout: RectF,
         val textColor: Int,
-        val strokeColor: Int?,
         val wholeBubble: Boolean = false,
     )
 
     @Volatile
     private var typeface: Typeface? = null
-
     @Volatile
     private var dictionary: PortugueseHyphenator? = null
 
@@ -59,273 +49,95 @@ object PageRenderer {
         tf
     }
 
-    fun render(context: Context, page: Bitmap, regions: List<TextRegion>, s: MangalateSettings) {
+    fun render(context: Context, page: Bitmap, regions: List<TextRegion>, settings: MangalateSettings) {
+        val source = page.copy(Bitmap.Config.ARGB_8888, false) ?: return
         val plans = ArrayList<Plan>()
-        // 1) limpar tudo primeiro, para uma limpeza não apagar o texto de outro balão
-        for (region in regions) {
-            val plan = clean(page, region, s) ?: continue
-            val previous = plans.indexOfFirst { existing ->
-                if (!plan.wholeBubble || !existing.wholeBubble) {
-                    false
-                } else {
+        try {
+            for (region in regions) {
+                if (!SoundEffectPolicy.shouldTranslate(region.kind, region.original, settings.translateSoundEffects)) continue
+                if (region.overArt && settings.ignoreOutsideBubbles) continue
+                val plan = clean(page, source, region) ?: continue
+                val previous = plans.indexOfFirst { existing ->
                     val intersection = RectF(plan.layout)
-                    intersection.intersect(existing.layout) &&
+                    plan.wholeBubble && existing.wholeBubble && intersection.intersect(existing.layout) &&
                         intersection.width() * intersection.height() >
                         min(plan.layout.width() * plan.layout.height(), existing.layout.width() * existing.layout.height()) * 0.85f
                 }
+                if (previous < 0) {
+                    plans += plan
+                } else {
+                    val old = plans[previous]
+                    plans[previous] = Plan(
+                        old.region.copy(
+                            original = old.region.original + " " + region.original,
+                            translation = old.region.translation + " " + region.translation,
+                        ),
+                        old.layout, old.textColor, true,
+                    )
+                }
             }
-            if (previous < 0) {
-                plans += plan
-            } else {
-                // Vários blocos de OCR no mesmo balão viram uma fala, sem duas legendas sobrepostas.
-                val old = plans[previous]
-                val merged = old.region.copy(
-                    original = old.region.original + " " + plan.region.original,
-                    translation = old.region.translation + " " + plan.region.translation,
-                )
-                plans[previous] = Plan(merged, old.layout, old.textColor, old.strokeColor, true)
-            }
+        } finally {
+            source.recycle()
         }
-        // 2) diagramar
         val canvas = Canvas(page)
-        val paint = TextPaint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG).apply {
-            typeface = typeface(context)
-        }
+        val paint = TextPaint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG).apply { typeface = typeface(context) }
         for (plan in plans) {
             var text = plan.region.translation.replace(Regex("\\s+"), " ").trim()
-            if (s.uppercase) text = text.uppercase()
-            if (text.isEmpty()) continue
-            letter(context, canvas, page.width, text, plan, paint, s)
+            if (settings.uppercase) text = text.uppercase()
+            if (text.isNotEmpty()) letter(context, canvas, page.width, text, plan, paint, settings)
         }
     }
 
-    // region Limpeza
+    private fun clean(page: Bitmap, source: Bitmap, region: TextRegion): Plan? {
+        val r = Rect(region.rect)
+        if (!r.intersect(0, 0, page.width, page.height) || r.width() < 3 || r.height() < 3) return null
+        // Uma caixa da IA quase do tamanho do quadro não autoriza apagar o quadro.
+        if (r.width() > page.width * 0.65 && r.height() > page.height * 0.30) return null
+        val grow = min(max(48, (max(r.width(), r.height()) * 1.5f).toInt()), max(48, page.width / 3))
+        val e = Rect(r.left - grow, r.top - grow, r.right + grow, r.bottom + grow)
+        e.intersect(0, 0, page.width, page.height)
+        val w = e.width()
+        val h = e.height()
+        val pixels = IntArray(w * h)
+        source.getPixels(pixels, 0, w, e.left, e.top, w, h)
+        val localText = BubbleGeometry.Box(r.left - e.left, r.top - e.top, r.right - e.left, r.bottom - e.top)
 
-    private fun clean(page: Bitmap, region: TextRegion, s: MangalateSettings): Plan? {
-        val pw = page.width
-        val ph = page.height
-        val r = Rect(region.rect).apply { intersect(0, 0, pw, ph) }
-        if (r.width() < 3 || r.height() < 3) return null
-
-        val grow = max(48, (max(r.width(), r.height()) * 1.5f).toInt())
-        val e = Rect(r.left - grow, r.top - grow, r.right + grow, r.bottom + grow).apply { intersect(0, 0, pw, ph) }
-        val ew = e.width()
-        val eh = e.height()
-        val px = IntArray(ew * eh)
-        page.getPixels(px, 0, ew, e.left, e.top, ew, eh)
-
-        if (!region.overArt) {
-            val segmented = BubbleSegmenter.identify(
-                px,
-                ew,
-                eh,
-                BubbleGeometry.Box(r.left - e.left, r.top - e.top, r.right - e.left, r.bottom - e.top),
-            )
-            if (segmented != null) {
-                val safe = BubbleGeometry.fit(segmented.interior, ew, eh, r.centerX() - e.left, r.centerY() - e.top)
+        // Narração sem caixa e efeitos soltos jamais viram candidatos a balão.
+        if (!region.overArt && region.kind != TextKind.SOUND_EFFECT) {
+            val segmented = BubbleSegmenter.identify(pixels, w, h, localText)
+                ?: BubbleSegmenter.identify(pixels, w, h, localText, closureRadius = 2)
+            if (segmented != null &&
+                BubbleBoundsGuard.accepts(localText, segmented.bounds, page.width, page.height)
+            ) {
+                val safe = BubbleGeometry.fit(segmented.interior, w, h, r.centerX() - e.left, r.centerY() - e.top)
                 if (safe != null) {
-                    for (i in px.indices) if (segmented.interior[i]) px[i] = segmented.background
-                    page.setPixels(px, 0, ew, e.left, e.top, ew, eh)
-                    val box = RectF(
-                        safe.left + e.left.toFloat(),
-                        safe.top + e.top.toFloat(),
-                        safe.right + e.left.toFloat(),
-                        safe.bottom + e.top.toFloat(),
+                    applyMask(page, e, segmented.interior, segmented.background)
+                    return Plan(
+                        region,
+                        RectF(safe.left + e.left.toFloat(), safe.top + e.top.toFloat(), safe.right + e.left.toFloat(), safe.bottom + e.top.toFloat()),
+                        if (luma(segmented.background) < 110) Color.WHITE else Color.rgb(20, 20, 20),
+                        true,
                     )
-                    val color = if (luma(segmented.background) < 110) Color.WHITE else Color.rgb(20, 20, 20)
-                    return Plan(region, box, color, null, wholeBubble = true)
                 }
             }
         }
-
-        // área do texto (com folga) em coordenadas locais
-        val pad = max(3, (min(r.width(), r.height()) * 0.06f).toInt())
-        val tx0 = (r.left - pad - e.left).coerceAtLeast(0)
-        val ty0 = (r.top - pad - e.top).coerceAtLeast(0)
-        val tx1 = (r.right + pad - e.left).coerceAtMost(ew - 1)
-        val ty1 = (r.bottom + pad - e.top).coerceAtMost(eh - 1)
-
-        // cor de fundo = mediana do anel em volta do texto
-        val ring = ArrayList<Int>()
-        val rx0 = (tx0 - 2).coerceAtLeast(0)
-        val ry0 = (ty0 - 2).coerceAtLeast(0)
-        val rx1 = (tx1 + 2).coerceAtMost(ew - 1)
-        val ry1 = (ty1 + 2).coerceAtMost(eh - 1)
-        for (x in rx0..rx1) {
-            ring += px[ry0 * ew + x]
-            ring += px[ry1 * ew + x]
+        // Se a caixa sobre arte não foi confirmada pelo OCR, melhor preservar o
+        // original do que inventar uma faixa branca ou escrever sobre um rosto.
+        if (region.glyphBoxes.isEmpty()) return null
+        val boxes = region.glyphBoxes.map {
+            BubbleGeometry.Box(it.left - e.left, it.top - e.top, it.right - e.left, it.bottom - e.top)
         }
-        for (y in ry0..ry1) {
-            ring += px[y * ew + rx0]
-            ring += px[y * ew + rx1]
-        }
-        val bg = median(ring)
-        val uniform = ring.count { dist(it, bg) <= 48 }.toFloat() / ring.size
-        val plain = uniform >= 0.72f && !region.overArt
-
-        if (!plain && s.ignoreOutsideBubbles) return null
-
-        val textColor: Int
-        val strokeColor: Int?
-        val layout: RectF
-
-        if (plain) {
-            // máscara dos traços das letras
-            val mask = BooleanArray(ew * eh)
-            for (y in ty0..ty1) {
-                for (x in tx0..tx1) {
-                    val i = y * ew + x
-                    if (dist(px[i], bg) > 56) mask[i] = true
-                }
-            }
-            // interior do balão por inundação
-            val inside = BooleanArray(ew * eh)
-            val queue = ArrayDeque<Int>()
-            for (y in ty0..ty1) {
-                for (x in tx0..tx1) {
-                    val i = y * ew + x
-                    inside[i] = true
-                    queue.add(i)
-                }
-            }
-            var touches = 0
-            var minX = tx0
-            var minY = ty0
-            var maxX = tx1
-            var maxY = ty1
-            var area = 0L
-            while (queue.isNotEmpty()) {
-                val i = queue.poll()!!
-                val x = i % ew
-                val y = i / ew
-                area++
-                if (x < minX) minX = x
-                if (x > maxX) maxX = x
-                if (y < minY) minY = y
-                if (y > maxY) maxY = y
-                if (x > 0) visit(i - 1, px, inside, queue, bg)
-                if (x < ew - 1) visit(i + 1, px, inside, queue, bg)
-                if (y > 0) visit(i - ew, px, inside, queue, bg)
-                if (y < eh - 1) visit(i + ew, px, inside, queue, bg)
-            }
-            if (minX == 0 && e.left > 0) touches++
-            if (minY == 0 && e.top > 0) touches++
-            if (maxX == ew - 1 && e.right < pw) touches++
-            if (maxY == eh - 1 && e.bottom < ph) touches++
-            val leaked = touches > 0 || area > ew.toLong() * eh * 0.92
-
-            // pinta as letras (dilatadas) com a cor do fundo
-            val d = max(2, (min(r.width(), r.height()) / 45f).roundToInt()).coerceAtMost(5)
-            val paintMask = BooleanArray(ew * eh)
-            for (y in ty0..ty1) {
-                for (x in tx0..tx1) {
-                    if (!mask[y * ew + x]) continue
-                    for (yy in max(0, y - d)..min(eh - 1, y + d)) {
-                        for (xx in max(0, x - d)..min(ew - 1, x + d)) paintMask[yy * ew + xx] = true
-                    }
-                }
-            }
-            for (i in px.indices) {
-                // não pinta sobre o contorno do balão: só dentro da área do texto ou do interior encontrado
-                if (paintMask[i] && (!leaked && inside[i] || inTextBox(i, ew, tx0, ty0, tx1, ty1))) {
-                    px[i] = bg
-                } else if (!leaked && inside[i] && inTextBox(i, ew, tx0, ty0, tx1, ty1)) {
-                    px[i] = bg
-                }
-            }
-
-            layout = if (!leaked && area > 0) {
-                BubbleGeometry.fit(inside, ew, eh, r.centerX() - e.left, r.centerY() - e.top)
-                    ?.let { RectF(it.left + e.left.toFloat(), it.top + e.top.toFloat(), it.right + e.left.toFloat(), it.bottom + e.top.toFloat()) }
-                    ?: RectF(r)
-            } else {
-                // Área incerta: não cresce para fora da caixa original.
-                RectF(r)
-            }
-            val dark = luma(bg) < 110
-            textColor = if (dark) Color.WHITE else Color.rgb(20, 20, 20)
-            strokeColor = null
-        } else {
-            inpaint(px, ew, eh, tx0, ty0, tx1, ty1)
-            layout = RectF(r)
-            val avg = averageLuma(px, ew, tx0, ty0, tx1, ty1)
-            if (avg < 110) {
-                textColor = Color.WHITE
-                strokeColor = Color.rgb(15, 15, 15)
-            } else {
-                textColor = Color.rgb(15, 15, 15)
-                strokeColor = Color.WHITE
-            }
-        }
-
-        page.setPixels(px, 0, ew, e.left, e.top, ew, eh)
-        return Plan(region, layout, textColor, strokeColor)
+        val glyphs = GlyphCleaner.identify(pixels, w, h, boxes, page.width) ?: return null
+        applyMask(page, e, glyphs.mask, glyphs.background)
+        return Plan(region, RectF(r), if (luma(glyphs.background) < 110) Color.WHITE else Color.rgb(20, 20, 20))
     }
 
-    private fun inTextBox(i: Int, ew: Int, x0: Int, y0: Int, x1: Int, y1: Int): Boolean {
-        val x = i % ew
-        val y = i / ew
-        return x in x0..x1 && y in y0..y1
+    private fun applyMask(page: Bitmap, crop: Rect, mask: BooleanArray, background: Int) {
+        val pixels = IntArray(mask.size)
+        page.getPixels(pixels, 0, crop.width(), crop.left, crop.top, crop.width(), crop.height())
+        for (i in mask.indices) if (mask[i]) pixels[i] = background
+        page.setPixels(pixels, 0, crop.width(), crop.left, crop.top, crop.width(), crop.height())
     }
-
-    private fun visit(j: Int, px: IntArray, inside: BooleanArray, q: ArrayDeque<Int>, bg: Int) {
-        if (inside[j]) return
-        if (dist(px[j], bg) > 40) return
-        inside[j] = true
-        q.add(j)
-    }
-
-    /** Reconstrução por difusão: preenche a área de fora para dentro. */
-    private fun inpaint(px: IntArray, ew: Int, eh: Int, x0: Int, y0: Int, x1: Int, y1: Int) {
-        val w = x1 - x0 + 1
-        val h = y1 - y0 + 1
-        val known = BooleanArray(ew * eh) { true }
-        for (y in y0..y1) for (x in x0..x1) known[y * ew + x] = false
-        var remaining = w * h
-        val next = ArrayList<Pair<Int, Int>>()
-        var guard = 0
-        while (remaining > 0 && guard++ < 4000) {
-            next.clear()
-            for (y in y0..y1) {
-                for (x in x0..x1) {
-                    val i = y * ew + x
-                    if (known[i]) continue
-                    var r = 0
-                    var g = 0
-                    var b = 0
-                    var n = 0
-                    for (dy in -1..1) {
-                        val yy = y + dy
-                        if (yy < 0 || yy >= eh) continue
-                        for (dx in -1..1) {
-                            val xx = x + dx
-                            if (xx < 0 || xx >= ew || (dx == 0 && dy == 0)) continue
-                            val j = yy * ew + xx
-                            if (!known[j]) continue
-                            val c = px[j]
-                            r += (c shr 16) and 0xFF
-                            g += (c shr 8) and 0xFF
-                            b += c and 0xFF
-                            n++
-                        }
-                    }
-                    if (n >= 2 || (n == 1 && remaining < w + h)) {
-                        next += i to (0xFF shl 24 or ((r / n) shl 16) or ((g / n) shl 8) or (b / n))
-                    }
-                }
-            }
-            if (next.isEmpty()) break
-            for ((i, c) in next) {
-                px[i] = c
-                known[i] = true
-            }
-            remaining -= next.size
-        }
-    }
-
-    // endregion
-
-    // region Diagramação
 
     private fun letter(
         context: Context,
@@ -337,18 +149,15 @@ object PageRenderer {
         settings: MangalateSettings,
     ) {
         val box = RectF(plan.layout)
-        // Limita a fonte pelo tamanho da página; um balão pequeno não recebe letras gigantes.
         box.inset(min(2f, box.width() * 0.04f), min(2f, box.height() * 0.04f))
         if (box.width() < 1f || box.height() < 1f) return
         val maxSize = min(box.height() * 0.5f, pageWidth / 40f).coerceAtLeast(1f)
         val width = box.width().toInt().coerceAtLeast(1)
-        val portuguese = settings.targetLanguage == TargetLanguage.PT_BR
-        val breaks: (String) -> List<Int> = if (portuguese) {
+        val breaks: (String) -> List<Int> = if (settings.targetLanguage == TargetLanguage.PT_BR) {
             hyphenator(context)::breaks
         } else {
             { emptyList() }
         }
-
         fun fits(size: Float): StaticLayout? {
             paint.textSize = size
             paint.style = Paint.Style.FILL
@@ -360,13 +169,9 @@ object PageRenderer {
             }
             val layout = build(prepared, paint, width)
             if (layout.height > box.height()) return null
-            for (line in 0 until layout.lineCount) {
-                if (layout.getLineWidth(line) > width + 0.5f) return null
-            }
+            for (line in 0 until layout.lineCount) if (layout.getLineWidth(line) > width + 0.5f) return null
             return layout
         }
-
-        // Não existe mais o fallback que ampliava a caixa e cortava palavras arbitrariamente.
         var lo = 0.5f
         var hi = maxSize
         var best = lo
@@ -382,24 +187,13 @@ object PageRenderer {
                 hi = mid
             }
         }
-        // Ajuste manual pode diminuir a fonte, nunca passar do tamanho que cabe.
         val size = (best * (1f + settings.fontSizeOffset * 0.07f)).coerceIn(0.5f, best)
         val layout = fits(size) ?: selected
-        // StaticLayout retém o TextPaint: restaura a fonte efetiva antes de desenhar.
         paint.textSize = if (layout === selected) best else size
-
+        paint.color = plan.textColor
         canvas.save()
         canvas.clipRect(box)
         canvas.translate(box.left, box.centerY() - layout.height / 2f)
-        if (plan.strokeColor != null) {
-            paint.style = Paint.Style.STROKE
-            paint.strokeJoin = Paint.Join.ROUND
-            paint.strokeWidth = max(1f, paint.textSize * 0.15f)
-            paint.color = plan.strokeColor
-            layout.draw(canvas)
-        }
-        paint.style = Paint.Style.FILL
-        paint.color = plan.textColor
         layout.draw(canvas)
         canvas.restore()
     }
@@ -413,37 +207,6 @@ object PageRenderer {
             .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
             .build()
 
-    // endregion
-
-    // region Cores
-
-    private fun dist(a: Int, b: Int): Int {
-        val dr = abs(((a shr 16) and 0xFF) - ((b shr 16) and 0xFF))
-        val dg = abs(((a shr 8) and 0xFF) - ((b shr 8) and 0xFF))
-        val db = abs((a and 0xFF) - (b and 0xFF))
-        return max(dr, max(dg, db))
-    }
-
-    private fun luma(c: Int): Int =
-        (((c shr 16) and 0xFF) * 299 + ((c shr 8) and 0xFF) * 587 + (c and 0xFF) * 114) / 1000
-
-    private fun median(colors: List<Int>): Int {
-        if (colors.isEmpty()) return Color.WHITE
-        val r = colors.map { (it shr 16) and 0xFF }.sorted()[colors.size / 2]
-        val g = colors.map { (it shr 8) and 0xFF }.sorted()[colors.size / 2]
-        val b = colors.map { it and 0xFF }.sorted()[colors.size / 2]
-        return Color.rgb(r, g, b)
-    }
-
-    private fun averageLuma(px: IntArray, ew: Int, x0: Int, y0: Int, x1: Int, y1: Int): Int {
-        var sum = 0L
-        var n = 0
-        for (y in y0..y1) for (x in x0..x1) {
-            sum += luma(px[y * ew + x])
-            n++
-        }
-        return if (n == 0) 255 else (sum / n).toInt()
-    }
-
-    // endregion
+    private fun luma(c: Int) =
+        (((c ushr 16) and 255) * 299 + ((c ushr 8) and 255) * 587 + (c and 255) * 114) / 1000
 }

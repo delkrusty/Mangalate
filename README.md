@@ -62,6 +62,15 @@ A faixa grátis tem limite de pedidos por minuto. Se aparecer aviso de limite, e
 - Ajuda pesquisável dentro do app, com manuais e soluções de problemas disponíveis offline. Consulte também [HELP.md](HELP.md).
 - Regiões com contorno aberto, textura ou baixa confiança usam a limpeza conservadora. A limpeza total não é aplicada indiscriminadamente à arte.
 
+## Revisão de arte na versão 0.6.0
+
+- Limites de tamanho e proporção rejeitam falsos balões que ocupam um quadro inteiro. Todas as regiões são analisadas sobre uma cópia imutável do original.
+- Mantém a limpeza completa dos balões confirmados. Fora deles, remove só componentes de letras confirmados por OCR; não pinta retângulos nem aplica difusão sobre retratos.
+- O OCR local pode corrigir as coordenadas fornecidas pelo Gemini. Se não houver confirmação suficiente, o trecho original é preservado.
+- Onomatopeias ficam intactas por padrão. O interruptor **Traduzir onomatopeias** está em Mais › Tradução › Preservar a arte, separado do filtro de texto fora de balões.
+- No modo servidor, o padrão seguro também preserva textos soltos sobre a arte, conforme o filtro de balões do backend.
+- Traduções antigas em cache não são reutilizadas; prepare novamente as páginas com internet antes de ler offline com Gemini.
+
 ## Compilar
 
 O GitHub Actions compila a cada push em `main` e publica o APK em Releases. Para compilar localmente: JDK 21 e Android SDK, depois:

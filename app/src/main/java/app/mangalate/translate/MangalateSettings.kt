@@ -126,6 +126,7 @@ data class MangalateSettings(
     val quality: QualityProfile = QualityProfile.HIGH,
     val typeset: TypesetMode = TypesetMode.AUTO,
     val ignoreOutsideBubbles: Boolean = false,
+    val translateSoundEffects: Boolean = false,
     val uppercase: Boolean = false,
     val fontSizeOffset: Int = 0,
     val maskDilation: Int = 0,
@@ -145,9 +146,9 @@ data class MangalateSettings(
     fun cacheSignature(): String = when (mode) {
         TranslateMode.SERVER -> "server|" + toServerConfig()
         else -> listOf(
-            "bubble-interior-v5", mode.name, sourceLanguage.name, targetLanguage.code,
+            "artwork-safe-v6", mode.name, sourceLanguage.name, targetLanguage.code,
             if (mode == TranslateMode.GEMINI) effectiveGeminiModel else "",
-            ignoreOutsideBubbles, uppercase, fontSizeOffset,
+            ignoreOutsideBubbles, translateSoundEffects, uppercase, fontSizeOffset,
         ).joinToString("|")
     }
 
@@ -180,7 +181,9 @@ data class MangalateSettings(
         val ocr = JSONObject().apply {
             put("ocr", "48px")
             put("min_text_length", 0)
-            if (ignoreOutsideBubbles) put("ignore_bubble", 8)
+            // O servidor não retorna classes semânticas: no padrão seguro, pula
+            // também textos soltos sobre a arte. A opção avançada libera esses textos.
+            if (ignoreOutsideBubbles || !translateSoundEffects) put("ignore_bubble", 8)
         }
         val inpainter = JSONObject().apply {
             put("inpainter", if (q == QualityProfile.FAST) "lama_mpe" else "lama_large")
