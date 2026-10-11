@@ -76,7 +76,6 @@ object MangalateTranslator {
     private val semaphores = mapOf(
         TranslateMode.ON_DEVICE to Semaphore(2),
         TranslateMode.GEMINI to Semaphore(3),
-        TranslateMode.DEEPL to Semaphore(4),
         TranslateMode.SERVER to Semaphore(2),
     )
 
@@ -100,6 +99,16 @@ object MangalateTranslator {
         synchronized(this) {
             if (prefs != null) return
             val p = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            // Retira credenciais de um provedor removido e migra a seleção antiga.
+            val migration = p.edit().remove("deepl_key")
+            if (p.getString("mode", null) == "DEEPL") {
+                migration.putString(
+                    "mode",
+                    if (p.getString("gemini_key", "").isNullOrBlank()) "ON_DEVICE" else "GEMINI",
+                )
+            }
+            if (p.getString("engine", null) == "deepl") migration.putString("engine", "gemini")
+            migration.apply()
             prefs = p
             _settings.value = read(p)
             _enabled.value = p.getBoolean("enabled", false) && _settings.value.isConfigured
@@ -113,7 +122,6 @@ object MangalateTranslator {
         geminiModel = p.getString("gemini_model", null) ?: MangalateSettings.DEFAULT_GEMINI_MODEL,
         setupDone = p.getBoolean("setup_done", false),
         geminiFast = p.getBoolean("gemini_fast", true),
-        deeplKey = p.getString("deepl_key", "") ?: "",
         translateOnDownload = p.getBoolean("translate_on_download", false),
         serverUrl = p.getString("server_url", "") ?: "",
         accessKey = p.getString("access_key", "") ?: "",
@@ -138,7 +146,6 @@ object MangalateTranslator {
             ?.putString("gemini_model", new.geminiModel)
             ?.putBoolean("setup_done", new.setupDone)
             ?.putBoolean("gemini_fast", new.geminiFast)
-            ?.putString("deepl_key", new.deeplKey)
             ?.putBoolean("translate_on_download", new.translateOnDownload)
             ?.putString("server_url", new.serverUrl)
             ?.putString("access_key", new.accessKey)

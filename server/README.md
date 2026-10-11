@@ -54,7 +54,6 @@ Defina no `.env` (ou na célula 1 do Colab) a chave do motor selecionado no app:
 |---|---|
 | DeepSeek | `DEEPSEEK_API_KEY` |
 | Gemini | `GEMINI_API_KEY` |
-| DeepL | `DEEPL_AUTH_KEY` |
 | OpenAI | `OPENAI_API_KEY` |
 | Groq | `GROQ_API_KEY` |
 | Compatível OpenAI | `CUSTOM_OPENAI_API_BASE`, `CUSTOM_OPENAI_MODEL` |

@@ -1,0 +1,12 @@
+Divisão silábica em português brasileiro
+
+Dicionário DivSilab: Copyright (C) 2008–2013 Raimundo Santos Moura.
+O arquivo hyph_pt_BR.dic é distribuído sem modificações.
+Licença escolhida para a distribuição: Mozilla Public License (MPL).
+Ver COPYING.MPL e README_hyph_pt_BR.txt.
+
+Código-fonte original:
+https://github.com/LibreOffice/dictionaries/tree/master/pt_BR
+https://raw.githubusercontent.com/LibreOffice/dictionaries/master/pt_BR/hyph_pt_BR.dic
+
+O algoritmo de leitura dos padrões no Mangalate é uma implementação independente.

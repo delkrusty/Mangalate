@@ -124,6 +124,8 @@ object GeminiClient {
         append("- over_art: true if the text is NOT inside a bubble/box (drawn over the artwork)\n")
         append("- vertical: true if the original is written vertically\n")
         append("List items in reading order (manga: right-to-left, top-to-bottom).\n")
+        append("Keep each translation as one plain paragraph: no manual line breaks, soft hyphens, ")
+        append("or syllable splitting. The app will handle lettering. Never merge separate bubbles.\n")
         append("Reply only with JSON: {\"blocks\":[{\"box_2d\":[0,0,0,0],\"original\":\"\",\"translation\":\"\",\"over_art\":false,\"vertical\":false}]}")
     }
 

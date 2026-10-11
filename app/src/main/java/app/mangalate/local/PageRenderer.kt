@@ -13,6 +13,7 @@ import android.text.StaticLayout
 import android.text.TextPaint
 import androidx.core.content.res.ResourcesCompat
 import app.mangalate.translate.MangalateSettings
+import app.mangalate.translate.TargetLanguage
 import eu.kanade.tachiyomi.R
 import java.util.ArrayDeque
 import kotlin.math.abs
@@ -42,6 +43,15 @@ object PageRenderer {
     @Volatile
     private var typeface: Typeface? = null
 
+    @Volatile
+    private var dictionary: PortugueseHyphenator? = null
+
+    private fun hyphenator(context: Context): PortugueseHyphenator = dictionary ?: synchronized(this) {
+        dictionary ?: context.assets.open("lettering/hyph_pt_BR.dic").bufferedReader().use { reader ->
+            PortugueseHyphenator(reader.lineSequence()).also { dictionary = it }
+        }
+    }
+
     private fun typeface(context: Context): Typeface = typeface ?: run {
         val tf = runCatching { ResourcesCompat.getFont(context, R.font.mangalate_comic_bold) }.getOrNull()
             ?: Typeface.DEFAULT_BOLD
@@ -62,10 +72,10 @@ object PageRenderer {
             typeface = typeface(context)
         }
         for (plan in plans) {
-            var text = plan.region.translation.trim()
+            var text = plan.region.translation.replace(Regex("\\s+"), " ").trim()
             if (s.uppercase) text = text.uppercase()
             if (text.isEmpty()) continue
-            letter(canvas, page.width, text, plan, paint, s.fontSizeOffset)
+            letter(context, canvas, page.width, text, plan, paint, s)
         }
     }
 
@@ -77,7 +87,7 @@ object PageRenderer {
         val r = Rect(region.rect).apply { intersect(0, 0, pw, ph) }
         if (r.width() < 3 || r.height() < 3) return null
 
-        val grow = max(24, (max(r.width(), r.height()) * 0.85f).toInt())
+        val grow = max(48, (max(r.width(), r.height()) * 1.5f).toInt())
         val e = Rect(r.left - grow, r.top - grow, r.right + grow, r.bottom + grow).apply { intersect(0, 0, pw, ph) }
         val ew = e.width()
         val eh = e.height()
@@ -140,15 +150,11 @@ object PageRenderer {
             var maxX = tx1
             var maxY = ty1
             var area = 0L
-            var sumX = 0L
-            var sumY = 0L
             while (queue.isNotEmpty()) {
                 val i = queue.poll()!!
                 val x = i % ew
                 val y = i / ew
                 area++
-                sumX += x
-                sumY += y
                 if (x < minX) minX = x
                 if (x > maxX) maxX = x
                 if (y < minY) minY = y
@@ -162,7 +168,7 @@ object PageRenderer {
             if (minY == 0 && e.top > 0) touches++
             if (maxX == ew - 1 && e.right < pw) touches++
             if (maxY == eh - 1 && e.bottom < ph) touches++
-            val leaked = touches >= 2 || area > ew.toLong() * eh * 0.92
+            val leaked = touches > 0 || area > ew.toLong() * eh * 0.92
 
             // pinta as letras (dilatadas) com a cor do fundo
             val d = max(2, (min(r.width(), r.height()) / 45f).roundToInt()).coerceAtMost(5)
@@ -185,12 +191,12 @@ object PageRenderer {
             }
 
             layout = if (!leaked && area > 0) {
-                inscribed(inside, ew, eh, (sumX / area).toInt(), (sumY / area).toInt(), minX, minY, maxX, maxY)
+                BubbleGeometry.fit(inside, ew, eh, r.centerX() - e.left, r.centerY() - e.top)
                     ?.let { RectF(it.left + e.left.toFloat(), it.top + e.top.toFloat(), it.right + e.left.toFloat(), it.bottom + e.top.toFloat()) }
-                    ?.takeIf { it.width() * it.height() >= r.width() * r.height() * 0.7f }
                     ?: RectF(r)
             } else {
-                RectF(r).apply { inset(-r.width() * 0.04f, -r.height() * 0.04f) }
+                // Área incerta: não cresce para fora da caixa original.
+                RectF(r)
             }
             val dark = luma(bg) < 110
             textColor = if (dark) Color.WHITE else Color.rgb(20, 20, 20)
@@ -223,44 +229,6 @@ object PageRenderer {
         if (dist(px[j], bg) > 40) return
         inside[j] = true
         q.add(j)
-    }
-
-    /** Maior retângulo (aprox.) dentro do balão, centrado no centroide. */
-    private fun inscribed(
-        inside: BooleanArray,
-        ew: Int,
-        eh: Int,
-        cx: Int,
-        cy: Int,
-        minX: Int,
-        minY: Int,
-        maxX: Int,
-        maxY: Int,
-    ): Rect? {
-        var hw = (maxX - minX) * 0.40f
-        var hh = (maxY - minY) * 0.40f
-        repeat(16) {
-            val rect = Rect(
-                (cx - hw).toInt().coerceAtLeast(0),
-                (cy - hh).toInt().coerceAtLeast(0),
-                (cx + hw).toInt().coerceAtMost(ew - 1),
-                (cy + hh).toInt().coerceAtMost(eh - 1),
-            )
-            var ok = 0
-            var total = 0
-            for (gy in 0..8) {
-                for (gx in 0..8) {
-                    val x = rect.left + rect.width() * gx / 8
-                    val y = rect.top + rect.height() * gy / 8
-                    total++
-                    if (inside[y * ew + x]) ok++
-                }
-            }
-            if (ok >= total * 0.95f) return rect
-            hw *= 0.92f
-            hh *= 0.92f
-        }
-        return null
     }
 
     /** Reconstrução por difusão: preenche a área de fora para dentro. */
@@ -315,49 +283,74 @@ object PageRenderer {
 
     // region Diagramação
 
-    private fun letter(canvas: Canvas, pageWidth: Int, text: String, plan: Plan, paint: TextPaint, offset: Int) {
+    private fun letter(
+        context: Context,
+        canvas: Canvas,
+        pageWidth: Int,
+        text: String,
+        plan: Plan,
+        paint: TextPaint,
+        settings: MangalateSettings,
+    ) {
         val box = RectF(plan.layout)
-        val minSize = max(10f, pageWidth / 95f)
-        val maxSize = max(minSize, min(box.height() * 0.8f, pageWidth / 13f))
-
-        fun fits(size: Float, width: Int): StaticLayout? {
-            paint.textSize = size
-            val words = text.split(' ', '\n')
-            if (words.any { paint.measureText(it) > width }) return null
-            val l = build(text, paint, width)
-            return if (l.height <= box.height()) l else null
+        // Limita a fonte pelo tamanho da página; um balão pequeno não recebe letras gigantes.
+        box.inset(min(2f, box.width() * 0.04f), min(2f, box.height() * 0.04f))
+        if (box.width() < 1f || box.height() < 1f) return
+        val maxSize = min(box.height() * 0.5f, pageWidth / 40f).coerceAtLeast(1f)
+        val width = box.width().toInt().coerceAtLeast(1)
+        val portuguese = settings.targetLanguage == TargetLanguage.PT_BR
+        val breaks: (String) -> List<Int> = if (portuguese) {
+            hyphenator(context)::breaks
+        } else {
+            { emptyList() }
         }
 
-        var lo = minSize
+        fun fits(size: Float): StaticLayout? {
+            paint.textSize = size
+            paint.style = Paint.Style.FILL
+            val prepared = if (settings.targetLanguage.latin || settings.targetLanguage == TargetLanguage.RU) {
+                BubbleTextWrapper.wrap(text, width.toFloat(), { paint.measureText(it) }, breaks)
+                    ?.joinToString("\n") ?: return null
+            } else {
+                text
+            }
+            val layout = build(prepared, paint, width)
+            if (layout.height > box.height()) return null
+            for (line in 0 until layout.lineCount) {
+                if (layout.getLineWidth(line) > width + 0.5f) return null
+            }
+            return layout
+        }
+
+        // Não existe mais o fallback que ampliava a caixa e cortava palavras arbitrariamente.
+        var lo = 0.5f
         var hi = maxSize
-        var best: Float? = null
-        var width = box.width().toInt().coerceAtLeast(8)
+        var best = lo
+        var selected = fits(lo) ?: return
         repeat(14) {
             val mid = (lo + hi) / 2
-            if (fits(mid, width) != null) {
+            val candidate = fits(mid)
+            if (candidate != null) {
                 best = mid
+                selected = candidate
                 lo = mid
             } else {
                 hi = mid
             }
         }
-        if (best == null) {
-            // não coube: alarga um pouco a caixa e usa o tamanho mínimo
-            val extra = box.width() * 0.25f
-            box.inset(-extra / 2, -box.height() * 0.1f)
-            width = box.width().toInt()
-            best = minSize
-        }
-        val size = (best!! * (1f + offset * 0.07f)).coerceIn(minSize * 0.8f, maxSize * 1.3f)
-        paint.textSize = size
-        val layout = build(text, paint, width)
+        // Ajuste manual pode diminuir a fonte, nunca passar do tamanho que cabe.
+        val size = (best * (1f + settings.fontSizeOffset * 0.07f)).coerceIn(0.5f, best)
+        val layout = fits(size) ?: selected
+        // StaticLayout retém o TextPaint: restaura a fonte efetiva antes de desenhar.
+        paint.textSize = if (layout === selected) best else size
 
         canvas.save()
+        canvas.clipRect(box)
         canvas.translate(box.left, box.centerY() - layout.height / 2f)
         if (plan.strokeColor != null) {
             paint.style = Paint.Style.STROKE
             paint.strokeJoin = Paint.Join.ROUND
-            paint.strokeWidth = max(2f, size * 0.2f)
+            paint.strokeWidth = max(1f, paint.textSize * 0.15f)
             paint.color = plan.strokeColor
             layout.draw(canvas)
         }
@@ -370,7 +363,7 @@ object PageRenderer {
     private fun build(text: String, paint: TextPaint, width: Int): StaticLayout =
         StaticLayout.Builder.obtain(text, 0, text.length, paint, width)
             .setAlignment(Layout.Alignment.ALIGN_CENTER)
-            .setLineSpacing(0f, 0.92f)
+            .setLineSpacing(0f, 1.05f)
             .setIncludePad(false)
             .setBreakStrategy(Layout.BREAK_STRATEGY_BALANCED)
             .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)

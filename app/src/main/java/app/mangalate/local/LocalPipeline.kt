@@ -36,13 +36,9 @@ object LocalPipeline {
                         emptyList()
                     } else {
                         val texts = found.map { it.original }
-                        val translated = if (s.mode == TranslateMode.DEEPL) {
-                            DeepLClient.translate(s.deeplKey, texts, s.sourceLanguage, s.targetLanguage)
-                        } else {
-                            OnDeviceTranslate.translate(texts, s.sourceLanguage, s.targetLanguage) {
-                                status("Baixando o tradutor (só na primeira vez)…")
-                            }.also { status(null) }
-                        }
+                        val translated = OnDeviceTranslate.translate(texts, s.sourceLanguage, s.targetLanguage) {
+                            status("Baixando o tradutor (só na primeira vez)…")
+                        }.also { status(null) }
                         found.zip(translated) { r, t -> r.copy(translation = t) }
                     }
                 }

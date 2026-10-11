@@ -16,11 +16,6 @@ enum class TranslateMode(val label: String, val badge: String, val description: 
         "Melhor qualidade",
         "A IA do Google lê e traduz a página inteira com contexto. Precisa de uma chave grátis.",
     ),
-    DEEPL(
-        "DeepL",
-        "Mais rápido",
-        "Lê o texto no celular e traduz com DeepL. 500 mil caracteres por mês grátis.",
-    ),
     SERVER(
         "Servidor próprio",
         "Avançado",
@@ -80,7 +75,6 @@ enum class TranslatorEngine(
 ) {
     DEEPSEEK("deepseek", "DeepSeek", "Muito barato e bom com contexto. Recomendado.", true),
     GEMINI("gemini", "Gemini", "Google. Tem faixa gratuita nos modelos Flash.", true),
-    DEEPL("deepl", "DeepL", "Plano Free: 500 mil caracteres/mês grátis.", true),
     OPENAI("chatgpt", "OpenAI", "Modelos GPT. Ótima qualidade, custo maior.", true),
     GROQ("groq", "Groq", "Rápido, com cota gratuita generosa.", true),
     CUSTOM("custom_openai", "Compatível OpenAI", "Ollama, LM Studio, OpenRouter etc.", false),
@@ -123,7 +117,6 @@ data class MangalateSettings(
     val geminiKey: String = "",
     val geminiModel: String = DEFAULT_GEMINI_MODEL,
     val geminiFast: Boolean = true,
-    val deeplKey: String = "",
     val translateOnDownload: Boolean = false,
     val setupDone: Boolean = false,
     val serverUrl: String = "",
@@ -141,7 +134,6 @@ data class MangalateSettings(
         get() = when (mode) {
             TranslateMode.ON_DEVICE -> true
             TranslateMode.GEMINI -> geminiKey.isNotBlank()
-            TranslateMode.DEEPL -> deeplKey.isNotBlank()
             TranslateMode.SERVER -> serverUrl.isNotBlank()
         }
 
@@ -153,7 +145,7 @@ data class MangalateSettings(
     fun cacheSignature(): String = when (mode) {
         TranslateMode.SERVER -> "server|" + toServerConfig()
         else -> listOf(
-            "v2", mode.name, sourceLanguage.name, targetLanguage.code,
+            "lettering-v4", mode.name, sourceLanguage.name, targetLanguage.code,
             if (mode == TranslateMode.GEMINI) effectiveGeminiModel else "",
             ignoreOutsideBubbles, uppercase, fontSizeOffset,
         ).joinToString("|")
@@ -213,7 +205,7 @@ data class MangalateSettings(
             put("font_size_offset", fontSizeOffset)
             put("uppercase", uppercase)
             put("disable_font_border", false)
-            put("no_hyphenation", targetLanguage == TargetLanguage.PT_BR)
+            put("no_hyphenation", false)
             put("rtl", true)
         }
         return JSONObject().apply {

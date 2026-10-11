@@ -22,7 +22,6 @@ Não precisa de servidor, conta nem configuração. Para desligar e ver o origin
 |---|---|---|
 | **No celular** (padrão) | Nada. Baixa o tradutor uma vez (~30 MB) | Boa para inglês; razoável para japonês, coreano e chinês |
 | **Gemini** | Uma chave grátis do Google, colada no app em 1 minuto | Tradução natural, com contexto, lê texto vertical. Modo Rápido (Flash-Lite) ou Melhor qualidade (Flash) |
-| **DeepL** | Uma chave grátis do DeepL API Free (500 mil caracteres/mês) | O mais rápido: o celular lê o texto e o DeepL traduz |
 | **Servidor próprio** | Rodar o servidor no PC ou no Colab ([guia](server/README.md)) | Melhor reconstrução da arte |
 
 ### Como pegar a chave grátis do Gemini
@@ -47,6 +46,14 @@ A faixa grátis tem limite de pedidos por minuto. Se aparecer aviso de limite, e
 4. O texto traduzido é diagramado no balão em fonte de quadrinho, com tamanho e quebra de linha ajustados automaticamente.
 5. A página fica salva no celular. As páginas seguintes já vão sendo traduzidas enquanto você lê.
 
+## Diagramação na versão 0.4.0
+
+- Texto centralizado na área útil do corpo do balão, com margens internas e sem aumentar a caixa para fora do balão.
+- Fonte limitada pelo tamanho da página e reduzida até a fala caber; não há cortes arbitrários dentro de palavras.
+- Divisão silábica em português brasileiro com hífen quando uma palavra não cabe inteira, usando o dicionário DivSilab.
+- As páginas antigas em cache não são reutilizadas pela nova diagramação. Nos modos online, abra novamente os capítulos com internet antes de ler offline.
+- DeepL removido, inclusive a chave antiga salva no aparelho. Quem usava esse modo migra para Gemini se já tiver uma chave, ou para o modo offline.
+
 ## Compilar
 
 O GitHub Actions compila a cada push em `main` e publica o APK em Releases. Para compilar localmente: JDK 21 e Android SDK, depois:
@@ -69,5 +76,6 @@ O GitHub Actions compila a cada push em `main` e publica o APK em Releases. Para
 - OCR e tradução no celular: Google ML Kit. Fonte Comic Neue (SIL OFL 1.1).
 - Modo servidor: [manga-image-translator](https://github.com/zyddnys/manga-image-translator) (GPL-3.0), executado como serviço separado.
 - Ícones: Material Symbols (Apache 2.0).
+- Padrões de divisão silábica: [DivSilab/LibreOffice](https://github.com/LibreOffice/dictionaries/tree/master/pt_BR), Raimundo Santos Moura. Arquivo original sem modificações, sob MPL; créditos e licença distribuídos em `app/src/main/assets/lettering/`.
 
 Distribuído sob a licença Apache 2.0, ver [LICENSE](LICENSE).

@@ -128,9 +128,6 @@ class SettingsMangalateScreen : Screen() {
                 if (settings.mode == TranslateMode.GEMINI) {
                     item { GeminiSection(settings = settings, onChange = ::update) }
                 }
-                if (settings.mode == TranslateMode.DEEPL) {
-                    item { DeepLSection(settings = settings, onChange = ::update) }
-                }
                 item { OfflineSection(settings = settings, onChange = ::update) }
                 item { LanguageSection(settings = settings, onChange = ::update) }
                 if (settings.mode == TranslateMode.SERVER) {
@@ -861,103 +858,6 @@ private fun AdvancedToggle(expanded: Boolean, onClick: () -> Unit) {
         Icon(MaterialSymbols.Rounded.Tune, contentDescription = null, modifier = Modifier.size(18.dp))
         Spacer(Modifier.width(8.dp))
         Text(if (expanded) "Esconder ajustes avançados" else "Ajustes avançados")
-    }
-}
-
-@Composable
-private fun DeepLSection(
-    settings: MangalateSettings,
-    onChange: ((MangalateSettings) -> MangalateSettings) -> Unit,
-) {
-    val scope = rememberCoroutineScope()
-    val uriHandler = LocalUriHandler.current
-    val context = LocalContext.current
-    var key by remember { mutableStateOf(settings.deeplKey) }
-    var test by remember { mutableStateOf<TestState>(TestState.Idle) }
-    var usageText by remember { mutableStateOf("") }
-
-    fun save(value: String) {
-        key = value.trim()
-        test = TestState.Idle
-        onChange { it.copy(deeplKey = value.trim()) }
-    }
-
-    SectionCard(
-        icon = MaterialSymbols.Rounded.Translate,
-        title = "Chave grátis do DeepL",
-        subtitle = "Plano DeepL API Free: 500 mil caracteres por mês",
-    ) {
-        StepRow(1, "Toque em Criar conta grátis e escolha o plano DeepL API Free.")
-        StepRow(2, "Depois, em Chaves de API, copie a sua chave (termina com :fx).")
-        StepRow(3, "Volte aqui e toque em Colar.")
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(onClick = { uriHandler.openUri("https://www.deepl.com/pro-api") }) { Text("Criar conta grátis") }
-            FilledTonalButton(
-                onClick = {
-                    val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
-                        as android.content.ClipboardManager
-                    cm.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()?.let(::save)
-                },
-            ) { Text("Colar") }
-        }
-        TextButton(onClick = { uriHandler.openUri("https://www.deepl.com/your-account/keys") }) {
-            Text("Já tenho conta: abrir minhas chaves")
-        }
-        OutlinedTextField(
-            value = key,
-            onValueChange = ::save,
-            label = { Text("Chave do DeepL") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedButton(
-            enabled = key.isNotBlank() && test != TestState.Running,
-            onClick = {
-                test = TestState.Running
-                scope.launch {
-                    test = app.mangalate.local.DeepLClient.usage(key).fold(
-                        onSuccess = { (used, limit) ->
-                            usageText = "Tudo certo. Usado este mês: " +
-                                "%,d de %,d caracteres.".format(used, limit).replace(',', '.')
-                            TestState.Ok(0)
-                        },
-                        onFailure = { TestState.Fail(it.message ?: it.javaClass.simpleName) },
-                    )
-                }
-            },
-        ) {
-            if (test == TestState.Running) {
-                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                Spacer(Modifier.width(8.dp))
-            }
-            Text("Testar chave")
-        }
-        AnimatedVisibility(visible = test is TestState.Ok || test is TestState.Fail) {
-            val ok = test is TestState.Ok
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = if (ok) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.errorContainer,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(
-                    text = when (val t = test) {
-                        is TestState.Ok -> usageText
-                        is TestState.Fail -> t.message
-                        else -> ""
-                    },
-                    modifier = Modifier.padding(12.dp),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-        }
-        Text(
-            "O DeepL traduz só o texto; quem lê as letras da página é o celular. " +
-                "Para raws em japonês com texto vertical, o Gemini costuma ler melhor.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
 
