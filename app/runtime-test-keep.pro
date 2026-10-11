@@ -7,6 +7,7 @@
 -keep class app.mangalate.local.MlKitRuntimeTest { *; }
 -keep class app.mangalate.local.OnDeviceOcr { *; }
 -keep class app.mangalate.local.OnDeviceTranslate { *; }
+-keep class app.mangalate.local.TextRegion { *; }
 -keep class app.mangalate.translate.SourceLanguage { *; }
 -keep class app.mangalate.translate.TargetLanguage { *; }
 -keep class kotlinx.coroutines.BuildersKt** { *; }
