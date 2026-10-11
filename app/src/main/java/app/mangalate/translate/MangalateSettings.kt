@@ -80,7 +80,6 @@ enum class TranslatorEngine(
 ) {
     DEEPSEEK("deepseek", "DeepSeek", "Muito barato e bom com contexto. Recomendado.", true),
     GEMINI("gemini", "Gemini", "Google. Tem faixa gratuita nos modelos Flash.", true),
-    DEEPL("deepl", "DeepL", "Chave da API configurada no servidor.", true),
     OPENAI("chatgpt", "OpenAI", "Modelos GPT. Ótima qualidade, custo maior.", true),
     GROQ("groq", "Groq", "Rápido, com cota gratuita generosa.", true),
     CUSTOM("custom_openai", "Compatível OpenAI", "Ollama, LM Studio, OpenRouter etc.", false),
