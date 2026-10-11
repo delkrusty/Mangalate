@@ -38,12 +38,17 @@ android {
         applicationId = "app.mangalate"
 
         versionCode = System.getenv("MANGALATE_VERSION_CODE")?.toIntOrNull() ?: 1
-        versionName = "0.6.0"
+        versionName = "0.5.0"
 
         buildConfigField("boolean", "TELEMETRY_INCLUDED", "${Config.includeTelemetry}")
         buildConfigField("boolean", "UPDATER_ENABLED", "${Config.enableUpdater}")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // Os testes de runtime precisam exercitar o APK minificado, não apenas debug.
+    if (providers.gradleProperty("runtimeCheck").isPresent) {
+        testBuildType = "release"
     }
 
     if (System.getenv("MIHON_GITHUB_RELEASE").toBoolean()) {
@@ -129,6 +134,7 @@ android {
             isUniversalApk = true
             reset()
             include("armeabi-v7a", "arm64-v8a")
+            if (providers.gradleProperty("runtimeCheck").isPresent) include("x86_64")
         }
     }
 
@@ -333,6 +339,8 @@ dependencies {
 
     // Tests
     testImplementation(libs.bundles.test)
+    androidTestImplementation(libs.androidx.test.junit)
+    androidTestImplementation("androidx.test:runner:1.7.0")
     testRuntimeOnly(libs.junit.platform.launcher)
 
     // For detecting memory leaks; see https://square.github.io/leakcanary/

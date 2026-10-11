@@ -27,14 +27,6 @@ Balões de fundo uniforme e contorno fechado têm o interior segmentado e limpo 
 
 Se o balão não for identificado com segurança, o app usa limpeza local para preservar a arte. Contornos abertos, sombras, retículas e textos sobre personagens podem precisar de reconstrução mais avançada.
 
-Na versão 0.6.0, texto sem balão usa somente remoção seletiva de letras confirmadas pelo OCR, nunca preenchimento retangular. Regiões sem confirmação são mantidas no original para preservar o desenho.
-
-## Onomatopeias
-
-Efeitos sonoros como CLAP, BANG e letras desenhadas não são traduzidos por padrão. Para ativar, abra **Mais › Tradução (Mangalate) › Preservar a arte › Traduzir onomatopeias**. Ativar essa opção pode alterar o visual da página; regiões inseguras ainda podem ser preservadas.
-
-No modo servidor, deixar a opção desativada aplica o resultado só dentro de balões confirmados no original pelo OCR local. Também preserva textos soltos fora dos balões.
-
 ## Problemas comuns
 
 - **Chave inválida:** copie a chave do Gemini inteira, sem espaços, e teste novamente. Não compartilhe a chave.

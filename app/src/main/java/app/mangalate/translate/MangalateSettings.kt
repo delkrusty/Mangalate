@@ -126,7 +126,6 @@ data class MangalateSettings(
     val quality: QualityProfile = QualityProfile.HIGH,
     val typeset: TypesetMode = TypesetMode.AUTO,
     val ignoreOutsideBubbles: Boolean = false,
-    val translateSoundEffects: Boolean = false,
     val uppercase: Boolean = false,
     val fontSizeOffset: Int = 0,
     val maskDilation: Int = 0,
@@ -144,11 +143,11 @@ data class MangalateSettings(
 
     /** Identifica a configuração que afeta o resultado (para o cache). */
     fun cacheSignature(): String = when (mode) {
-        TranslateMode.SERVER -> "server-artwork-v6|${sourceLanguage.name}|$translateSoundEffects|" + toServerConfig()
+        TranslateMode.SERVER -> "server|" + toServerConfig()
         else -> listOf(
-            "artwork-safe-v6", mode.name, sourceLanguage.name, targetLanguage.code,
+            "bubble-interior-v5", mode.name, sourceLanguage.name, targetLanguage.code,
             if (mode == TranslateMode.GEMINI) effectiveGeminiModel else "",
-            ignoreOutsideBubbles, translateSoundEffects, uppercase, fontSizeOffset,
+            ignoreOutsideBubbles, uppercase, fontSizeOffset,
         ).joinToString("|")
     }
 

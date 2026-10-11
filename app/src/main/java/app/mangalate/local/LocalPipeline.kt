@@ -29,17 +29,9 @@ object LocalPipeline {
             ?: throw IOException("Formato de imagem não suportado")
         try {
             val regions = when (s.mode) {
-                TranslateMode.GEMINI -> {
-                    val detected = GeminiClient.detectAndTranslate(page, s).filter {
-                        SoundEffectPolicy.shouldTranslate(it.kind, it.original, s.translateSoundEffects)
-                    }
-                    val local = runCatching { OnDeviceOcr.detect(page, s.sourceLanguage) }.getOrDefault(emptyList())
-                    RegionRefiner.refine(detected, local)
-                }
+                TranslateMode.GEMINI -> GeminiClient.detectAndTranslate(page, s)
                 else -> {
-                    val found = OnDeviceOcr.detect(page, s.sourceLanguage).filter {
-                        SoundEffectPolicy.shouldTranslate(it.kind, it.original, s.translateSoundEffects)
-                    }
+                    val found = OnDeviceOcr.detect(page, s.sourceLanguage)
                     if (found.isEmpty()) {
                         emptyList()
                     } else {

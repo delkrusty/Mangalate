@@ -51,8 +51,7 @@ internal object MangalateGuides {
             "Nos modos No celular e Gemini, balões claros ou escuros de fundo uniforme e contorno fechado podem ser limpos por inteiro, inclusive " +
                 "letras que o OCR não identificou. A borda do balão é preservada e a tradução é colocada depois.\n\n" +
                 "Contornos abertos, retículas, sombras e texto sobre personagens exigem cuidado. Quando não há confiança, " +
-                "o app remove apenas letras confirmadas pelo OCR ou preserva o trecho original para não apagar a arte. " +
-                "Não há preenchimento de retângulos em volta de textos soltos. O servidor próprio pode oferecer reconstrução mais avançada.\n\n" +
+                "o app usa limpeza local para não apagar a arte. O servidor próprio pode oferecer reconstrução mais avançada.\n\n" +
                 "Confira se o idioma original está correto. Para japonês vertical, experimente Gemini. Se o problema continuar, " +
                 "registre a página e o modo usados; um print do original e outro do resultado ajudam a corrigir.",
         ),
@@ -141,18 +140,6 @@ internal object MangalateGuides {
     )
 
     val changes = listOf(
-        GuideArticle(
-            "Proteção contra balões gigantes e arte apagada",
-            "A máscara precisa combinar com o tamanho do texto e da página. Regiões exageradas são rejeitadas. " +
-                "A detecção usa sempre o original, sem deixar uma limpeza alterar a análise da próxima região. " +
-                "Fora de balões seguros, só letras confirmadas são removidas; contornos de rostos e outros componentes grandes são preservados.",
-        ),
-        GuideArticle(
-            "Onomatopeias ficam como no original",
-            "Efeitos sonoros não são traduzidos por padrão. Você pode ativar Traduzir onomatopeias em " +
-                "Mais › Tradução (Mangalate) › Preservar a arte. Diálogos e legendas de narração continuam traduzidos. " +
-                "No modo servidor, o padrão seguro também pula textos soltos fora de balões.",
-        ),
         GuideArticle(
             "Limpeza completa dos balões",
             "Nova identificação do interior dos balões de fundo uniforme e contorno fechado. " +

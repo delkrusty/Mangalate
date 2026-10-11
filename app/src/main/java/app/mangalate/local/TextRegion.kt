@@ -17,9 +17,6 @@ data class TextRegion(
     val overArt: Boolean = false,
     /** Texto original escrito na vertical (japonês/chinês). */
     val vertical: Boolean = false,
-    val kind: TextKind = TextKind.UNKNOWN,
-    /** Linhas confirmadas por OCR local, para restringir a limpeza fora de balões. */
-    val glyphBoxes: List<Rect> = emptyList(),
 )
 
 internal suspend fun <T> Task<T>.awaitTask(): T = suspendCancellableCoroutine { cont ->

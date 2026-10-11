@@ -82,6 +82,6 @@ jobs:
         run: |
           TAG="build-${{ github.run_number }}"
           gh release create "$TAG" dist/*.apk \
-            --title "Mangalate 0.6.0 (build ${{ github.run_number }})" \
-            --notes "Revisão de segurança da arte: limites contra falsos balões gigantes; detecção sobre o original imutável; sem preenchimento retangular ou difusão em textos soltos; limpeza seletiva de letras confirmadas por OCR. Limpeza completa mantida nos balões seguros. Onomatopeias desativadas por padrão, com opção em Mais > Tradução > Preservar a arte. No servidor, o padrão também preserva textos soltos fora de balões. Cache anterior invalidado; prepare novamente as páginas com internet nos modos online. APK gerado a partir de ${GITHUB_SHA::7}. Baixe **Mangalate-arm64-v8a.apk** ou **Mangalate-universal.apk**." \
+            --title "Mangalate 0.5.0 (build ${{ github.run_number }})" \
+            --notes "Segmentação e limpeza do interior completo de balões de fundo uniforme e contorno fechado; fallback conservador para arte e contornos incertos; composição única por balão. Sobre e Ajuda próprios do Mangalate, com manuais pesquisáveis e privacidade offline. Links de suporte e atualização direcionados ao nosso projeto. Páginas antigas serão retraduzidas; nos modos online, prepare novamente os capítulos com internet antes de ler offline. APK gerado a partir de ${GITHUB_SHA::7}. Baixe **Mangalate-arm64-v8a.apk** (celulares atuais) ou **Mangalate-universal.apk**." \
             --latest

@@ -130,7 +130,6 @@ class SettingsMangalateScreen : Screen() {
                 }
                 item { OfflineSection(settings = settings, onChange = ::update) }
                 item { LanguageSection(settings = settings, onChange = ::update) }
-                item { ArtworkOptionsSection(settings = settings, onChange = ::update) }
                 if (settings.mode == TranslateMode.SERVER) {
                     item { ServerSection(settings = settings, onChange = ::update) }
                     item { EngineSection(settings = settings, onChange = ::update) }
@@ -388,18 +387,20 @@ private fun LanguageSection(
         icon = MaterialSymbols.Rounded.Language,
         title = "Idiomas",
     ) {
-        Text("O mangá está em", style = MaterialTheme.typography.labelLarge)
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            SourceLanguage.entries.forEach { lang ->
-                FilterChip(
-                    selected = settings.sourceLanguage == lang,
-                    onClick = { onChange { it.copy(sourceLanguage = lang) } },
-                    label = { Text(lang.label) },
-                    shape = RoundedCornerShape(12.dp),
-                )
+        if (settings.mode != TranslateMode.SERVER) {
+            Text("O mangá está em", style = MaterialTheme.typography.labelLarge)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                SourceLanguage.entries.forEach { lang ->
+                    FilterChip(
+                        selected = settings.sourceLanguage == lang,
+                        onClick = { onChange { it.copy(sourceLanguage = lang) } },
+                        label = { Text(lang.label) },
+                        shape = RoundedCornerShape(12.dp),
+                    )
+                }
             }
         }
         Text("Traduzir para", style = MaterialTheme.typography.labelLarge)
@@ -524,7 +525,7 @@ private fun QualitySection(
         )
         SwitchRow(
             title = "Só traduzir texto dentro de balões",
-            subtitle = "Também ignora legendas de narração fora de balões",
+            subtitle = "Ignora onomatopeias e textos soltos sobre a arte",
             checked = settings.ignoreOutsideBubbles,
             onChecked = { v -> onChange { it.copy(ignoreOutsideBubbles = v) } },
         )
@@ -580,7 +581,7 @@ private fun TypesetSection(
         if (settings.mode != TranslateMode.SERVER) {
             SwitchRow(
                 title = "Só traduzir texto dentro de balões",
-                subtitle = "Também ignora legendas de narração fora de balões",
+                subtitle = "Ignora onomatopeias e textos soltos sobre a arte",
                 checked = settings.ignoreOutsideBubbles,
                 onChecked = { v -> onChange { it.copy(ignoreOutsideBubbles = v) } },
             )
@@ -610,36 +611,6 @@ private fun CacheSection() {
                 },
             ) { Text("Limpar") }
         }
-    }
-}
-
-@Composable
-private fun ArtworkOptionsSection(
-    settings: MangalateSettings,
-    onChange: ((MangalateSettings) -> MangalateSettings) -> Unit,
-) {
-    SectionCard(
-        icon = MaterialSymbols.Rounded.BrushIcon,
-        title = "Preservar a arte",
-        subtitle = "Diálogos traduzidos; efeitos sonoros mantidos como no original",
-    ) {
-        SwitchRow(
-            title = "Traduzir onomatopeias",
-            subtitle = "Opcional. Efeitos como CLAP, BANG e letras desenhadas podem alterar o visual da página.",
-            checked = settings.translateSoundEffects,
-            onChecked = { enabled -> onChange { it.copy(translateSoundEffects = enabled) } },
-        )
-        Text(
-            if (settings.mode == TranslateMode.SERVER) {
-                "No servidor, o padrão seguro aplica a imagem traduzida só dentro de balões confirmados pelo OCR local. " +
-                    "Efeitos e textos soltos sobre a arte permanecem no original."
-            } else {
-                "A limpeza completa é aplicada só a balões confirmados. Fora deles, o app remove apenas letras " +
-                    "identificadas; se a região for duvidosa, preserva o trecho original."
-            },
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }
 
