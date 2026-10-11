@@ -144,7 +144,7 @@ data class MangalateSettings(
 
     /** Identifica a configuração que afeta o resultado (para o cache). */
     fun cacheSignature(): String = when (mode) {
-        TranslateMode.SERVER -> "server|" + toServerConfig()
+        TranslateMode.SERVER -> "server-artwork-v6|${sourceLanguage.name}|$translateSoundEffects|" + toServerConfig()
         else -> listOf(
             "artwork-safe-v6", mode.name, sourceLanguage.name, targetLanguage.code,
             if (mode == TranslateMode.GEMINI) effectiveGeminiModel else "",
@@ -181,9 +181,7 @@ data class MangalateSettings(
         val ocr = JSONObject().apply {
             put("ocr", "48px")
             put("min_text_length", 0)
-            // O servidor não retorna classes semânticas: no padrão seguro, pula
-            // também textos soltos sobre a arte. A opção avançada libera esses textos.
-            if (ignoreOutsideBubbles || !translateSoundEffects) put("ignore_bubble", 8)
+            if (ignoreOutsideBubbles) put("ignore_bubble", 8)
         }
         val inpainter = JSONObject().apply {
             put("inpainter", if (q == QualityProfile.FAST) "lama_mpe" else "lama_large")

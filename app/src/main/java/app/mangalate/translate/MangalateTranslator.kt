@@ -239,7 +239,9 @@ object MangalateTranslator {
                         _activeJobs.update { it + 1 }
                         try {
                             val result = when (s.mode) {
-                                TranslateMode.SERVER -> request(s, s.toServerConfig(), image)
+                                TranslateMode.SERVER -> app.mangalate.local.ServerArtworkGuard.preserve(
+                                    image, request(s, s.toServerConfig(), image), s,
+                                )
                                 else -> LocalPipeline.process(context.applicationContext, image, s) { _status.value = it }
                             }
                             writeCache(context, cacheFile, result)

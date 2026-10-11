@@ -33,7 +33,7 @@ Na versão 0.6.0, texto sem balão usa somente remoção seletiva de letras conf
 
 Efeitos sonoros como CLAP, BANG e letras desenhadas não são traduzidos por padrão. Para ativar, abra **Mais › Tradução (Mangalate) › Preservar a arte › Traduzir onomatopeias**. Ativar essa opção pode alterar o visual da página; regiões inseguras ainda podem ser preservadas.
 
-No modo servidor, deixar a opção desativada também filtra textos soltos fora dos balões, conforme suporte do backend.
+No modo servidor, deixar a opção desativada aplica o resultado só dentro de balões confirmados no original pelo OCR local. Também preserva textos soltos fora dos balões.
 
 ## Problemas comuns
 

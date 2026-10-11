@@ -388,20 +388,18 @@ private fun LanguageSection(
         icon = MaterialSymbols.Rounded.Language,
         title = "Idiomas",
     ) {
-        if (settings.mode != TranslateMode.SERVER) {
-            Text("O mangá está em", style = MaterialTheme.typography.labelLarge)
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                SourceLanguage.entries.forEach { lang ->
-                    FilterChip(
-                        selected = settings.sourceLanguage == lang,
-                        onClick = { onChange { it.copy(sourceLanguage = lang) } },
-                        label = { Text(lang.label) },
-                        shape = RoundedCornerShape(12.dp),
-                    )
-                }
+        Text("O mangá está em", style = MaterialTheme.typography.labelLarge)
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            SourceLanguage.entries.forEach { lang ->
+                FilterChip(
+                    selected = settings.sourceLanguage == lang,
+                    onClick = { onChange { it.copy(sourceLanguage = lang) } },
+                    label = { Text(lang.label) },
+                    shape = RoundedCornerShape(12.dp),
+                )
             }
         }
         Text("Traduzir para", style = MaterialTheme.typography.labelLarge)
@@ -633,7 +631,8 @@ private fun ArtworkOptionsSection(
         )
         Text(
             if (settings.mode == TranslateMode.SERVER) {
-                "No servidor, o padrão seguro também preserva textos soltos sobre a arte, conforme o suporte do backend."
+                "No servidor, o padrão seguro aplica a imagem traduzida só dentro de balões confirmados pelo OCR local. " +
+                    "Efeitos e textos soltos sobre a arte permanecem no original."
             } else {
                 "A limpeza completa é aplicada só a balões confirmados. Fora deles, o app remove apenas letras " +
                     "identificadas; se a região for duvidosa, preserva o trecho original."

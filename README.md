@@ -68,7 +68,7 @@ A faixa grátis tem limite de pedidos por minuto. Se aparecer aviso de limite, e
 - Mantém a limpeza completa dos balões confirmados. Fora deles, remove só componentes de letras confirmados por OCR; não pinta retângulos nem aplica difusão sobre retratos.
 - O OCR local pode corrigir as coordenadas fornecidas pelo Gemini. Se não houver confirmação suficiente, o trecho original é preservado.
 - Onomatopeias ficam intactas por padrão. O interruptor **Traduzir onomatopeias** está em Mais › Tradução › Preservar a arte, separado do filtro de texto fora de balões.
-- No modo servidor, o padrão seguro também preserva textos soltos sobre a arte, conforme o filtro de balões do backend.
+- No modo servidor, o app aplica o resultado somente dentro de balões confirmados pelo OCR local no padrão seguro. Efeitos e textos soltos sobre a arte são mantidos no original, independentemente do filtro do backend.
 - Traduções antigas em cache não são reutilizadas; prepare novamente as páginas com internet antes de ler offline com Gemini.
 
 ## Compilar
