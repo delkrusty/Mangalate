@@ -3,6 +3,7 @@ on:
   push:
     branches: [server-first]
   workflow_dispatch:
+  workflow_call:
 jobs:
   server:
     runs-on: ubuntu-latest

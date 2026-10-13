@@ -5,7 +5,6 @@ on:
     branches: [main]
     paths-ignore:
       - '**.md'
-      - 'server/**'
   workflow_dispatch:
 
 concurrency:
@@ -14,8 +13,14 @@ concurrency:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
+  verify-server:
+    uses: ./.github/workflows/server.yml
+    permissions:
+      contents: read
+
   build:
     name: Build APK
     runs-on: ubuntu-latest
@@ -76,17 +81,23 @@ jobs:
           name: Mangalate-${{ github.run_number }}
           path: dist/*.apk
 
-      - name: Publish release
+  publish:
+    needs: [build, verify-server]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: Mangalate-${{ github.run_number }}
+          path: dist
+      - name: Publish verified release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="build-${{ github.run_number }}"
-          release_flags=(--latest)
-          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
-            release_flags=(--draft)
-          fi
           gh release create "$TAG" dist/*.apk \
             --target "$GITHUB_SHA" \
             --title "Mangalate 0.5.2 (build ${{ github.run_number }})" \
             --notes "Foco em tradução offline e servidor. Gemini e DeepL diretos saem da seleção principal; limpeza local da 0.5.0 preservada. Docker com instalação guiada, caminho da chave Mangalate e perfis Básico/BYOK. BYOK usa servidor e API do próprio usuário, sem cobrança ou comissão Mangalate. Colab revisado para tradução interativa de capítulos, exportando CBZ e pacote de revisão sem túnel/keepalive. O acabamento automático exige revisão visual; não há garantia de perfeição de scan humano. APK de ${GITHUB_SHA::7}. Baixe **Mangalate-arm64-v8a.apk** para celulares atuais ou **Mangalate-universal.apk**." \
-            "${release_flags[@]}"
+            --latest
