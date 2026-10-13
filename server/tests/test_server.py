@@ -4,6 +4,8 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
+from types import SimpleNamespace
 import zipfile
 import asyncio
 import threading
@@ -33,6 +35,16 @@ def png(color="white", size=(100, 100)):
 
 
 class ServerTest(unittest.TestCase):
+    def test_direct_engine_supplies_required_upstream_initialization_parameter(self):
+        class Engine:
+            def __init__(self, params):
+                if int(params["kernel_size"]) != 3:
+                    raise ValueError("Wrong kernel")
+        upstream = SimpleNamespace(MangaTranslator=Engine, Config=dict)
+        with patch.dict(sys.modules, {"manga_translator": upstream}):
+            with TestClient(create_core()) as client:
+                self.assertEqual(client.get("/healthz").status_code, 200)
+
     def test_direct_engine_returns_png_without_internal_rpc(self):
         class Engine:
             async def translate(self, image, config):

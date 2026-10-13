@@ -68,7 +68,8 @@ async def run(args):
                 glossary.append({"source": row["source"], "target": row["target"]})
         if len(glossary) > 100:
             raise ValueError("Use no máximo 100 termos no glossário.")
-    translator = MangaTranslator({"use_gpu": args.gpu, "use_gpu_limited": args.gpu_limited, "verbose": False})
+    translator = MangaTranslator({"use_gpu": args.gpu, "use_gpu_limited": args.gpu_limited,
+                                  "verbose": False, "kernel_size": int(config.get("kernel_size", 3))})
     history, report, consecutive_failures = [], [], 0
     for index, path in enumerate(pages, 1):
         name = f"{index:04d}.png"

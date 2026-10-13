@@ -28,7 +28,7 @@ jobs:
       - name: Verify upstream imports, start and warm up real CPU pipeline
         working-directory: server
         run: |
-          docker compose --profile cpu run --rm --entrypoint python translator-cpu -c "from manga_translator import MangaTranslator, Config; import json; from pathlib import Path; [Config(**json.loads(p.read_text())) for p in Path('/mangalate/profiles').glob('*.json')]; print('Upstream imports and both profiles OK')"
+          docker compose --profile cpu run --rm --entrypoint python translator-cpu -c "from manga_translator import MangaTranslator, Config; import json; from pathlib import Path; [Config(**json.loads(p.read_text())) for p in Path('/mangalate/profiles').glob('*.json')]; MangaTranslator({'kernel_size':3,'use_gpu':False,'verbose':False}); print('Upstream initialization and both profiles OK')"
           docker compose --profile cpu up -d
           for i in $(seq 1 60); do curl -fsS http://127.0.0.1:5003/healthz && break || sleep 2; done
           python check.py --warmup

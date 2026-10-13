@@ -3,6 +3,7 @@ import asyncio
 import io
 import json
 import os
+import traceback
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -20,7 +21,8 @@ def create_core(engine=None, config_factory=None):
             gpu = os.environ.get("MANGALATE_USE_GPU", "false").lower() == "true"
             limited = gpu and os.environ.get("MANGALATE_ACCELERATOR") == "amd-rocm"
             engine = MangaTranslator({"use_gpu": gpu and not limited,
-                                     "use_gpu_limited": limited, "verbose": False})
+                                     "use_gpu_limited": limited, "verbose": False,
+                                     "kernel_size": 3})
             config_factory = Config
         yield
 
@@ -61,6 +63,8 @@ def create_core(engine=None, config_factory=None):
             except Exception as exc:
                 # Never propagate provider bodies, URLs or credentials to logs/phone.
                 print(f"Translation failed: {type(exc).__name__}", flush=True)
+                for frame in traceback.extract_tb(exc.__traceback__)[-8:]:
+                    print(f"  {frame.filename}:{frame.lineno} in {frame.name}", flush=True)
                 raise HTTPException(502, "Translation engine failed")
 
     return app
