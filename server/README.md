@@ -162,6 +162,8 @@ Se trocar o perfil/modelo do servidor mantendo o mesmo endereço, limpe o cache 
 
 Abra [Mangalate_Colab.ipynb](https://colab.research.google.com/github/delkrusty/Mangalate/blob/main/server/colab/Mangalate_Colab.ipynb). Selecione GPU se disponível e rode as células em ordem. Elas instalam o código de uma revisão fixa, param em erros, recebem um capítulo e exportam CBZ + revisão. No BYOK, use um Secret chamado `MANGALATE_PROVIDER_KEY`, ou o campo oculto solicitado; nunca escreva chave em uma célula pública.
 
+Neste caminho você **não precisa da chave Mangalate**, porque o notebook não conecta o celular a um servidor. No Básico, não precisa de chave de IA; no BYOK, somente sua própria chave de API. A chave Mangalate é gerada pelo instalador Docker para a conexão do aplicativo.
+
 Não há Cloudflare Tunnel, servidor público nem laço para manter sessão ativa. Os limites e restrições são do Google; o funcionamento real depende de GPU, runtime, dependências e downloads disponíveis, e uma revisão sintática não equivale a uma execução GPU no Colab ([FAQ](https://research.google.com/colaboratory/intl/pt-BR/faq.html)).
 
 Para ler o CBZ, escolha a pasta de armazenamento do aplicativo e crie dentro dela:
@@ -189,5 +191,7 @@ Atualize a fonte Local no aplicativo. O CBZ já contém as páginas processadas;
 ## Estado de validação e licenças
 
 As versões do upstream e do pydensecrf estão fixadas no Docker/Colab para evitar alterações silenciosas. Testes de gateway usam backend simulado e verificam autenticação, multipart, perfis, limites, erros, segurança de ZIP e sintaxe do notebook; CI também tenta construir e exercitar o motor CPU real. Não confunda isso com validação de GPU, de conta BYOK paga ou de todo capítulo real.
+
+O motor Docker chama `MangaTranslator` diretamente em um serviço privado. Não usa o despachante HTTP/pickle experimental do upstream, nem exige que você descubra uma terceira chave interna. Somente o gateway autenticado pode ser publicado na rede; mantenha os serviços do motor sem portas públicas.
 
 O backend upstream é GPL-3.0 ([licença](https://raw.githubusercontent.com/zyddnys/manga-image-translator/d6de6ab62a7be6afc0d07a3184149cdefbcd32f2/LICENSE)); modelos e fontes têm licenças próprias. Preserve os avisos e revise permissões antes de distribuir um produto comercial. Use somente capítulos próprios/autorizados. “Premium/BYOK” significa infraestrutura/modelo do próprio usuário, não direito de uso irrestrito de qualquer modelo.
