@@ -12,14 +12,23 @@ O manual completo está dentro do aplicativo em **Mais › Ajuda do Mangalate**,
 ## Modos de tradução
 
 - **No celular:** OCR, limpeza e tradução no dispositivo. Os modelos dos idiomas são baixados na primeira utilização; depois podem ser usados offline.
-- **Gemini:** tradução com contexto da imagem, usando sua chave e conexão com a API do Google. Na tela de tradução, use Pegar chave grátis, Colar e Testar chave.
-- **Servidor próprio:** envie as páginas para um servidor compatível configurado por você. Consulte o [manual do servidor](server/README.md).
+- **Servidor:** envie as páginas para seu Docker no PC ou servidor contratado. Ele pode ser Básico, com modelos locais, ou BYOK, com a API que você paga diretamente. Consulte o [manual do servidor](server/README.md).
+
+Gemini e DeepL diretos saíram da seleção. Configurações antigas desses modos passam para No celular. A limpeza local da 0.5.0 foi mantida.
+
+## Onde encontro a chave Mangalate?
+
+Dentro da pasta `server`, execute `python setup.py`. O assistente gera a chave e mostra o caminho completo de `server/secrets/mangalate_key.txt`; copie o conteúdo para o campo Chave Mangalate no app. Ela é a senha de acesso ao seu servidor, não uma chave que você compra ou pega de outra empresa.
+
+No BYOK, sua chave de API é outra credencial e fica em `server/secrets/provider_key.txt`, somente no servidor. Não cole essa chave no celular ou em relatos de problemas.
 
 ## Ler offline
 
 Ligue **Traduzir capítulos ao baixar** antes de baixar os capítulos e espere o progresso da tradução terminar. A tradução precisa estar ligada no leitor para exibir as imagens traduzidas guardadas.
 
 Mudar o idioma, o modo, o modelo ou ajustes de fonte pode exigir nova tradução. Atualizações do motor também podem invalidar imagens antigas. Prepare os capítulos com internet antes de sair.
+
+O notebook Colab também prepara ZIP/CBZ para leitura offline e exporta um pacote de revisão com originais e resultados. Ele não exige chave Mangalate e não oferece um endereço permanente para conectar o app.
 
 ## Limpeza dos balões
 
@@ -29,8 +38,11 @@ Se o balão não for identificado com segurança, o app usa limpeza local para p
 
 ## Problemas comuns
 
-- **Chave inválida:** copie a chave do Gemini inteira, sem espaços, e teste novamente. Não compartilhe a chave.
-- **Limite do Gemini:** aguarde; a disponibilidade depende da cota da sua conta. Tente Rápido ou o modo No celular.
+- **Chave inválida / HTTP 401:** copie o conteúdo inteiro de `server/secrets/mangalate_key.txt`, sem espaços extras. Não use a chave paga de IA.
+- **Motor iniciando / HTTP 503:** aguarde e confira no computador `docker compose logs --tail=80`; a primeira página ainda pode precisar baixar modelos.
+- **Servidor ocupado / HTTP 429:** espere a página atual terminar e tente novamente.
+- **Falha de motor / HTTP 502:** veja os logs no servidor e, no BYOK, confira modelo, chave, cota e saldo com o próprio provedor. A chave Mangalate é independente dessas configurações.
+- **Celular não conecta:** use o IP do computador, não localhost; confira se ambos estão no mesmo Wi-Fi e se o firewall permite a porta. Para internet pública, use o guia HTTPS, sem expor portas internas.
 - **Página não traduzida offline:** confira se o capítulo e a tradução terminaram de baixar e se está usando os mesmos ajustes.
 - **Letras restantes:** compare original e tradução; informe o idioma, o modo e a página ao relatar o problema.
 - **Downloads interrompidos:** confira a fila, conexão, armazenamento e restrições de bateria. Mantenha o app aberto durante a preparação offline.
@@ -39,7 +51,7 @@ Se o balão não for identificado com segurança, o app usa limpeza local para p
 
 ## Armazenamento e backup
 
-Cache de traduções, páginas traduzidas offline e capítulos originais são armazenados separadamente. Limpar traduções pode exigir novos pedidos ao Gemini ou ao servidor. Faça um backup da biblioteca antes de trocar de celular ou reinstalar; ele não substitui uma cópia de todas as imagens traduzidas.
+Cache de traduções, páginas traduzidas offline e capítulos originais são armazenados separadamente. Limpar traduções pode exigir novo processamento e, no BYOK, novos pedidos pagos à sua API. Faça um backup da biblioteca antes de trocar de celular ou reinstalar; ele não substitui uma cópia de todas as imagens traduzidas.
 
 ## Rastreamento
 

@@ -16,43 +16,44 @@ Leitor de mangá para Android, baseado no [Mihon](https://github.com/mihonapp/mi
 
 Não precisa de servidor, conta nem configuração. Para desligar e ver o original, toque em 文A de novo.
 
-## Os três modos
+## Os dois modos
 
-| Modo | Precisa de quê | Qualidade |
+| Modo | Precisa de quê | Como funciona |
 |---|---|---|
-| **No celular** (padrão) | Nada. Baixa o tradutor uma vez (~30 MB) | Boa para inglês; razoável para japonês, coreano e chinês |
-| **Gemini** | Uma chave grátis do Google, colada no app em 1 minuto | Tradução natural, com contexto, lê texto vertical. Modo Rápido (Flash-Lite) ou Melhor qualidade (Flash) |
-| **Servidor próprio** | Rodar o servidor no PC ou no Colab ([guia](server/README.md)) | Melhor reconstrução da arte |
+| **No celular** (padrão) | Baixar os modelos dos idiomas na primeira utilização | OCR, tradução e limpeza offline no aparelho; mantém a limpeza local da 0.5.0 |
+| **Servidor** | Docker no seu PC ou servidor contratado, URL e chave Mangalate | OCR, tradução, reconstrução e diagramação executados fora do celular |
 
-### Como pegar a chave grátis do Gemini
+### Básico ou BYOK no servidor
 
-1. No app: **Mais › Tradução (Mangalate)** e escolha **Gemini**.
-2. Toque em **Pegar chave grátis**, entre com sua conta Google e toque em **Criar chave de API**. Copie a chave.
-3. Volte ao app, toque em **Colar** e depois em **Testar chave**.
+1. Siga o [manual Docker, Colab e BYOK](server/README.md). O assistente `python setup.py` explica as escolhas e gera sua chave Mangalate.
+2. **Básico:** modelos locais no servidor, sem chave de API paga. Confira as licenças para seu uso.
+3. **BYOK:** você contrata sua infraestrutura e leva sua chave de API; o Mangalate só faz a integração, sem cobrança nem comissão. A chave paga fica no servidor, não no celular.
+4. No app, selecione **Servidor**, informe a URL e copie o conteúdo de `server/secrets/mangalate_key.txt`. Toque em **Testar conexão**.
 
-A faixa grátis tem limite de pedidos por minuto. Se aparecer aviso de limite, espere um pouco. As páginas já traduzidas ficam salvas e não contam de novo.
+Gemini e DeepL diretos não fazem parte da seleção nesta versão. Quem tinha um modo antigo configurado começa em No celular; o servidor BYOK aceita provedores compatíveis com sua API configurada.
+
+Para preparar um capítulo sem instalar Docker, use o [notebook Colab](https://colab.research.google.com/github/delkrusty/Mangalate/blob/main/server/colab/Mangalate_Colab.ipynb). Ele recebe ZIP/CBZ e exporta CBZ traduzido mais um pacote de revisão; não é um servidor permanente para o app e não exige chave Mangalate.
 
 ## Mais rápido e offline
 
-- **Pré-tradução:** com a tradução ligada, as próximas 6 páginas já vão sendo traduzidas enquanto você lê a atual. Ao virar a página, ela já está pronta.
+- **Pré-tradução:** com a tradução ligada, o aplicativo prepara páginas seguintes enquanto você lê. A velocidade depende do aparelho, da infraestrutura, dos modelos e da API; no servidor, as páginas são processadas uma por vez para evitar filas descontroladas.
 - **Baixar já traduzido:** ligue **Traduzir capítulos ao baixar** (em Mais › Tradução). Quando você baixar um capítulo pelo botão de download de sempre, o Mangalate traduz todas as páginas junto, com uma notificação de progresso. Depois dá para ler traduzido **sem internet**.
 - As páginas traduzidas de capítulos baixados ficam guardadas até você apagá-las na mesma tela.
 
 ## O que acontece em cada página
 
-1. O texto é localizado (OCR no celular ou leitura pelo Gemini).
+1. O texto é localizado por OCR no celular ou no servidor.
 2. As falas são traduzidas.
-3. Nos balões, a cor do fundo é estimada, só os traços das letras são repintados e o app mede o interior do balão para saber quanto espaço tem.
+3. O modo local mantém a segmentação e limpeza da 0.5.0; o servidor reconstrói regiões de texto com seu próprio pipeline. A arte fora do texto deve ser preservada e precisa de revisão visual.
 4. O texto traduzido é diagramado no balão em fonte de quadrinho, com tamanho e quebra de linha ajustados automaticamente.
 5. A página fica salva no celular. As páginas seguintes já vão sendo traduzidas enquanto você lê.
 
-## Diagramação na versão 0.4.0
+## Diagramação local
 
 - Texto centralizado na área útil do corpo do balão, com margens internas e sem aumentar a caixa para fora do balão.
 - Fonte limitada pelo tamanho da página e reduzida até a fala caber; não há cortes arbitrários dentro de palavras.
 - Divisão silábica em português brasileiro com hífen quando uma palavra não cabe inteira, usando o dicionário DivSilab.
-- As páginas antigas em cache não são reutilizadas pela nova diagramação. Nos modos online, abra novamente os capítulos com internet antes de ler offline.
-- DeepL removido, inclusive a chave antiga salva no aparelho. Quem usava esse modo migra para Gemini se já tiver uma chave, ou para o modo offline.
+- Mudanças de modo, idioma e motor podem invalidar traduções em cache. Prepare os capítulos novamente antes de sair para ler offline.
 
 ## Limpeza e identidade na versão 0.5.0
 
@@ -72,9 +73,10 @@ O GitHub Actions compila a cada push em `main` e publica o APK em Releases. Para
 
 ## Limitações conhecidas
 
-- No modo **No celular**, o OCR de japonês vertical e de letras estilizadas pode errar; para raws japonesas, o modo **Gemini** é bem melhor.
-- Nos modos do celular e Gemini, texto sobre a arte é reconstruído por difusão (fica suavizado); o modo servidor usa LaMa e fica melhor.
-- Onomatopeias desenhadas sobre rostos, cabelos ou cenários muito detalhados podem ficar com área suavizada.
+- OCR de japonês vertical, letras estilizadas, balões abertos e texto sobre arte podem errar em qualquer modo. Não há promessa de resultado automático impecável.
+- O servidor usa LaMa e perfis de diagramação próprios, com controles para rejeitar alterações grosseiras. Isso não substitui revisão página a página; consulte [QUALITY.md](server/QUALITY.md).
+- O perfil do servidor tenta evitar onomatopeias fora de balões por padrão; essa detecção é heurística e não uma classificação perfeita.
+- CPU atende PCs de diferentes marcas. CUDA é um perfil separado; ROCm/AMD é experimental em Linux compatível. DirectML/OpenVINO não estão implementados.
 - O renderizador WebGPU experimental do Mihon é trocado pelo leitor clássico enquanto a tradução está ligada.
 - O app não inclui fontes de conteúdo; extensões são instaladas por você, como no Mihon.
 
