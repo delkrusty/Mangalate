@@ -22,7 +22,7 @@ from gateway import create_app, profile_config, inspect_result
 from setup import configure
 from hardware import detect
 from core import create_core
-from engine_compat import translate_nllb_batch, request_byok_translation, validate_byok_results
+from engine_compat import translate_nllb_batch, request_byok_translation, validate_byok_results, validate_page_translations
 from contextlib import nullcontext
 
 spec = importlib.util.spec_from_file_location("batch", ROOT / "colab/batch.py")
@@ -37,6 +37,17 @@ def png(color="white", size=(100, 100)):
 
 
 class ServerTest(unittest.TestCase):
+    def test_recognized_page_cannot_succeed_with_zero_translated_regions(self):
+        async def empty(self, config, ctx):
+            for region in ctx.text_regions:
+                region.translation = region.text
+            return []
+        ctx = SimpleNamespace(text_regions=[SimpleNamespace(text="Hello!", translation="")])
+        with self.assertRaises(ValueError):
+            asyncio.run(validate_page_translations(empty)(None, None, ctx))
+        ctx.text_regions = []
+        self.assertEqual(asyncio.run(validate_page_translations(empty)(None, None, ctx)), [])
+
     def test_byok_provider_without_usage_and_truncated_output(self):
         response = SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content="<|1|>Olá!"), finish_reason="stop")],

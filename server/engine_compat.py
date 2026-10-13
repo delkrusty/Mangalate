@@ -21,6 +21,8 @@ def translate_nllb_batch(self, from_lang, to_lang, queries):
         generated = self.model.generate(**encoded, forced_bos_token_id=target_id,
                                         max_length=512, num_beams=5)
     result = self.tokenizer.batch_decode(generated, skip_special_tokens=True)
+    unchanged = sum(a.strip().lower() == b.strip().lower() for a, b in zip(queries, result))
+    print(f"NLLB: source={from_lang} target={to_lang} rows={len(queries)} unchanged={unchanged}", flush=True)
     if len(result) != len(queries) or any(not text.strip() for text in result):
         raise ValueError("NLLB returned incomplete translations")
     return result
@@ -67,7 +69,23 @@ def validate_byok_results(original_translate):
     return translate
 
 
+def validate_page_translations(original_translate):
+    async def translate(self, config, ctx):
+        regions = list(ctx.text_regions or [])
+        result = await original_translate(self, config, ctx)
+        blank = sum(not getattr(region, "translation", "").strip() for region in regions)
+        unchanged = sum(getattr(region, "translation", "").strip().lower() == region.text.strip().lower()
+                        for region in regions)
+        print(f"Page translation: input_regions={len(regions)} output_regions={len(result)} blank={blank} unchanged={unchanged}",
+              flush=True)
+        if regions and not result:
+            raise ValueError("Page contains recognized text but no usable translations")
+        return result
+    return translate
+
+
 def apply_compatibility():
+    from manga_translator import MangaTranslator
     from manga_translator.translators.nllb import NLLBTranslator, ISO_639_1_TO_FLORES_200
     from manga_translator.translators.custom_openai import CustomOpenAiTranslator
     ISO_639_1_TO_FLORES_200.pop("kn", None)  # Kannada is not Korean.
@@ -78,3 +96,6 @@ def apply_compatibility():
         CustomOpenAiTranslator._request_translation = request_byok_translation
         CustomOpenAiTranslator._translate = validate_byok_results(CustomOpenAiTranslator._translate)
         CustomOpenAiTranslator._mangalate_compat_applied = True
+    if not getattr(MangaTranslator, "_mangalate_compat_applied", False):
+        MangaTranslator._run_text_translation = validate_page_translations(MangaTranslator._run_text_translation)
+        MangaTranslator._mangalate_compat_applied = True
