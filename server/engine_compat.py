@@ -129,7 +129,7 @@ def validate_page_translations(original_translate):
                         for region in regions)
         print(f"Page translation: input_regions={len(regions)} output_regions={len(result)} blank={blank} unchanged={unchanged}",
               flush=True)
-        if regions and not result:
+        if regions and not result and blank:
             raise ValueError("Page contains recognized text but no usable translations")
         return result
     return translate

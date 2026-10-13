@@ -87,13 +87,21 @@ class ServerTest(unittest.TestCase):
     def test_recognized_page_cannot_succeed_with_zero_translated_regions(self):
         async def empty(self, config, ctx):
             for region in ctx.text_regions:
-                region.translation = region.text
+                region.translation = ""
             return []
         ctx = SimpleNamespace(text_regions=[SimpleNamespace(text="Hello!", translation="")])
         with self.assertRaises(ValueError):
             asyncio.run(validate_page_translations(empty)(None, None, ctx))
         ctx.text_regions = []
         self.assertEqual(asyncio.run(validate_page_translations(empty)(None, None, ctx)), [])
+
+    def test_unchanged_proper_names_preserve_page_without_false_engine_failure(self):
+        async def unchanged(self, config, ctx):
+            for region in ctx.text_regions:
+                region.translation = region.text
+            return []
+        ctx = SimpleNamespace(text_regions=[SimpleNamespace(text="Naruto", translation="")])
+        self.assertEqual(asyncio.run(validate_page_translations(unchanged)(None, None, ctx)), [])
 
     def test_byok_provider_without_usage_and_truncated_output(self):
         response = SimpleNamespace(
