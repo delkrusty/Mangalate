@@ -117,6 +117,8 @@ server/.env                       perfil, endpoint, modelo e caminhos; sem chave
 
 Configure limite de gastos e alertas na conta do provedor. Validações e novas tentativas podem consumir mais API. GPU maior melhora capacidade, não garante uma tradução melhor: a qualidade também depende do OCR, modelo, contexto, glossário e revisão.
 
+Se trocar a chave da API, recrie ou reinicie os containers para o worker carregá-la. O assistente faz isso quando você escolhe iniciar; alterar o arquivo sozinho não troca a chave já carregada em um processo rodando.
+
 ### Servidor público com HTTPS
 
 Contrate a máquina e configure NVIDIA/Docker por conta própria. Não há provisionamento, revenda ou afiliado Mangalate. Configure um domínio DNS para o IP da máquina e acrescente `MANGALATE_DOMAIN=seu-dominio.example` ao `.env`.

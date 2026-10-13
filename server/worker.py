@@ -1,7 +1,10 @@
 """Load BYOK secret inside the worker, never from the phone or command arguments."""
 import os
+import secrets
 import sys
 from pathlib import Path
+os.environ.setdefault("MT_WEB_NONCE", secrets.token_hex(16))
+os.environ["PYTHONUNBUFFERED"] = "1"
 
 if os.environ.get("MANGALATE_PROFILE", "basic") == "byok":
     path = Path(os.environ.get("MANGALATE_API_KEY_FILE", "/run/secrets/provider_key"))

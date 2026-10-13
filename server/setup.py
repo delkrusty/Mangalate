@@ -79,7 +79,7 @@ def main():
     print("Prepare modelos e teste UMA página antes de abrir um capítulo: python check.py --warmup")
     if input("Verificar Docker e iniciar agora? [s/N]: ").lower() == "s":
         subprocess.run(["docker", "compose", "version"], cwd=ROOT, check=True)
-        subprocess.run(["docker", "compose", "--profile", hardware, "up", "--build", "-d"], cwd=ROOT, check=True)
+        subprocess.run(["docker", "compose", "--profile", hardware, "up", "--build", "-d", "--force-recreate"], cwd=ROOT, check=True)
 
 
 if __name__ == "__main__":

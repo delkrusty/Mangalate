@@ -98,6 +98,19 @@ def create_app(key=None, upstream=None, profile=None, transport=None):
 
     app = FastAPI(title="Mangalate servidor", lifespan=lifespan, docs_url=None, redoc_url=None)
 
+    async def worker_ready():
+        if transport is not None:  # Simulated HTTP tests have no model process.
+            return
+        url = httpx.URL(upstream)
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(url.host, (url.port or 80) + 1), timeout=3,
+            )
+            writer.close()
+            await writer.wait_closed()
+        except (OSError, TimeoutError):
+            raise HTTPException(503, "Processo de tradução ainda inicializando ou parado. Aguarde e confira os logs.")
+
     def authorize(request):
         received = request.headers.get("x-mangalate-key", "")
         if not hmac.compare_digest(received.encode(), key.encode()):
@@ -116,6 +129,7 @@ def create_app(key=None, upstream=None, profile=None, transport=None):
     @app.post("/queue-size")
     async def queue(request: Request):
         authorize(request)
+        await worker_ready()
         try:
             response = await app.state.client.post("/queue-size", timeout=20)
             response.raise_for_status()
@@ -136,6 +150,7 @@ def create_app(key=None, upstream=None, profile=None, transport=None):
             return await process(request)
 
     async def process(request):
+        await worker_ready()
         # Bound body before multipart parsing, even if Content-Length is missing.
         raw = bytearray()
         async for chunk in request.stream():
