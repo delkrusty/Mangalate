@@ -6,6 +6,7 @@ import socket
 import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
+from hardware import detect
 
 ROOT = Path(__file__).resolve().parent
 
@@ -17,7 +18,7 @@ def save_secret(path, value):
 
 
 def configure(profile, hardware, bind, api_base="", model="", provider_key="", root=ROOT):
-    if profile not in {"basic", "byok"} or hardware not in {"cpu", "gpu"}:
+    if profile not in {"basic", "byok"} or hardware not in {"cpu", "gpu", "amd-rocm"}:
         raise ValueError("Perfil/hardware inválidos.")
     if profile == "byok":
         url = urlparse(api_base)
@@ -47,7 +48,16 @@ def main():
     print("MANGALATE | instalação guiada")
     print("Básico: sem API paga. BYOK: servidor e API pagos diretamente por você, sem cobrança Mangalate.")
     profile = "byok" if input("Perfil [1 Básico / 2 BYOK] (1): ").strip() == "2" else "basic"
-    hardware = "gpu" if input("Placa NVIDIA preparada para Docker? [s/N]: ").lower() == "s" else "cpu"
+    found = detect()
+    print("Sistema:", found["os"], "| arquitetura:", found["architecture"])
+    print("CPU atende qualquer fabricante. AMD/Intel no Windows usam CPU neste pacote.")
+    print("A aceleração AMD/ROCm é experimental; DirectML/OpenVINO ainda não estão implementados.")
+    choice = input("Hardware [1 CPU / 2 NVIDIA-CUDA / 3 AMD-ROCm Linux] (1): ").strip()
+    hardware = {"2": "gpu", "3": "amd-rocm"}.get(choice, "cpu")
+    if hardware == "amd-rocm" and found["os"] != "Linux":
+        raise SystemExit("ROCm Docker neste pacote exige Linux. Escolha CPU; não é suporte DirectML no Windows.")
+    if hardware == "amd-rocm" and not Path("/dev/kfd").exists():
+        raise SystemExit("/dev/kfd ausente: prepare ROCm compatível no host ou escolha CPU.")
     bind = "0.0.0.0" if input("Celular na mesma rede Wi-Fi? Liberar rede local [s/N]: ").lower() == "s" else "127.0.0.1"
     if bind == "0.0.0.0":
         print("Use somente rede confiável; NÃO abra a porta 5003 no roteador/internet.")

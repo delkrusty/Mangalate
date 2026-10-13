@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from gateway import create_app, profile_config, inspect_result
 from setup import configure
+from hardware import detect
 
 spec = importlib.util.spec_from_file_location("batch", ROOT / "colab/batch.py")
 batch = importlib.util.module_from_spec(spec)
@@ -123,6 +124,13 @@ class ServerTest(unittest.TestCase):
                 compile(code, f"cell_{index}", "exec")
                 self.assertNotIn("cloudflared", code)
                 self.assertNotIn("while True", code)
+
+    def test_hardware_matrix_does_not_claim_directml_or_rocm_validation(self):
+        report = detect(system="Windows", kfd=False, nvidia=False)
+        self.assertEqual(report["safe_default"], "cpu")
+        self.assertEqual(next(x for x in report["backends"] if x["id"] == "directml")["state"], "planned")
+        report = detect(system="Linux", kfd=True, nvidia=False)
+        self.assertEqual(next(x for x in report["backends"] if x["id"] == "amd-rocm")["state"], "experimental_candidate")
 
 
 if __name__ == "__main__":

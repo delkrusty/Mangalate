@@ -68,7 +68,7 @@ async def run(args):
                 glossary.append({"source": row["source"], "target": row["target"]})
         if len(glossary) > 100:
             raise ValueError("Use no máximo 100 termos no glossário.")
-    translator = MangaTranslator({"use_gpu": args.gpu, "verbose": False})
+    translator = MangaTranslator({"use_gpu": args.gpu, "use_gpu_limited": args.gpu_limited, "verbose": False})
     history, report = [], []
     for index, path in enumerate(pages, 1):
         name = f"{index:04d}.png"
@@ -122,5 +122,6 @@ if __name__ == "__main__":
     parser.add_argument("--profile", choices=("basic", "byok"), default="basic")
     parser.add_argument("--target", default="PTB")
     parser.add_argument("--gpu", action="store_true")
+    parser.add_argument("--gpu-limited", action="store_true")
     parser.add_argument("--glossary", type=Path)
     asyncio.run(run(parser.parse_args()))

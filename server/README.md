@@ -26,7 +26,7 @@ py setup.py
 Se `py` não funcionar, tente `python setup.py`. O assistente pergunta:
 
 1. **Básico ou BYOK:** escolha 1 para começar sem API paga.
-2. **GPU NVIDIA preparada:** escolha N se não souber. GPU exige driver compatível e NVIDIA Container Toolkit, não só ter uma placa ([instalação NVIDIA](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)).
+2. **Hardware:** escolha CPU se não souber. NVIDIA-CUDA exige driver compatível e Container Toolkit ([instalação NVIDIA](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)). AMD-ROCm é experimental e exige Linux compatível; não é um perfil para Windows.
 3. **Celular na mesma rede Wi-Fi:** escolha S para leitura ao vivo na rede local. Não exponha a porta 5003 no roteador.
 4. **Iniciar agora:** escolha S. Ele verifica Docker Compose e executa a instalação.
 
@@ -42,7 +42,21 @@ Ou, apenas com NVIDIA configurada:
 docker compose --profile gpu up --build -d
 ```
 
-Use **somente um** desses perfis por vez. Não ative CPU e GPU juntos.
+Use **somente um** perfil de hardware por vez. Não ative CPU, NVIDIA e AMD juntos.
+
+### AMD, Radeon e Intel não ficam excluídas
+
+O caminho CPU está disponível independentemente do fabricante. Rode `python hardware.py` para ver os candidatos e o estado real de cada backend. Não confunda detecção de placa com compatibilidade dos modelos.
+
+No Linux com ROCm e uma Radeon/Instinct suportada, há um perfil **experimental**:
+
+```bash
+docker compose --profile amd-rocm up --build -d
+```
+
+Ele expõe `/dev/kfd` e `/dev/dri` somente ao worker, mantém as rodas AMD de PyTorch e deixa a tradução offline na CPU para não exigir CUDA no CTranslate2. A imagem base corresponde a uma tag publicada pela AMD; isso não valida automaticamente nosso pipeline inteiro ([PyTorch Radeon/ROCm](https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/docs/install/installrad/native_linux/install-pytorch.html)). Confirme a matriz de hardware/SO e as permissões dos dispositivos; este pacote não foi validado numa GPU AMD ([Docker com ROCm](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/how-to/docker.html)).
+
+No Windows com AMD/Intel, use CPU neste pacote. **DirectML e OpenVINO estão previstos na camada de hardware, não implementados nem anunciados como aceleração funcional.** O motor atual usa etapas PyTorch; adicionar um provider ONNX sem exportar/testar os modelos não resolve isso. Uma falha de aceleração pode ser resolvida parando o perfil experimental e iniciando CPU; não há fallback automático de contêiner já validado.
 
 ### Onde está a chave Mangalate
 

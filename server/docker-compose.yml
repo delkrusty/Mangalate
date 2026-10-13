@@ -33,7 +33,7 @@ services:
               count: all
               capabilities: [gpu]
   gateway:
-    profiles: [cpu, gpu]
+    profiles: [cpu, gpu, amd-rocm]
     build: {context: ., dockerfile: Dockerfile.gateway}
     restart: unless-stopped
     env_file: .env
@@ -47,6 +47,18 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+  translator-amd:
+    <<: *worker
+    profiles: [amd-rocm]
+    build: {context: ., dockerfile: Dockerfile.worker, target: rocm}
+    environment:
+      MANGALATE_API_KEY_FILE: /run/secrets/provider_key
+      MANGALATE_USE_GPU: "true"
+      MANGALATE_ACCELERATOR: amd-rocm
+    devices: ["/dev/kfd:/dev/kfd", "/dev/dri:/dev/dri"]
+    group_add: ["video"]
+    security_opt: ["seccomp:unconfined"]
+    shm_size: 4g
 
 secrets:
   mangalate_key:

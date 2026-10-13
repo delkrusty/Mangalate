@@ -1,6 +1,6 @@
 .env
 secrets
 review
-colab
+colab/*.ipynb
 tests
 __pycache__

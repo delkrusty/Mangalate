@@ -13,5 +13,5 @@ if len(sys.argv) > 1:
     os.execv(sys.executable, [sys.executable, *sys.argv[1:]])
 args = [sys.executable, "server/main.py", "--start-instance", "--host=0.0.0.0", "--port=8001"]
 if os.environ.get("MANGALATE_USE_GPU", "false").lower() == "true":
-    args.append("--use-gpu")
+    args.append("--use-gpu-limited" if os.environ.get("MANGALATE_ACCELERATOR") == "amd-rocm" else "--use-gpu")
 os.execv(sys.executable, args)
