@@ -3,6 +3,7 @@ import argparse
 import io
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -24,8 +25,17 @@ def main():
     with call("/v1/info") as response:
         info = json.load(response)
     print("Perfil:", info["edition"], "| motor:", info["translator"])
-    with call("/queue-size", b"") as response:
-        print("Conexão com o motor:", response.read().decode(), "página(s) na fila")
+    deadline = time.monotonic() + 120
+    while True:
+        try:
+            with call("/queue-size", b"") as response:
+                print("Conexão com o motor:", response.read().decode(), "página(s) na fila")
+            break
+        except urllib.error.HTTPError as exc:
+            if exc.code != 503 or time.monotonic() > deadline:
+                raise
+            print("Esperando inicialização do motor…")
+            time.sleep(3)
     if not args.warmup:
         print("A conexão não prova que os modelos já foram baixados. Execute --warmup para traduzir uma página sintética.")
         return
@@ -46,6 +56,9 @@ def main():
     buffer = io.BytesIO()
     page.save(buffer, "PNG")
     boundary = "mangalate-diagnostic"
+    folder = ROOT / "review"
+    folder.mkdir(exist_ok=True)
+    (folder / "teste-original.png").write_bytes(buffer.getvalue())
     body = (
         f"--{boundary}\r\nContent-Disposition: form-data; name=\"config\"\r\n\r\n{{}}\r\n"
         f"--{boundary}\r\nContent-Disposition: form-data; name=\"image\"; filename=\"test.png\"\r\nContent-Type: image/png\r\n\r\n"
@@ -53,8 +66,6 @@ def main():
     print("Preparando modelos e traduzindo. A primeira execução pode ser longa; não feche o terminal.")
     with call("/translate/with-form/image", body, {"Content-Type": f"multipart/form-data; boundary={boundary}"}) as response:
         result = response.read()
-    folder = ROOT / "review"
-    folder.mkdir(exist_ok=True)
     (folder / "teste-traduzido.png").write_bytes(result)
     print("Abra review/teste-traduzido.png e confira se Hello world! realmente virou português.")
     print("HTTP 200 não garante tradução correta: essa conferência visual é obrigatória.")

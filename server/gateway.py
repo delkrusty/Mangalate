@@ -117,7 +117,7 @@ def create_app(key=None, upstream=None, profile=None, transport=None):
     async def queue(request: Request):
         authorize(request)
         try:
-            response = await app.state.client.post("/queue-size")
+            response = await app.state.client.post("/queue-size", timeout=20)
             response.raise_for_status()
             count = response.json()
             if not isinstance(count, int):
@@ -132,6 +132,10 @@ def create_app(key=None, upstream=None, profile=None, transport=None):
         if lock.locked():
             raise HTTPException(429, "Uma página já está sendo traduzida. Aguarde e tente novamente.",
                                 headers={"Retry-After": "5"})
+        async with lock:
+            return await process(request)
+
+    async def process(request):
         # Bound body before multipart parsing, even if Content-Length is missing.
         raw = bytearray()
         async for chunk in request.stream():
@@ -152,33 +156,32 @@ def create_app(key=None, upstream=None, profile=None, transport=None):
                 original = await asyncio.to_thread(open_page, data)
         except (ValueError, TypeError, AttributeError) as exc:
             raise HTTPException(422, str(exc))
-        async with lock:
-            try:
-                result = await app.state.client.post(
-                    "/translate/with-form/image",
-                    files={"image": ("page.png", data, "application/octet-stream")},
-                    data={"config": json.dumps(config)},
-                )
-            except httpx.TimeoutException:
-                raise HTTPException(504, "O motor demorou demais. Prepare os modelos com check.py --warmup.")
-            except httpx.HTTPError:
-                raise HTTPException(503, "Motor indisponível. Confira os logs locais do servidor.")
-            if result.status_code != 200:
-                # Never echo upstream errors containing provider keys, prompt text or paths.
-                raise HTTPException(502, "Motor recusou a tradução. No BYOK, confira chave, modelo, saldo e logs.")
-            try:
-                translated = await asyncio.to_thread(open_page, result.content)
-                metrics = await asyncio.to_thread(inspect_result, original, translated)
-            except ValueError as exc:
-                raise HTTPException(422, str(exc))
-            app.state.warmed = True
-            png = io.BytesIO()
-            translated.save(png, "PNG")
-            return Response(png.getvalue(), media_type="image/png", headers={
-                "X-Mangalate-Review": "required",
-                "X-Mangalate-Changed": str(metrics["changed_fraction"]),
-                "Cache-Control": "no-store",
-            })
+        try:
+            result = await app.state.client.post(
+                "/translate/with-form/image",
+                files={"image": ("page.png", data, "application/octet-stream")},
+                data={"config": json.dumps(config)},
+            )
+        except httpx.TimeoutException:
+            raise HTTPException(504, "O motor demorou demais. Prepare os modelos com check.py --warmup.")
+        except httpx.HTTPError:
+            raise HTTPException(503, "Motor indisponível. Confira os logs locais do servidor.")
+        if result.status_code != 200:
+            # Never echo upstream errors containing provider keys, prompt text or paths.
+            raise HTTPException(502, "Motor recusou a tradução. No BYOK, confira chave, modelo, saldo e logs.")
+        try:
+            translated = await asyncio.to_thread(open_page, result.content)
+            metrics = await asyncio.to_thread(inspect_result, original, translated)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        app.state.warmed = True
+        png = io.BytesIO()
+        translated.save(png, "PNG")
+        return Response(png.getvalue(), media_type="image/png", headers={
+            "X-Mangalate-Review": "required",
+            "X-Mangalate-Changed": str(metrics["changed_fraction"]),
+            "Cache-Control": "no-store",
+        })
 
     return app
 

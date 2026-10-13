@@ -32,7 +32,16 @@ jobs:
           docker compose --profile cpu up -d
           for i in $(seq 1 60); do curl -fsS http://127.0.0.1:5003/healthz && break || sleep 2; done
           python check.py --warmup
-          python -c "from PIL import Image,ImageChops; p=Image.open('review/teste-traduzido.png'); assert p.size==(900,600); assert p.getbbox()"
+          python -c "from PIL import Image,ImageChops; import numpy as np; p=Image.open('review/teste-traduzido.png'); o=Image.open('review/teste-original.png'); assert p.size==o.size==(900,600); assert np.asarray(p).std()>5; assert ImageChops.difference(p,o).getbbox()"
+      - name: Verify same batch engine used by the Colab notebook
+        working-directory: server
+        run: |
+          python -c "import zipfile; z=zipfile.ZipFile('review/chapter.zip','w'); z.write('review/teste-original.png','001.png'); z.close()"
+          worker=$(docker compose --profile cpu ps -q translator-cpu)
+          docker cp review/chapter.zip "$worker":/tmp/chapter.zip
+          docker compose --profile cpu exec -T translator-cpu python /mangalate/batch.py --input /tmp/chapter.zip --output /tmp/batch-review --profile basic
+          docker cp "$worker":/tmp/batch-review/review.json review/batch-review.json
+          python -c "import json; r=json.load(open('review/batch-review.json')); assert r and r[0]['status']=='review',r; assert any(x['translation'].strip() and x['translation'].lower()!=x['original'].lower() for x in r[0]['regions']),r"
       - name: Diagnostics
         if: always()
         working-directory: server
@@ -44,3 +53,4 @@ jobs:
           path: |
             server/diagnostics.log
             server/review/*.png
+            server/review/*.json

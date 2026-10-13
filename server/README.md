@@ -150,9 +150,11 @@ No PowerShell, substitua o argumento de volume por `"${PWD}/trabalho:/work"`. Se
 A saída contém:
 
 - **capitulo-para-revisar.cbz:** páginas em ordem para leitura. Páginas bloqueadas mantêm o original, não uma página branca.
-- **revisao-completa.zip:** originais, resultados e `review.json` com texto reconhecido/traduzido e estado de cada página.
+- **revisao-completa.zip:** originais, resultados, `revisao.md` legível e `review.json` com texto reconhecido/traduzido e estado de cada página. Após três falhas consecutivas, o lote para de chamar o motor e preserva as páginas restantes, evitando repetir gastos/falhas.
 
 Revise sentido, nomes, ordem dos painéis, encaixe, contornos e arte antes de chamar de edição final. Os limites automáticos detectam mudança de tamanho e edição global excessiva, **não garantem detecção de toda invasão de arte ou palavra cortada**. O filtro de texto fora de balões é heurístico; pode deixar onomatopeias passar ou ignorar legendas. Por padrão não há super-resolução nem colorização, para evitar alterar o enquadramento/traço. Palavras ficam inteiras no servidor, evitando hifenização inglesa inadequada.
+
+Se trocar o perfil/modelo do servidor mantendo o mesmo endereço, limpe o cache de tradução do aplicativo e prepare novamente os capítulos necessários. Páginas já baixadas não mudam de qualidade automaticamente.
 
 ## Colab revisado
 

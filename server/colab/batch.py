@@ -69,7 +69,7 @@ async def run(args):
         if len(glossary) > 100:
             raise ValueError("Use no máximo 100 termos no glossário.")
     translator = MangaTranslator({"use_gpu": args.gpu, "use_gpu_limited": args.gpu_limited, "verbose": False})
-    history, report = [], []
+    history, report, consecutive_failures = [], [], 0
     for index, path in enumerate(pages, 1):
         name = f"{index:04d}.png"
         print(f"Página {index}/{len(pages)}: {path.name}", flush=True)
@@ -79,10 +79,13 @@ async def run(args):
         original.save(originals / name)
         entry = {"page": name, "source_file": path.relative_to(output / "input").as_posix(), "review_required": True}
         try:
+            if consecutive_failures >= 3:
+                raise RuntimeError("Processamento suspenso após três falhas consecutivas; originais preservados.")
             if args.profile == "byok":
                 prompt = yaml.safe_load((ROOT / "profiles/scan-prompt.yaml").read_text())
                 prompt["chat_system_template"] += contextual_prompt(history, glossary)
-                prompt_path = output / "context_prompt.yaml"
+                prompt_path = output / "contexts" / f"{index:04d}.yaml"
+                prompt_path.parent.mkdir(exist_ok=True)
                 prompt_path.write_text(yaml.safe_dump(prompt, allow_unicode=True), encoding="utf-8")
                 config["translator"]["gpt_config"] = str(prompt_path)
             ctx = await translator.translate(original, Config(**config))
@@ -95,15 +98,28 @@ async def run(args):
             entry["regions"] = pairs
             entry["status"] = "review" if pairs else "no_text_review"
             history.append(pairs)
+            consecutive_failures = 0
         except Exception as exc:
             # Keep the original, clearly flagging failures; never export a blank page.
             result = original
+            consecutive_failures += 1
             entry.update(status="blocked_original_preserved", error=type(exc).__name__)
         translated = output / "translated"
         translated.mkdir(exist_ok=True)
         result.save(translated / name)
         report.append(entry)
     (output / "review.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    def safe(value):
+        return str(value).replace("|", "\\|").replace("\n", " ").replace("<", "&lt;").replace(">", "&gt;")
+    notes = ["# Revisão do capítulo", "", "Compare cada página antes de ler/distribuir como edição final.", ""]
+    for entry in report:
+        name = entry["page"]
+        notes += [f"## Página {name}", f"Estado: {entry['status']}. Revisão humana necessária.",
+                  f"[Original](originals/{name}) | [Resultado](translated/{name})", "",
+                  "| Texto reconhecido | Tradução |", "|---|---|"]
+        notes += [f"| {safe(pair['original'])} | {safe(pair['translation'])} |" for pair in entry.get("regions", [])]
+        notes += [""]
+    (output / "revisao.md").write_text("\n".join(notes), encoding="utf-8")
     with zipfile.ZipFile(output / "capitulo-para-revisar.cbz", "w", zipfile.ZIP_DEFLATED) as book:
         for page in sorted((output / "translated").glob("*.png")):
             book.write(page, page.name)
@@ -112,6 +128,7 @@ async def run(args):
             for page in sorted((output / folder).glob("*.png")):
                 book.write(page, f"{folder}/{page.name}")
         book.write(output / "review.json", "review.json")
+        book.write(output / "revisao.md", "revisao.md")
     print("Exportados capitulo-para-revisar.cbz e revisao-completa.zip. Confira a revisão antes de chamar de scan final.")
 
 
