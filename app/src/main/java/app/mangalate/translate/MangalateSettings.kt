@@ -22,9 +22,9 @@ enum class TranslateMode(val label: String, val badge: String, val description: 
         "OCR no celular e tradução pela API do DeepL. Aceita chave API Free ou Pro.",
     ),
     SERVER(
-        "Servidor próprio",
-        "Avançado",
-        "Para quem roda o servidor do Mangalate no PC ou no Colab. Melhor reconstrução da arte.",
+        "Servidor",
+        "Básico/BYOK",
+        "Docker no computador ou servidor próprio na nuvem. O perfil é escolhido no servidor.",
     ),
     ;
 

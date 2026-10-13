@@ -267,6 +267,16 @@ object MangalateTranslator {
         client.newCall(request).execute().use { response ->
             val bytes = response.body.bytes()
             if (!response.isSuccessful) {
+                val help = when (response.code) {
+                    401, 403 -> "Chave Mangalate inválida. Copie o conteúdo de server/secrets/mangalate_key.txt; não use a chave da IA."
+                    429 -> "O servidor já está traduzindo uma página. Aguarde antes de tentar de novo."
+                    422 -> "Página bloqueada pela proteção de imagem ou configuração. Confira o original e os logs do seu servidor."
+                    502 -> "O motor de tradução falhou. No BYOK, confira modelo, chave e saldo no servidor."
+                    503 -> "O processo de tradução ainda está iniciando ou parou. Aguarde e rode check.py --warmup no computador."
+                    504 -> "A tradução demorou demais. Prepare os modelos com check.py --warmup antes de abrir o capítulo."
+                    else -> null
+                }
+                if (help != null) throw app.mangalate.local.FriendlyException(help)
                 val msg = String(bytes.take(300).toByteArray()).ifBlank { response.message }
                 throw IOException("Servidor respondeu ${response.code}: $msg")
             }
