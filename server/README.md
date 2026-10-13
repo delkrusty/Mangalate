@@ -196,6 +196,10 @@ O motor Docker chama `MangaTranslator` diretamente em um serviço privado. Não 
 
 O adaptador `engine_compat.py` corrige a chamada do token de idioma NLLB, o código de coreano e o uso do cache; ele não ignora traduções vazias como se fossem sucesso. Essa adaptação do motor tem identificação GPL-3.0, preservando a [licença do upstream](https://raw.githubusercontent.com/zyddnys/manga-image-translator/d6de6ab62a7be6afc0d07a3184149cdefbcd32f2/LICENSE); não altera a licença do aplicativo Android.
 
+Na detecção automática, o classificador NLLB considera os idiomas suportados pelo adaptador, evitando que diálogos curtos sejam classificados em um idioma sem mapeamento e pulados silenciosamente. O adaptador também normaliza geometrias OpenCV 4/5 na identificação de painéis e remove seus arquivos temporários, inclusive em falhas.
+
 No BYOK, o adaptador aceita respostas sem estatística de tokens e rejeita conteúdo truncado ou traduções faltantes. Uma rejeição preserva a imagem original no lote e não substitui os balões por respostas vazias no app. Isso é uma proteção de integridade, não uma garantia de qualidade linguística.
+
+As respostas BYOK têm teto de 4096 tokens por pedido e espera de até 180 segundos por trecho. O adaptador não reinicia automaticamente um pedido pago apenas porque demorou; a revisão linguística configurada no perfil ainda pode gerar novas chamadas. Consumo, preço e disponibilidade dependem do seu provedor.
 
 O backend upstream é GPL-3.0 ([licença](https://raw.githubusercontent.com/zyddnys/manga-image-translator/d6de6ab62a7be6afc0d07a3184149cdefbcd32f2/LICENSE)); modelos e fontes têm licenças próprias. Preserve os avisos e revise permissões antes de distribuir um produto comercial. Use somente capítulos próprios/autorizados. “Premium/BYOK” significa infraestrutura/modelo do próprio usuário, não direito de uso irrestrito de qualquer modelo.

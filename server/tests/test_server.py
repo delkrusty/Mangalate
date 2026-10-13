@@ -22,7 +22,7 @@ from gateway import create_app, profile_config, inspect_result
 from setup import configure
 from hardware import detect
 from core import create_core
-from engine_compat import translate_nllb_batch, request_byok_translation, validate_byok_results, validate_page_translations
+from engine_compat import translate_nllb_batch, request_byok_translation, validate_byok_results, validate_page_translations, infer_nllb, translate_byok, PanelCV
 from contextlib import nullcontext
 
 spec = importlib.util.spec_from_file_location("batch", ROOT / "colab/batch.py")
@@ -37,6 +37,53 @@ def png(color="white", size=(100, 100)):
 
 
 class ServerTest(unittest.TestCase):
+    def test_panel_cv_normalizes_new_and_legacy_geometry_shapes(self):
+        import numpy as np
+        for legacy in (False, True):
+            points = np.array([[0, 0], [10, 0], [10, 10]])
+            lines = np.array([[0., 0., 10., 0.]])
+            if legacy:
+                points, lines = points.reshape(-1, 1, 2), lines.reshape(-1, 1, 4)
+            cv = PanelCV(SimpleNamespace(
+                findContours=lambda *args: ([points], None),
+                approxPolyDP=lambda *args: points,
+                convexHull=lambda *args: points,
+                createLineSegmentDetector=lambda *args: SimpleNamespace(detect=lambda *args: (lines, None, None, None)),
+            ))
+            self.assertEqual(cv.findContours(None)[0][0].shape, (3, 1, 2))
+            self.assertEqual(cv.approxPolyDP(None).shape, (3, 1, 2))
+            self.assertEqual(cv.convexHull(None).shape, (3, 1, 2))
+            self.assertEqual(cv.createLineSegmentDetector().detect(None)[0].shape, (1, 1, 4))
+
+    def test_byok_strict_markers_and_no_automatic_paid_restart(self):
+        content = "<|1|>Olá!<|2|>Mundo!"
+        async def request(to, prompt):
+            return content
+        engine = SimpleNamespace(
+            client=SimpleNamespace(max_retries=2),
+            _assemble_prompts=lambda source, target, queries: [("prompt", len(queries))],
+            _request_translation=request, rgx_capture="(.*)",
+            extract_capture_groups=lambda text, regex: text,
+        )
+        self.assertEqual(asyncio.run(translate_byok(engine, "English", "Portuguese", ["Hello!", "World!"])),
+                         ["Olá!", "Mundo!"])
+        self.assertEqual(engine.client.max_retries, 0)
+        content = "<|1|>Olá!<|1|>Duplicado"
+        with self.assertRaises(ValueError):
+            asyncio.run(translate_byok(engine, "English", "Portuguese", ["Hello!", "World!"]))
+
+    def test_nllb_does_not_silently_drop_unresolved_source_language(self):
+        engine = SimpleNamespace(
+            _mangalate_langid=SimpleNamespace(classify=lambda text: ("en", .4)),
+            _map_detected_lang_to_translator=lambda code: "eng_Latn" if code == "en" else None,
+            _translate_batch=lambda source, target, texts: [source + ":" + target],
+        )
+        self.assertEqual(asyncio.run(infer_nllb(engine, "auto", "por_Latn", ["Hello world!"])),
+                         ["eng_Latn:por_Latn"])
+        engine._mangalate_langid.classify = lambda text: ("unsupported", .9)
+        with self.assertRaises(ValueError):
+            asyncio.run(infer_nllb(engine, "auto", "por_Latn", ["Hello world!"]))
+
     def test_recognized_page_cannot_succeed_with_zero_translated_regions(self):
         async def empty(self, config, ctx):
             for region in ctx.text_regions:
@@ -59,7 +106,7 @@ class ServerTest(unittest.TestCase):
         engine = SimpleNamespace(
             client=SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create))),
             model="user-model", _MAX_TOKENS=2048, temperature=.2, top_p=1,
-            token_count=0, _assemble_request=lambda to, prompt: [{"role":"user","content":prompt}],
+            token_count=0, chat_system_template="Translate to {to_lang}", get_chat_sample=lambda to: None,
         )
         self.assertEqual(asyncio.run(request_byok_translation(engine, "Portuguese", "Hello!")), "<|1|>Olá!")
         self.assertEqual(engine.token_count, 0)
