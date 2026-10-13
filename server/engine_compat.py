@@ -38,9 +38,43 @@ async def load_nllb(self, from_lang, to_lang, device):
     self.model.eval()
 
 
+async def request_byok_translation(self, to_lang, prompt):
+    response = await self.client.chat.completions.create(
+        model=self.model,
+        messages=self._assemble_request(to_lang, prompt),
+        max_tokens=self._MAX_TOKENS,
+        temperature=self.temperature,
+        top_p=self.top_p,
+    )
+    if not response.choices:
+        raise ValueError("BYOK returned no choices")
+    choice = response.choices[0]
+    content = choice.message.content
+    if not isinstance(content, str) or not content.strip() or choice.finish_reason == "length":
+        raise ValueError("BYOK returned incomplete content")
+    usage = response.usage
+    self.token_count_last = (getattr(usage, "total_tokens", 0) or 0) if usage else 0
+    self.token_count += self.token_count_last
+    return content
+
+
+def validate_byok_results(original_translate):
+    async def translate(self, from_lang, to_lang, queries):
+        result = await original_translate(self, from_lang, to_lang, queries)
+        if len(result) != len(queries) or any(not isinstance(text, str) or not text.strip() for text in result):
+            raise ValueError("BYOK returned incomplete translations")
+        return result
+    return translate
+
+
 def apply_compatibility():
     from manga_translator.translators.nllb import NLLBTranslator, ISO_639_1_TO_FLORES_200
+    from manga_translator.translators.custom_openai import CustomOpenAiTranslator
     ISO_639_1_TO_FLORES_200.pop("kn", None)  # Kannada is not Korean.
     ISO_639_1_TO_FLORES_200["ko"] = "kor_Hang"
     NLLBTranslator._translate_batch = translate_nllb_batch
     NLLBTranslator._load = load_nllb
+    if not getattr(CustomOpenAiTranslator, "_mangalate_compat_applied", False):
+        CustomOpenAiTranslator._request_translation = request_byok_translation
+        CustomOpenAiTranslator._translate = validate_byok_results(CustomOpenAiTranslator._translate)
+        CustomOpenAiTranslator._mangalate_compat_applied = True

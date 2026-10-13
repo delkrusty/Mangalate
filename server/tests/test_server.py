@@ -22,7 +22,7 @@ from gateway import create_app, profile_config, inspect_result
 from setup import configure
 from hardware import detect
 from core import create_core
-from engine_compat import translate_nllb_batch
+from engine_compat import translate_nllb_batch, request_byok_translation, validate_byok_results
 from contextlib import nullcontext
 
 spec = importlib.util.spec_from_file_location("batch", ROOT / "colab/batch.py")
@@ -37,6 +37,32 @@ def png(color="white", size=(100, 100)):
 
 
 class ServerTest(unittest.TestCase):
+    def test_byok_provider_without_usage_and_truncated_output(self):
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="<|1|>Olá!"), finish_reason="stop")],
+            usage=None,
+        )
+        async def create(**kwargs):
+            self.assertEqual(kwargs["model"], "user-model")
+            return response
+        engine = SimpleNamespace(
+            client=SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create))),
+            model="user-model", _MAX_TOKENS=2048, temperature=.2, top_p=1,
+            token_count=0, _assemble_request=lambda to, prompt: [{"role":"user","content":prompt}],
+        )
+        self.assertEqual(asyncio.run(request_byok_translation(engine, "Portuguese", "Hello!")), "<|1|>Olá!")
+        self.assertEqual(engine.token_count, 0)
+        response.choices[0].finish_reason = "length"
+        with self.assertRaises(ValueError):
+            asyncio.run(request_byok_translation(engine, "Portuguese", "Hello!"))
+
+    def test_byok_missing_bubble_translation_is_not_silent_success(self):
+        async def missing(self, from_lang, to_lang, queries):
+            return ["Olá!", ""]
+        translated = validate_byok_results(missing)
+        with self.assertRaises(ValueError):
+            asyncio.run(translated(None, "English", "Portuguese", ["Hello!", "World!"]))
+
     def test_direct_engine_supplies_required_upstream_initialization_parameter(self):
         class Engine:
             def __init__(self, params):
