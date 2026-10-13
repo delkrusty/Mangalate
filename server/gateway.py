@@ -104,7 +104,7 @@ def create_app(key=None, upstream=None, profile=None, transport=None):
         url = httpx.URL(upstream)
         try:
             reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(url.host, (url.port or 80) + 1), timeout=3,
+                asyncio.open_connection(url.host, url.port or 80), timeout=3,
             )
             writer.close()
             await writer.wait_closed()

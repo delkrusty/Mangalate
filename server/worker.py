@@ -1,9 +1,7 @@
 """Load BYOK secret inside the worker, never from the phone or command arguments."""
 import os
-import secrets
 import sys
 from pathlib import Path
-os.environ.setdefault("MT_WEB_NONCE", secrets.token_hex(16))
 os.environ["PYTHONUNBUFFERED"] = "1"
 
 if os.environ.get("MANGALATE_PROFILE", "basic") == "byok":
@@ -14,7 +12,5 @@ if os.environ.get("MANGALATE_PROFILE", "basic") == "byok":
     os.environ["CUSTOM_OPENAI_API_KEY"] = key
 if len(sys.argv) > 1:
     os.execv(sys.executable, [sys.executable, *sys.argv[1:]])
-args = [sys.executable, "server/main.py", "--start-instance", "--host=0.0.0.0", "--port=8001"]
-if os.environ.get("MANGALATE_USE_GPU", "false").lower() == "true":
-    args.append("--use-gpu-limited" if os.environ.get("MANGALATE_ACCELERATOR") == "amd-rocm" else "--use-gpu")
+args = [sys.executable, "-m", "uvicorn", "core:app", "--host=0.0.0.0", "--port=8001", "--app-dir=/mangalate"]
 os.execv(sys.executable, args)

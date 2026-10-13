@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT))
 from gateway import create_app, profile_config, inspect_result
 from setup import configure
 from hardware import detect
+from core import create_core
 
 spec = importlib.util.spec_from_file_location("batch", ROOT / "colab/batch.py")
 batch = importlib.util.module_from_spec(spec)
@@ -32,6 +33,32 @@ def png(color="white", size=(100, 100)):
 
 
 class ServerTest(unittest.TestCase):
+    def test_direct_engine_returns_png_without_internal_rpc(self):
+        class Engine:
+            async def translate(self, image, config):
+                self.config = config
+                return type("Context", (), {"result": image})()
+        engine = Engine()
+        with TestClient(create_core(engine)) as client:
+            self.assertEqual(client.post("/queue-size").json(), 0)
+            response = client.post("/translate/with-form/image",
+                                   files={"image": ("page.png", png())},
+                                   data={"config": '{"translator":{"target_lang":"PTB"}}'})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.headers["content-type"], "image/png")
+            self.assertEqual(engine.config["translator"]["target_lang"], "PTB")
+            self.assertEqual(client.post("/simple_execute/translate").status_code, 404)
+
+    def test_direct_engine_sanitizes_provider_errors(self):
+        class Engine:
+            async def translate(self, image, config):
+                raise RuntimeError("SECRET-PROVIDER-KEY")
+        with TestClient(create_core(Engine())) as client:
+            response = client.post("/translate/with-form/image",
+                                   files={"image": ("page.png", png())})
+            self.assertEqual(response.status_code, 502)
+            self.assertNotIn("SECRET-PROVIDER-KEY", response.text)
+
     def client(self, handler=None, profile="basic"):
         if handler is None:
             handler = lambda request: httpx.Response(200, content=png(), headers={"content-type": "image/png"})
