@@ -10,6 +10,7 @@ RUN python -c "from pathlib import Path;p=Path('requirements.txt');s=p.read_text
 RUN pip install --no-cache-dir torch==2.14.1 torchvision==0.29.1 --index-url https://download.pytorch.org/whl/cpu && pip install --no-cache-dir -r requirements.txt
 COPY worker.py /mangalate/worker.py
 COPY core.py /mangalate/core.py
+COPY engine_compat.py /mangalate/engine_compat.py
 COPY profiles /mangalate/profiles
 COPY gateway.py /mangalate/gateway.py
 COPY colab/batch.py /mangalate/batch.py
@@ -27,6 +28,7 @@ RUN git clone https://github.com/zyddnys/manga-image-translator.git . && git che
 RUN python -c "from pathlib import Path;p=Path('requirements.txt');s=p.read_text();p.write_text('\n'.join(x for x in s.splitlines() if not x.startswith(('torch==','torchvision=='))).replace('@fix/python313-cython3','@3ca3d8f0cbd9701f4a765f97fbad43f9b2fe80a6'))" && pip install --no-cache-dir -r requirements.txt
 COPY worker.py /mangalate/worker.py
 COPY core.py /mangalate/core.py
+COPY engine_compat.py /mangalate/engine_compat.py
 COPY profiles /mangalate/profiles
 COPY gateway.py /mangalate/gateway.py
 COPY colab/batch.py /mangalate/batch.py
@@ -42,6 +44,7 @@ RUN git clone https://github.com/zyddnys/manga-image-translator.git . && git che
 RUN sed -i 's/@fix\/python313-cython3/@3ca3d8f0cbd9701f4a765f97fbad43f9b2fe80a6/' requirements.txt && pip install --no-cache-dir -r requirements.txt
 COPY worker.py /mangalate/worker.py
 COPY core.py /mangalate/core.py
+COPY engine_compat.py /mangalate/engine_compat.py
 COPY profiles /mangalate/profiles
 COPY gateway.py /mangalate/gateway.py
 COPY colab/batch.py /mangalate/batch.py

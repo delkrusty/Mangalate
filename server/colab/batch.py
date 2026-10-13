@@ -51,6 +51,8 @@ def contextual_prompt(history, glossary):
 
 
 async def run(args):
+    from engine_compat import apply_compatibility
+    apply_compatibility()
     from manga_translator import MangaTranslator, Config
     import yaml
     output = args.output.resolve()

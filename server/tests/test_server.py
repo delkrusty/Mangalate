@@ -22,6 +22,8 @@ from gateway import create_app, profile_config, inspect_result
 from setup import configure
 from hardware import detect
 from core import create_core
+from engine_compat import translate_nllb_batch
+from contextlib import nullcontext
 
 spec = importlib.util.spec_from_file_location("batch", ROOT / "colab/batch.py")
 batch = importlib.util.module_from_spec(spec)
@@ -41,9 +43,33 @@ class ServerTest(unittest.TestCase):
                 if int(params["kernel_size"]) != 3:
                     raise ValueError("Wrong kernel")
         upstream = SimpleNamespace(MangaTranslator=Engine, Config=dict)
-        with patch.dict(sys.modules, {"manga_translator": upstream}):
+        with patch.dict(sys.modules, {"manga_translator": upstream}), \
+             patch("engine_compat.apply_compatibility"):
             with TestClient(create_core()) as client:
                 self.assertEqual(client.get("/healthz").status_code, 200)
+
+    def test_nllb_uses_current_language_token_api_and_rejects_empty_results(self):
+        class Tokenizer:
+            unk_token_id = 0
+            def __call__(self, *args, **kwargs):
+                return {}
+            def convert_tokens_to_ids(self, code):
+                return 7 if code == "por_Latn" else 0
+            def batch_decode(self, *args, **kwargs):
+                return ["Olá mundo!"]
+        class Model:
+            def generate(self, **kwargs):
+                self.target = kwargs["forced_bos_token_id"]
+                return [[1, 2]]
+        engine = SimpleNamespace(tokenizer=Tokenizer(), model=Model(), device="cpu")
+        with patch.dict(sys.modules, {"torch": SimpleNamespace(no_grad=nullcontext)}):
+            self.assertEqual(translate_nllb_batch(engine, "eng_Latn", "por_Latn", ["Hello world!"]), ["Olá mundo!"])
+            self.assertEqual(engine.model.target, 7)
+            with self.assertRaises(ValueError):
+                translate_nllb_batch(engine, "eng_Latn", "invalid", ["Hello world!"])
+            engine.tokenizer.batch_decode = lambda *args, **kwargs: [""]
+            with self.assertRaises(ValueError):
+                translate_nllb_batch(engine, "eng_Latn", "por_Latn", ["Hello world!"])
 
     def test_direct_engine_returns_png_without_internal_rpc(self):
         class Engine:

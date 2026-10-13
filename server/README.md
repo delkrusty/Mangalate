@@ -194,4 +194,6 @@ As versões do upstream e do pydensecrf estão fixadas no Docker/Colab para evit
 
 O motor Docker chama `MangaTranslator` diretamente em um serviço privado. Não usa o despachante HTTP/pickle experimental do upstream, nem exige que você descubra uma terceira chave interna. Somente o gateway autenticado pode ser publicado na rede; mantenha os serviços do motor sem portas públicas.
 
+O adaptador `engine_compat.py` corrige a chamada do token de idioma NLLB, o código de coreano e o uso do cache; ele não ignora traduções vazias como se fossem sucesso. Essa adaptação do motor tem identificação GPL-3.0, preservando a [licença do upstream](https://raw.githubusercontent.com/zyddnys/manga-image-translator/d6de6ab62a7be6afc0d07a3184149cdefbcd32f2/LICENSE); não altera a licença do aplicativo Android.
+
 O backend upstream é GPL-3.0 ([licença](https://raw.githubusercontent.com/zyddnys/manga-image-translator/d6de6ab62a7be6afc0d07a3184149cdefbcd32f2/LICENSE)); modelos e fontes têm licenças próprias. Preserve os avisos e revise permissões antes de distribuir um produto comercial. Use somente capítulos próprios/autorizados. “Premium/BYOK” significa infraestrutura/modelo do próprio usuário, não direito de uso irrestrito de qualquer modelo.

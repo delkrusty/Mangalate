@@ -17,6 +17,8 @@ def create_core(engine=None, config_factory=None):
     async def lifespan(app):
         nonlocal engine, config_factory
         if engine is None:
+            from engine_compat import apply_compatibility
+            apply_compatibility()
             from manga_translator import MangaTranslator, Config
             gpu = os.environ.get("MANGALATE_USE_GPU", "false").lower() == "true"
             limited = gpu and os.environ.get("MANGALATE_ACCELERATOR") == "amd-rocm"

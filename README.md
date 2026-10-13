@@ -88,4 +88,4 @@ O GitHub Actions compila a cada push em `main` e publica o APK em Releases. Para
 - Ícones: Material Symbols (Apache 2.0).
 - Padrões de divisão silábica: [DivSilab/LibreOffice](https://github.com/LibreOffice/dictionaries/tree/master/pt_BR), Raimundo Santos Moura. Arquivo original sem modificações, sob MPL; créditos e licença distribuídos em `app/src/main/assets/lettering/`.
 
-O aplicativo e os arquivos próprios mantêm a licença Apache 2.0, ver [LICENSE](LICENSE). O motor separado inclui manga-image-translator sob GPL-3.0 e conserva seu código e licença em `/opt/manga-image-translator` nas imagens Docker. Modelos baixados têm licenças próprias; o NLLB Básico exige atenção ao uso não comercial, como explicado no manual do servidor.
+O aplicativo e os arquivos próprios mantêm a licença Apache 2.0, ver [LICENSE](LICENSE), exceto a adaptação `server/engine_compat.py`, identificada como GPL-3.0. O motor separado inclui manga-image-translator sob GPL-3.0 e conserva seu código e licença em `/app` nas imagens Docker. Modelos baixados têm licenças próprias; o NLLB Básico exige atenção ao uso não comercial, como explicado no manual do servidor.
