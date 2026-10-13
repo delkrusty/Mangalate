@@ -1,0 +1,7 @@
+FROM python:3.13-slim
+WORKDIR /mangalate
+COPY requirements-gateway.txt .
+RUN pip install --no-cache-dir -r requirements-gateway.txt numpy==2.5.4
+COPY gateway.py .
+COPY profiles profiles
+CMD ["python", "gateway.py"]

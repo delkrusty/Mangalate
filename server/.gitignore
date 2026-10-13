@@ -1,0 +1,4 @@
+.env
+secrets/
+review/
+__pycache__/

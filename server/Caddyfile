@@ -1,20 +1,14 @@
 {
 	admin off
 }
-
-:5003 {
+{$MANGALATE_DOMAIN} {
 	request_body {
 		max_size 40MB
 	}
-
-	# O app envia a chave no cabeçalho X-Mangalate-Key.
-	@semChave not header X-Mangalate-Key {$MANGALATE_KEY}
-	respond @semChave "Chave do Mangalate inválida" 401
-
-	reverse_proxy translator:8001 {
+	reverse_proxy gateway:5003 {
 		transport http {
-			read_timeout 8m
-			write_timeout 8m
+			read_timeout 20m
+			write_timeout 20m
 		}
 	}
 }

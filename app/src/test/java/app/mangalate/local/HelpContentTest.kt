@@ -10,7 +10,7 @@ class HelpContentTest {
     @Test
     fun `manual covers use translation offline and troubleshooting`() {
         val content = MangalateGuides.help.joinToString(" ") { it.title + " " + it.text }
-        for (topic in listOf("Gemini", "offline", "balão", "biblioteca", "chave", "Downloads", "backup")) {
+        for (topic in listOf("BYOK", "Docker", "offline", "balão", "biblioteca", "chave", "Downloads", "backup")) {
             assertTrue(content.contains(topic, ignoreCase = true), "Missing help topic $topic")
         }
     }

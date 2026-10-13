@@ -87,6 +87,6 @@ jobs:
           fi
           gh release create "$TAG" dist/*.apk \
             --target "$GITHUB_SHA" \
-            --title "Mangalate 0.5.1 (build ${{ github.run_number }})" \
-            --notes "Base restaurada da 0.5.0, mantendo sua limpeza e diagramação sem alterações. DeepL reincluído com chave API Free/Pro, botão Colar e teste real de tradução. Preparação dos idiomas offline e teste de OCR no aplicativo. Preservação dos componentes de inicialização do ML Kit no APK minificado; acesso serializado aos clientes locais. Falhas de tradução não são mais ocultadas como texto original. Cache renovado somente para No celular e DeepL; Gemini e servidor mantidos. APK gerado a partir de ${GITHUB_SHA::7}. Baixe **Mangalate-arm64-v8a.apk** (celulares atuais) ou **Mangalate-universal.apk**. Chaves pessoais não são incluídas no APK." \
+            --title "Mangalate 0.5.2 (build ${{ github.run_number }})" \
+            --notes "Foco em tradução offline e servidor. Gemini e DeepL diretos saem da seleção principal; limpeza local da 0.5.0 preservada. Docker com instalação guiada, caminho da chave Mangalate e perfis Básico/BYOK. BYOK usa servidor e API do próprio usuário, sem cobrança ou comissão Mangalate. Colab revisado para tradução interativa de capítulos, exportando CBZ e pacote de revisão sem túnel/keepalive. O acabamento automático exige revisão visual; não há garantia de perfeição de scan humano. APK de ${GITHUB_SHA::7}. Baixe **Mangalate-arm64-v8a.apk** para celulares atuais ou **Mangalate-universal.apk**." \
             "${release_flags[@]}"

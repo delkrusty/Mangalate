@@ -1,0 +1,6 @@
+.env
+secrets
+review
+colab
+tests
+__pycache__

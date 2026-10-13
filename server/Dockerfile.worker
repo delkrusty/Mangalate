@@ -1,0 +1,29 @@
+ARG TORCH_IMAGE=pytorch/pytorch:2.14.1-cuda12.6-cudnn9-runtime
+FROM python:3.13-slim AS cpu
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends git g++ ffmpeg libsm6 libxext6 libgl1 libglib2.0-0 libvulkan1 fonts-dejavu-core && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+ARG UPSTREAM_REV=d6de6ab62a7be6afc0d07a3184149cdefbcd32f2
+RUN git clone https://github.com/zyddnys/manga-image-translator.git . && git checkout "$UPSTREAM_REV"
+RUN python -c "from pathlib import Path;p=Path('requirements.txt');s=p.read_text();p.write_text('\n'.join(x for x in s.splitlines() if not x.startswith(('torch==','torchvision=='))).replace('@fix/python313-cython3','@3ca3d8f0cbd9701f4a765f97fbad43f9b2fe80a6'))"
+RUN pip install --no-cache-dir torch==2.14.1 torchvision==0.29.1 --index-url https://download.pytorch.org/whl/cpu && pip install --no-cache-dir -r requirements.txt
+COPY worker.py /mangalate/worker.py
+COPY profiles /mangalate/profiles
+COPY gateway.py /mangalate/gateway.py
+COPY colab/batch.py /mangalate/batch.py
+ENV PYTHONPATH=/app
+ENTRYPOINT ["python", "/mangalate/worker.py"]
+
+FROM ${TORCH_IMAGE} AS gpu
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends git g++ ffmpeg libsm6 libxext6 libgl1 libglib2.0-0 libvulkan1 fonts-dejavu-core && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+ARG UPSTREAM_REV=d6de6ab62a7be6afc0d07a3184149cdefbcd32f2
+RUN git clone https://github.com/zyddnys/manga-image-translator.git . && git checkout "$UPSTREAM_REV"
+RUN sed -i 's/@fix\/python313-cython3/@3ca3d8f0cbd9701f4a765f97fbad43f9b2fe80a6/' requirements.txt && pip install --no-cache-dir -r requirements.txt
+COPY worker.py /mangalate/worker.py
+COPY profiles /mangalate/profiles
+COPY gateway.py /mangalate/gateway.py
+COPY colab/batch.py /mangalate/batch.py
+ENV PYTHONPATH=/app
+ENTRYPOINT ["python", "/mangalate/worker.py"]

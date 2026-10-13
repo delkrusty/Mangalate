@@ -1,0 +1,9 @@
+{
+  "detector": {"detector": "ctd", "detection_size": 2048, "text_threshold": 0.5, "box_threshold": 0.7, "unclip_ratio": 2.0},
+  "ocr": {"ocr": "48px", "min_text_length": 1, "ignore_bubble": 8},
+  "inpainter": {"inpainter": "lama_large", "inpainting_size": 2048, "inpainting_precision": "fp32"},
+  "translator": {"translator": "custom_openai", "target_lang": "PTB", "gpt_config": "/mangalate/profiles/scan-prompt.yaml", "enable_post_translation_check": true, "post_check_max_retry_attempts": 2},
+  "render": {"renderer": "default", "alignment": "center", "direction": "horizontal", "uppercase": false, "no_hyphenation": true, "rtl": true},
+  "mask_dilation_offset": 12,
+  "kernel_size": 3
+}

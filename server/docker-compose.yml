@@ -1,34 +1,30 @@
-# Servidor de tradução do Mangalate
-#
-#   CPU:  docker compose --profile cpu up -d
-#   GPU:  docker compose --profile gpu up -d      (NVIDIA + nvidia-container-toolkit)
-#
-# O app conversa com a porta 5003 (Caddy), que exige a chave MANGALATE_KEY
-# e repassa para o manga-image-translator.
-
-x-translator: &translator
-  image: zyddnys/manga-image-translator:main
-  entrypoint: python
-  ipc: host
+name: mangalate
+x-worker: &worker
   restart: unless-stopped
   env_file: .env
+  environment:
+    MANGALATE_API_KEY_FILE: /run/secrets/provider_key
+  secrets: [provider_key]
   volumes:
     - models:/app/models
-  expose:
-    - "8001"
+    - huggingface:/root/.cache/huggingface
+  expose: ["8001"]
+  networks:
+    default:
+      aliases: [translator]
 
 services:
   translator-cpu:
-    <<: *translator
-    profiles: ["cpu"]
-    command: server/main.py --start-instance --host=0.0.0.0 --port=8001
-    networks: { default: { aliases: [translator] } }
-
+    <<: *worker
+    profiles: [cpu]
+    build: {context: ., dockerfile: Dockerfile.worker, target: cpu}
   translator-gpu:
-    <<: *translator
-    profiles: ["gpu"]
-    command: server/main.py --start-instance --host=0.0.0.0 --port=8001 --use-gpu
-    networks: { default: { aliases: [translator] } }
+    <<: *worker
+    profiles: [gpu]
+    build: {context: ., dockerfile: Dockerfile.worker, target: gpu}
+    environment:
+      MANGALATE_API_KEY_FILE: /run/secrets/provider_key
+      MANGALATE_USE_GPU: "true"
     deploy:
       resources:
         reservations:
@@ -36,16 +32,27 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-
   gateway:
-    image: caddy:2-alpine
-    profiles: ["cpu", "gpu"]
+    profiles: [cpu, gpu]
+    build: {context: ., dockerfile: Dockerfile.gateway}
     restart: unless-stopped
     env_file: .env
-    ports:
-      - "5003:5003"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    environment:
+      MANGALATE_KEY_FILE: /run/secrets/mangalate_key
+      MANGALATE_UPSTREAM: http://translator:8001
+    secrets: [mangalate_key]
+    ports: ["${MANGALATE_BIND:-127.0.0.1}:5003:5003"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:5003/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
+secrets:
+  mangalate_key:
+    file: ${MANGALATE_KEY_FILE:-./secrets/mangalate_key.txt}
+  provider_key:
+    file: ${MANGALATE_API_KEY_FILE:-./secrets/provider_key.txt}
 volumes:
   models:
+  huggingface:

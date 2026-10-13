@@ -1,0 +1,9 @@
+{
+  "detector": {"detector": "default", "detection_size": 1536, "text_threshold": 0.5, "box_threshold": 0.7, "unclip_ratio": 2.0},
+  "ocr": {"ocr": "48px", "min_text_length": 1, "ignore_bubble": 8},
+  "inpainter": {"inpainter": "lama_mpe", "inpainting_size": 1024, "inpainting_precision": "fp32"},
+  "translator": {"translator": "nllb", "target_lang": "PTB", "enable_post_translation_check": true, "post_check_max_retry_attempts": 1},
+  "render": {"renderer": "default", "alignment": "center", "direction": "horizontal", "uppercase": false, "no_hyphenation": true, "rtl": true},
+  "mask_dilation_offset": 12,
+  "kernel_size": 3
+}

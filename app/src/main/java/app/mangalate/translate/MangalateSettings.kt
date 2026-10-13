@@ -29,7 +29,8 @@ enum class TranslateMode(val label: String, val badge: String, val description: 
     ;
 
     companion object {
-        fun fromName(name: String?) = entries.firstOrNull { it.name == name } ?: ON_DEVICE
+        val available = listOf(ON_DEVICE, SERVER)
+        fun fromName(name: String?) = available.firstOrNull { it.name == name } ?: ON_DEVICE
     }
 }
 
@@ -87,7 +88,7 @@ enum class TranslatorEngine(
     ;
 
     companion object {
-        fun fromId(id: String?) = entries.firstOrNull { it.id == id } ?: DEEPSEEK
+        fun fromId(id: String?) = entries.firstOrNull { it.id == id } ?: OFFLINE
     }
 }
 
@@ -128,7 +129,7 @@ data class MangalateSettings(
     val serverUrl: String = "",
     val accessKey: String = "",
     val targetLanguage: TargetLanguage = TargetLanguage.PT_BR,
-    val engine: TranslatorEngine = TranslatorEngine.DEEPSEEK,
+    val engine: TranslatorEngine = TranslatorEngine.OFFLINE,
     val quality: QualityProfile = QualityProfile.HIGH,
     val typeset: TypesetMode = TypesetMode.AUTO,
     val ignoreOutsideBubbles: Boolean = false,
@@ -141,7 +142,7 @@ data class MangalateSettings(
             TranslateMode.ON_DEVICE -> true
             TranslateMode.GEMINI -> geminiKey.isNotBlank()
             TranslateMode.DEEPL -> deeplKey.isNotBlank()
-            TranslateMode.SERVER -> serverUrl.isNotBlank()
+            TranslateMode.SERVER -> serverUrl.isNotBlank() && accessKey.isNotBlank()
         }
 
     /** Resumo curto mostrado no app, ex.: "Japonês → Português (Brasil) · No celular". */
@@ -150,7 +151,7 @@ data class MangalateSettings(
 
     /** Identifica a configuração que afeta o resultado (para o cache). */
     fun cacheSignature(): String = when (mode) {
-        TranslateMode.SERVER -> "server|" + toServerConfig()
+        TranslateMode.SERVER -> "server-scan-v1|" + toServerConfig()
         else -> listOf(
             if (mode == TranslateMode.ON_DEVICE || mode == TranslateMode.DEEPL) "sdk-translation-v5.1" else "bubble-interior-v5",
             mode.name, sourceLanguage.name, targetLanguage.code,

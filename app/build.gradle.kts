@@ -38,7 +38,7 @@ android {
         applicationId = "app.mangalate"
 
         versionCode = System.getenv("MANGALATE_VERSION_CODE")?.toIntOrNull() ?: 1
-        versionName = "0.5.1"
+        versionName = "0.5.2"
 
         buildConfigField("boolean", "TELEMETRY_INCLUDED", "${Config.includeTelemetry}")
         buildConfigField("boolean", "UPDATER_ENABLED", "${Config.enableUpdater}")

@@ -86,7 +86,7 @@ fun MangalateQuickSetupDialog(
                     }
                 }
                 Text("Qualidade", style = MaterialTheme.typography.labelLarge)
-                listOf(TranslateMode.ON_DEVICE, TranslateMode.GEMINI).forEach { mode ->
+                TranslateMode.available.forEach { mode ->
                     val selected = settings.mode == mode
                     Surface(
                         shape = RoundedCornerShape(16.dp),
@@ -107,14 +107,14 @@ fun MangalateQuickSetupDialog(
                             )
                             Column {
                                 Text(
-                                    if (mode == TranslateMode.ON_DEVICE) "Grátis, no celular" else "Melhor, com Gemini",
+                                    if (mode == TranslateMode.ON_DEVICE) "Básico, no celular" else "Servidor Básico ou BYOK",
                                     fontWeight = FontWeight.SemiBold,
                                 )
                                 Text(
                                     if (mode == TranslateMode.ON_DEVICE) {
                                         "Pronto para usar. Boa para inglês; razoável para japonês."
                                     } else {
-                                        "Tradução natural com contexto. Precisa de uma chave grátis do Google."
+                                        "Docker no PC ou servidor próprio. Cole endereço e chave Mangalate."
                                     },
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -123,30 +123,26 @@ fun MangalateQuickSetupDialog(
                         }
                     }
                 }
-                if (settings.mode == TranslateMode.GEMINI) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilledTonalButton(onClick = { uriHandler.openUri("https://aistudio.google.com/apikey") }) {
-                            Text("Pegar chave")
-                        }
-                        FilledTonalButton(
-                            onClick = {
-                                val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
-                                    as android.content.ClipboardManager
-                                val text = cm.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()?.trim()
-                                if (!text.isNullOrBlank()) {
-                                    MangalateTranslator.updateSettings(context) { it.copy(geminiKey = text) }
-                                }
-                            },
-                        ) { Text("Colar chave") }
-                    }
+                if (settings.mode == TranslateMode.SERVER) {
                     OutlinedTextField(
-                        value = settings.geminiKey,
-                        onValueChange = { v -> MangalateTranslator.updateSettings(context) { it.copy(geminiKey = v.trim()) } },
-                        label = { Text("Chave do Gemini") },
+                        value = settings.serverUrl,
+                        onValueChange = { v -> MangalateTranslator.updateSettings(context) { it.copy(serverUrl = v.trim()) } },
+                        label = { Text("Endereço do servidor (http://IP-DO-PC:5003)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = settings.accessKey,
+                        onValueChange = { v -> MangalateTranslator.updateSettings(context) { it.copy(accessKey = v.trim()) } },
+                        label = { Text("Chave Mangalate") },
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    Text("No PC: python setup.py na pasta server. A chave fica em server/secrets/mangalate_key.txt. A chave da IA fica só no servidor.")
+                    FilledTonalButton(onClick = { uriHandler.openUri("https://github.com/delkrusty/Mangalate/tree/main/server") }) {
+                        Text("Manual Docker e BYOK")
+                    }
                 }
                 Row(
                     modifier = Modifier

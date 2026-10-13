@@ -1,0 +1,17 @@
+# Optional HTTPS for a VPS YOU control. Requires DNS and a domain.
+services:
+  gateway:
+    ports: !reset []
+  https:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      MANGALATE_DOMAIN: ${MANGALATE_DOMAIN:?Defina MANGALATE_DOMAIN no .env}
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+volumes:
+  caddy_data:
+  caddy_config:

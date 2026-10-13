@@ -77,7 +77,7 @@ object MangalateTranslator {
         TranslateMode.ON_DEVICE to Semaphore(2),
         TranslateMode.GEMINI to Semaphore(3),
         TranslateMode.DEEPL to Semaphore(3),
-        TranslateMode.SERVER to Semaphore(2),
+        TranslateMode.SERVER to Semaphore(1),
     )
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -89,8 +89,8 @@ object MangalateTranslator {
         OkHttpClient.Builder()
             .connectTimeout(20, TimeUnit.SECONDS)
             .writeTimeout(90, TimeUnit.SECONDS)
-            .readTimeout(6, TimeUnit.MINUTES)
-            .callTimeout(8, TimeUnit.MINUTES)
+            .readTimeout(15, TimeUnit.MINUTES)
+            .callTimeout(20, TimeUnit.MINUTES)
             .retryOnConnectionFailure(true)
             .build()
     }

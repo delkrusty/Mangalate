@@ -132,21 +132,13 @@ class SettingsMangalateScreen : Screen() {
                     )
                 }
                 item { ModeSection(settings = settings, onChange = ::update) }
-                if (settings.mode == TranslateMode.GEMINI) {
-                    item { GeminiSection(settings = settings, onChange = ::update) }
-                }
-                if (settings.mode == TranslateMode.DEEPL) {
-                    item { DeepLSection(settings = settings, onChange = ::update) }
-                }
-                if (settings.mode == TranslateMode.ON_DEVICE || settings.mode == TranslateMode.DEEPL) {
+                if (settings.mode == TranslateMode.ON_DEVICE) {
                     item { LocalPreparationSection(settings) }
                 }
                 item { OfflineSection(settings = settings, onChange = ::update) }
                 item { LanguageSection(settings = settings, onChange = ::update) }
                 if (settings.mode == TranslateMode.SERVER) {
                     item { ServerSection(settings = settings, onChange = ::update) }
-                    item { EngineSection(settings = settings, onChange = ::update) }
-                    item { QualitySection(settings = settings, onChange = ::update) }
                 }
                 item {
                     AdvancedToggle(expanded = advanced, onClick = { advanced = !advanced })
@@ -330,7 +322,7 @@ private fun ServerSection(
                 test = TestState.Idle
                 onChange { s -> s.copy(accessKey = it.trim()) }
             },
-            label = { Text("Chave de acesso (opcional)") },
+            label = { Text("Chave Mangalate (obrigatória)") },
             singleLine = true,
             visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
             trailingIcon = {
@@ -339,12 +331,24 @@ private fun ServerSection(
             shape = RoundedCornerShape(16.dp),
             modifier = Modifier.fillMaxWidth(),
         )
+        Text(
+            "No computador, rode python setup.py dentro da pasta server. Ele mostra o caminho " +
+                "server/secrets/mangalate_key.txt. Copie o conteúdo desse arquivo aqui. " +
+                "Não coloque a chave da API de IA no celular.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Text(
+            "Básico usa tradução local no servidor. BYOK usa a API que você configurou nele; " +
+                "custos de servidor e API são pagos diretamente aos fornecedores. " +
+                "O perfil de qualidade é definido no servidor, não nestas opções do app.",
+            style = MaterialTheme.typography.bodySmall,
+        )
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Button(
-                enabled = url.isNotBlank() && test != TestState.Running,
+                enabled = url.isNotBlank() && key.isNotBlank() && test != TestState.Running,
                 onClick = {
                     test = TestState.Running
                     scope.launch {
@@ -665,7 +669,7 @@ private fun ModeSection(
         subtitle = "Pode trocar quando quiser",
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            TranslateMode.entries.forEach { mode ->
+            TranslateMode.available.forEach { mode ->
                 ChoiceCard(
                     selected = settings.mode == mode,
                     title = mode.label,
