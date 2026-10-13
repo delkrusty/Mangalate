@@ -315,10 +315,18 @@ object MangalateTranslator {
                 .use { response ->
                     val text = response.body.string()
                     if (response.code == 401 || response.code == 403) {
-                        throw IOException("Chave de acesso recusada (${response.code})")
+                        throw IOException("Chave Mangalate recusada. Copie o conteúdo de server/secrets/mangalate_key.txt, não a chave da API.")
                     }
-                    if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
-                    text.trim().toIntOrNull() ?: 0
+                    if (!response.isSuccessful) {
+                        val help = when (response.code) {
+                            503 -> "O motor ainda está iniciando ou está parado. Aguarde; no computador, confira docker compose logs --tail=80."
+                            429 -> "O servidor está ocupado com uma página. Aguarde e teste novamente."
+                            else -> "O servidor não respondeu como esperado. Confira o endereço e os logs no computador."
+                        }
+                        throw IOException("$help (HTTP ${response.code})")
+                    }
+                    text.trim().toIntOrNull()
+                        ?: throw IOException("Esse endereço não respondeu como servidor Mangalate. Confira a URL e a porta 5003.")
                 }
         }
     }

@@ -83,4 +83,13 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except FileNotFoundError:
+        raise SystemExit("Docker não encontrado. Instale/abra Docker Desktop e confira docker compose version.")
+    except subprocess.CalledProcessError:
+        raise SystemExit("Docker não terminou a instalação. Confira se está aberto, se há espaço em disco e as mensagens acima. Sua configuração foi preservada.")
+    except (ValueError, OSError) as exc:
+        raise SystemExit(f"Não foi possível configurar: {exc}")
+    except KeyboardInterrupt:
+        raise SystemExit("Instalação interrompida. Você pode executar python setup.py novamente.")
