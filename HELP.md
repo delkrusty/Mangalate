@@ -12,7 +12,7 @@ O manual completo está dentro do aplicativo em **Mais › Ajuda do Mangalate**,
 ## Modos de tradução
 
 - **No celular:** OCR, limpeza e tradução no dispositivo. Os modelos dos idiomas são baixados na primeira utilização; depois podem ser usados offline.
-- **Servidor:** envie as páginas para seu Docker no PC ou servidor contratado. Ele pode ser Básico, com modelos locais, ou BYOK, com a API que você paga diretamente. Consulte o [manual do servidor](server/README.md).
+- **Servidor:** envie as páginas para seu Docker no PC ou servidor contratado. Ele traduz com a IA escolhida no instalador: Groq e Gemini grátis, com alternância automática, ou Ollama no próprio computador. Consulte o [manual do servidor](server/README.md).
 
 Gemini e DeepL diretos saíram da seleção. Configurações antigas desses modos passam para No celular. A limpeza local da 0.5.0 foi mantida.
 

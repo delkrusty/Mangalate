@@ -107,7 +107,7 @@ fun MangalateQuickSetupDialog(
                             )
                             Column {
                                 Text(
-                                    if (mode == TranslateMode.ON_DEVICE) "Básico, no celular" else "Servidor Básico ou BYOK",
+                                    if (mode == TranslateMode.ON_DEVICE) "No celular" else "Servidor + IA",
                                     fontWeight = FontWeight.SemiBold,
                                 )
                                 Text(

@@ -19,6 +19,8 @@ def save_secret(path, value):
 
 
 def configure(profile, hardware, bind, api_base="", model="", provider_key="", root=ROOT, providers=None):
+    # "basic" (NLLB) is no longer offered by the menu; it stays accepted for the
+    # keyless CI pipeline check and for installations made before 0.5.3.
     if profile not in {"basic", "byok"} or hardware not in {"cpu", "gpu", "amd-rocm"}:
         raise ValueError("Perfil/hardware inválidos.")
     if profile == "byok" and providers:
@@ -173,8 +175,9 @@ def configure_one(index, names, providers, ask, secret):
 
 def main():
     print("MANGALATE | instalação guiada")
-    print("Básico: sem API paga. BYOK: servidor e API pagos diretamente por você, sem cobrança Mangalate.")
-    profile = "byok" if input("Perfil [1 Básico / 2 BYOK] (1): ").strip() == "2" else "basic"
+    print("Servidor + IA: este computador lê, apaga e escreve; só o texto das falas vai para a IA que")
+    print("você escolher (Groq e Gemini grátis, ou Ollama no próprio PC). Sem cobrança Mangalate.")
+    profile = "byok"
     found = detect()
     print("Sistema:", found["os"], "| arquitetura:", found["architecture"])
     print("CPU atende qualquer fabricante. AMD/Intel no Windows usam CPU neste pacote.")

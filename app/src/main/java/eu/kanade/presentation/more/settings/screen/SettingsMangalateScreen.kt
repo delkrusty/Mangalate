@@ -338,9 +338,9 @@ private fun ServerSection(
             style = MaterialTheme.typography.bodySmall,
         )
         Text(
-            "Básico usa tradução local no servidor. BYOK usa a API que você configurou nele; " +
-                "custos de servidor e API são pagos diretamente aos fornecedores. " +
-                "O perfil de qualidade é definido no servidor, não nestas opções do app.",
+            "A IA (Groq, Gemini ou Ollama) é escolhida no instalador do servidor; com duas configuradas, " +
+                "uma assume quando a outra atinge o limite grátis. Custos, se houver, são pagos " +
+                "diretamente aos fornecedores.",
             style = MaterialTheme.typography.bodySmall,
         )
         Row(

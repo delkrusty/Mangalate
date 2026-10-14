@@ -203,5 +203,49 @@ class PipelineHookTest(unittest.TestCase):
         self.assertEqual(self.run_merge(0), (["bubble", "art"], []))
 
 
+class DetectionFallbackTest(unittest.TestCase):
+    class Detector(str):
+        @property
+        def value(self):
+            return str(self)
+
+    def config(self, name):
+        import copy
+        detector = SimpleNamespaceCopy(detector=self.Detector(name), detection_size=2048)
+        return SimpleNamespaceCopy(detector=detector)
+
+    def run_detect(self, name, found):
+        import asyncio
+        from engine_compat import detection_fallback
+        calls = []
+        async def detect(self, config, ctx):
+            calls.append((str(config.detector.detector), config.detector.detection_size))
+            return (found.get(str(config.detector.detector), []), "mask", None)
+        result = asyncio.run(detection_fallback(detect)(None, self.config(name), None))
+        return result[0], calls
+
+    def test_ctd_empty_page_retries_with_default_detector(self):
+        lines, calls = self.run_detect("ctd", {"default": ["line"]})
+        self.assertEqual(lines, ["line"])
+        self.assertEqual(calls, [("ctd", 2048), ("default", 1536)])
+
+    def test_ctd_with_text_or_other_detector_runs_once(self):
+        self.assertEqual(self.run_detect("ctd", {"ctd": ["a"]})[1], [("ctd", 2048)])
+        self.assertEqual(self.run_detect("default", {})[1], [("default", 2048)])
+
+    def test_both_empty_keeps_original_result(self):
+        lines, calls = self.run_detect("ctd", {})
+        self.assertEqual((lines, len(calls)), ([], 2))
+
+
+class SimpleNamespaceCopy:
+    def __init__(self, **values):
+        self.__dict__.update(values)
+
+    def model_copy(self, deep=False):
+        import copy
+        return copy.deepcopy(self)
+
+
 if __name__ == "__main__":
     unittest.main()

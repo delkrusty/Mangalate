@@ -23,8 +23,8 @@ enum class TranslateMode(val label: String, val badge: String, val description: 
     ),
     SERVER(
         "Servidor",
-        "Básico/BYOK",
-        "Docker no computador ou servidor próprio na nuvem. O perfil é escolhido no servidor.",
+        "Groq, Gemini ou Ollama",
+        "Docker no computador ou servidor próprio. A IA é escolhida no instalador do servidor.",
     ),
     ;
 

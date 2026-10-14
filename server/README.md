@@ -1,12 +1,12 @@
-# Mangalate: Docker, Colab e BYOK sem complicação
+# Mangalate: servidor + IA sem complicação
 
-Há dois perfis de servidor, não uma assinatura vendida pelo Mangalate. No celular, o aplicativo oferece **No celular** ou **Servidor**; o servidor instalado determina se a tradução é Básica ou BYOK. A chave Mangalate e a chave da IA são coisas diferentes.
+No celular, o aplicativo oferece **No celular** ou **Servidor**. O servidor roda no seu computador: lê o texto, apaga o original e escreve a tradução; só o texto das falas vai para a IA que você escolher. Não é uma assinatura vendida pelo Mangalate. A chave Mangalate e a chave da IA são coisas diferentes.
 
 ## Qual caminho escolher
 
 - **No celular:** prepare os idiomas uma vez no aplicativo; depois traduza offline. A limpeza local continua baseada na 0.5.0.
-- **Docker Básico:** seu PC ou servidor executa OCR, tradução NLLB e reconstrução. Não exige API paga; processamento, energia, hardware e eventual hospedagem são seus. O NLLB tem licença não comercial e ressalvas de uso, portanto este perfil é destinado a uso pessoal não comercial, não a um serviço de tradução vendido ([modelo NLLB](https://huggingface.co/facebook/nllb-200-distilled-600M)).
-- **Docker BYOK:** você contrata a máquina, escolhe uma API Chat Completions compatível e usa sua própria chave. Mangalate não recebe pagamento nem comissão. A chave paga fica no seu servidor.
+- **Docker + IA:** seu PC executa leitura do texto, limpeza e diagramação; a tradução vem da IA escolhida no menu do instalador — Groq e Gemini com cota grátis e alternância automática, OpenRouter, ou Ollama rodando no próprio PC sem internet. Mangalate não recebe pagamento nem comissão. A chave da IA fica no seu servidor. Veja o [guia de IAs](BYOK.md).
+- O antigo perfil **Básico** (NLLB) saiu do instalador na 0.5.3. Instalações feitas antes continuam funcionando até você rodar `setup.py` de novo.
 - **Colab:** envie um capítulo, acompanhe a tradução no notebook e baixe o resultado para ler offline. Não é oferecido como servidor permanente para o celular. As restrições e a disponibilidade de recursos são do Google ([regras oficiais](https://research.google.com/colaboratory/intl/pt-BR/faq.html)).
 
 ## Docker: primeiro uso no Windows
@@ -25,7 +25,7 @@ py setup.py
 
 Se `py` não funcionar, tente `python setup.py`. O assistente pergunta:
 
-1. **Básico ou BYOK:** escolha 1 para começar sem API paga. Para o BYOK com Groq/Gemini grátis e alternância automática, siga o [guia do BYOK](BYOK.md).
+1. **Qual IA vai traduzir:** escolha Groq (1) e depois Gemini (2) como reserva; as chaves são grátis. Passo a passo no [guia de IAs](BYOK.md).
 2. **Hardware:** escolha CPU se não souber. NVIDIA-CUDA exige driver compatível e Container Toolkit ([instalação NVIDIA](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)). AMD-ROCm é experimental e exige Linux compatível; não é um perfil para Windows.
 3. **Celular na mesma rede Wi-Fi:** escolha S para leitura ao vivo na rede local. Não exponha a porta 5003 no roteador.
 4. **Iniciar agora:** escolha S. Ele verifica Docker Compose e executa a instalação.
@@ -147,7 +147,7 @@ Execute da pasta `server`:
 docker compose --profile gpu run --rm -v "$PWD/trabalho:/work" translator-gpu /mangalate/batch.py --input /work/capitulo.cbz --output /work/revisao --profile byok --gpu --glossary /work/glossario.csv
 ```
 
-No PowerShell, substitua o argumento de volume por `"${PWD}/trabalho:/work"`. Sem glossário, remova os dois últimos argumentos. Para Básico, use `--profile basic`, serviço `translator-cpu`, perfil Compose `cpu` e remova `--gpu`.
+No PowerShell, substitua o argumento de volume por `"${PWD}/trabalho:/work"`. Sem glossário, remova os dois últimos argumentos. Sem placa NVIDIA, use o serviço `translator-cpu`, perfil Compose `cpu` e remova `--gpu`.
 
 A saída contém:
 

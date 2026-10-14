@@ -205,6 +205,28 @@ def classify_regions(original_merge):
     return merge
 
 
+def detection_fallback(original_detect):
+    """When CTD finds no text on a page, try the default detector once.
+
+    CTD groups lines of one bubble better, but missed the serif lettering of
+    burst bubbles (episode 65, pages 101/102) that the default detector finds.
+    """
+    async def detect(self, config, ctx):
+        result = await original_detect(self, config, ctx)
+        detector = getattr(config.detector.detector, "value", config.detector.detector)
+        if (result and result[0]) or detector != "ctd":
+            return result
+        retry = config.model_copy(deep=True)
+        retry.detector.detector = type(config.detector.detector)("default")
+        retry.detector.detection_size = 1536
+        second = await original_detect(self, retry, ctx)
+        if second and second[0]:
+            print(f"Detection fallback: ctd=0 default={len(second[0])}", flush=True)
+            return second
+        return result
+    return detect
+
+
 async def refine_mask_consistently(self, config, ctx):
     """Mask every kept region; the art decision was already taken in classify_regions.
 
@@ -311,6 +333,7 @@ def apply_compatibility():
         if not legacy_quality():
             MangaTranslator._run_textline_merge = classify_regions(MangaTranslator._run_textline_merge)
             MangaTranslator._run_mask_refinement = refine_mask_consistently
+            MangaTranslator._run_detection = detection_fallback(MangaTranslator._run_detection)
             from manga_translator.rendering import text_render
             from quality import compact_symbols, whole_word_breaker
             text_render.compact_special_symbols = compact_symbols(text_render.compact_special_symbols)

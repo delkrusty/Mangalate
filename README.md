@@ -23,12 +23,14 @@ Não precisa de servidor, conta nem configuração. Para desligar e ver o origin
 | **No celular** (padrão) | Baixar os modelos dos idiomas na primeira utilização | OCR, tradução e limpeza offline no aparelho; mantém a limpeza local da 0.5.0 |
 | **Servidor** | Docker no seu PC ou servidor contratado, URL e chave Mangalate | OCR, tradução, reconstrução e diagramação executados fora do celular |
 
-### Básico ou BYOK no servidor
+### Servidor + IA
 
-1. Siga o [manual Docker, Colab e BYOK](server/README.md). O assistente `python setup.py` explica as escolhas e gera sua chave Mangalate.
-2. **Básico:** modelos locais no servidor, sem chave de API paga. Confira as licenças para seu uso.
-3. **BYOK:** você contrata sua infraestrutura e leva sua chave de API; o Mangalate só faz a integração, sem cobrança nem comissão. A chave paga fica no servidor, não no celular.
+1. Siga o [manual do servidor](server/README.md). O assistente `python setup.py` gera sua chave Mangalate e mostra um menu de IAs.
+2. **Qual IA:** Groq e Gemini têm cota grátis; configure os dois e um assume sozinho quando o outro atinge o limite. O Ollama roda a IA no próprio computador, sem internet. Passo a passo no [guia de IAs](server/BYOK.md).
+3. O servidor lê o texto, apaga o original e escreve a tradução; só o texto das falas vai para a IA. A chave da IA fica no servidor, não no celular. O Mangalate não cobra nem recebe comissão.
 4. No app, selecione **Servidor**, informe a URL e copie o conteúdo de `server/secrets/mangalate_key.txt`. Toque em **Testar conexão**.
+
+O perfil Básico (tradução NLLB) saiu na 0.5.3: nos testes ele deixava o português com cara de Portugal e perdia falas. Instalações antigas continuam funcionando até você rodar o instalador de novo.
 
 Gemini e DeepL diretos não fazem parte da seleção nesta versão. Quem tinha um modo antigo configurado começa em No celular; o servidor BYOK aceita provedores compatíveis com sua API configurada.
 

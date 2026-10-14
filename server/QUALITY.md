@@ -4,7 +4,7 @@ Este é um protocolo de aceitação e evolução, não um certificado de qualida
 
 ## Produto e responsabilidades
 
-- **Básico:** tradução no celular ou servidor pessoal com modelos locais. Sem cobrança Mangalate. Respeitar a licença não comercial e as limitações do NLLB ([model card](https://huggingface.co/facebook/nllb-200-distilled-600M)).
+- **Básico (removido do instalador na 0.5.3):** tradução no celular ou servidor pessoal com modelos locais. Sem cobrança Mangalate. Respeitar a licença não comercial e as limitações do NLLB ([model card](https://huggingface.co/facebook/nllb-200-distilled-600M)).
 - **BYOK avançado:** servidor e API do próprio usuário, custos diretos aos fornecedores, sem comissão Mangalate. Não é uma assinatura gerenciada ou infraestrutura fornecida por nós.
 - **Edição final:** só após revisão visual e linguística. O pacote automático é uma versão para revisar; não deve ser anunciado como scan humano final.
 

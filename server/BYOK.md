@@ -1,13 +1,14 @@
-# Básico ou BYOK: qual usar e como configurar
+# Servidor + IA: qual IA usar e como configurar
 
 Os limites gratuitos mudam com frequência; confira a página do provedor antes de usar.
 
-## A diferença em uma frase
+## Como funciona
 
-- **Básico:** o seu computador faz tudo — lê o texto, apaga, traduz e escreve. Não precisa de conta em lugar nenhum. A tradução é feita pelo NLLB, que é rápido mas literal e puxa para o português de Portugal ("estás a falar", "preciso de ti").
-- **BYOK** ("traga sua própria chave"): o seu computador continua lendo, apagando e escrevendo. **Só a tradução** é feita por uma IA de texto na internet, usando uma chave que é sua. O resultado fica muito mais natural em português brasileiro, respeita nomes próprios e o jeito de cada personagem.
+O servidor Mangalate roda no seu computador: lê o texto da página, apaga o original e escreve a tradução. **Só a tradução** é feita por uma IA, usando uma chave que é sua — ou pelo Ollama, no próprio computador. O resultado sai em português brasileiro natural, respeitando nomes e o jeito de cada personagem.
 
-O aplicativo no celular é o mesmo nos dois casos. Ele sempre fala com o seu servidor Mangalate, usando a **Chave Mangalate**. A chave da IA fica só no servidor e nunca vai para o celular.
+O aplicativo no celular fala só com o seu servidor, usando a **Chave Mangalate**. A chave da IA fica só no servidor e nunca vai para o celular.
+
+O antigo perfil Básico (tradução NLLB, sem IA) saiu na 0.5.3: nos testes ele usava português de Portugal ("estás a falar", "preciso de ti") e perdia falas.
 
 ## O que é enviado no BYOK
 
@@ -42,8 +43,8 @@ Dentro da pasta `server`:
 py setup.py
 ```
 
-1. **Perfil:** digite `2` (BYOK).
-2. **Hardware e rede:** responda igual ao Básico.
+1. **Hardware:** `1` (CPU) se não souber.
+2. **Celular na mesma rede Wi-Fi:** `s`.
 3. **Substituir a configuração:** `s`.
 4. **Número da IA:** `1` para Groq (ou só Enter).
 5. **Modelo:** aperte **Enter** para usar o recomendado.
@@ -56,7 +57,7 @@ docker compose --profile cpu up --build -d
 python check.py --warmup
 ```
 
-No celular nada muda: o endereço e a **Chave Mangalate** continuam os mesmos. Para voltar ao Básico, rode `py setup.py` de novo e escolha `1`.
+No celular nada muda: o endereço e a **Chave Mangalate** continuam os mesmos. Para trocar de IA ou acrescentar outra, rode `py setup.py` de novo.
 
 ## O que acontece no limite
 
