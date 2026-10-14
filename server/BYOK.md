@@ -1,6 +1,6 @@
 # Básico ou BYOK: qual usar e como configurar
 
-Rascunho para revisão (14/10/2026). Os limites gratuitos mudam com frequência; confira sempre a página do provedor antes de usar.
+Os limites gratuitos mudam com frequência; confira a página do provedor antes de usar.
 
 ## A diferença em uma frase
 
@@ -13,40 +13,28 @@ O aplicativo no celular é o mesmo nos dois casos. Ele sempre fala com o seu ser
 
 Somente o **texto** das falas de cada página, em inglês, junto com as instruções de tradução. As imagens das páginas não saem do seu computador. Cada página é um pedido à IA, então um capítulo de 117 páginas usa cerca de 117 pedidos.
 
-## Onde conseguir uma chave grátis
+## Qual escolher
 
-| Provedor | Grátis? | Quanto dá | Atenção |
+Testado em 14/10/2026 com as mesmas falas (frases de teste, um pedido por provedor):
+
+| | Tempo | Estilo | Limite grátis |
 |---|---|---|---|
-| **Google Gemini (AI Studio)** | Sim, nos modelos Flash e Flash-Lite | Limite diário por modelo; veja a sua cota no AI Studio | No plano gratuito, o Google pode usar o conteúdo enviado para melhorar os produtos dele |
-| **Groq** | Sim, plano Free | Exemplo publicado: 1.000 pedidos por dia por modelo, 30 por minuto | Os limites exatos da sua conta ficam em Settings › Limits |
-| **OpenRouter** (modelos com `:free` no nome) | Sim, sem cartão | **50 pedidos por dia** — não chega a um capítulo inteiro. Sobe para 1.000 por dia depois de uma compra única de US$ 10 em créditos | 20 pedidos por minuto; limite por conta, não por chave |
+| **Groq** (`openai/gpt-oss-120b`) | ~1 s | Natural, um pouco mais neutro | Exemplo publicado: 1.000 pedidos/dia por modelo, 30 por minuto |
+| **Gemini** (`gemini-flash-lite-latest`) | ~4 s | Mais coloquial ("tá", "a gente", "né") | Cota diária por modelo, vista no AI Studio. No plano grátis o Google pode usar o conteúdo para melhorar os produtos dele |
+| **OpenRouter** (modelos `:free`) | varia | varia | **50 pedidos/dia** — não chega a um capítulo. 1.000/dia após comprar US$ 10 em créditos uma vez |
+| **Ollama** (no seu PC) | depende do PC | depende do modelo | Sem limite e sem internet; exige computador forte |
 
-Indicação para começar: **Gemini Flash-Lite** ou **Groq**. Se o limite do dia acabar no meio de um capítulo, as páginas restantes ficam no original e podem ser traduzidas no dia seguinte.
+**Recomendado: Groq e Gemini juntos.** Cada página é um pedido; quando o primeiro atinge o limite grátis, o servidor passa sozinho para o segundo e volta ao primeiro quando ele liberar. A leitura não para.
 
-### Gemini (Google AI Studio)
+## Passo 1 — criar as chaves
 
-1. Entre em [aistudio.google.com](https://aistudio.google.com) com sua conta Google e clique em **Get API key** › **Create API key**.
-2. No instalador, use:
-   - Endpoint: `https://generativelanguage.googleapis.com/v1beta/openai/`
-   - Modelo: `gemini-flash-lite-latest`
-   - Chave: a que você acabou de criar.
+- **Groq:** entre em [console.groq.com/keys](https://console.groq.com/keys) e clique em **Create API Key**.
+- **Gemini:** entre em [aistudio.google.com/apikey](https://aistudio.google.com/apikey) com sua conta Google e clique em **Create API key**.
+- **OpenRouter:** [openrouter.ai/keys](https://openrouter.ai/keys). Copie também o nome de um modelo terminado em `:free`.
 
-### Groq
+Guarde as chaves só para colar no instalador. **Não mande as chaves em conversas, prints ou mensagens.** Se uma vazar, apague-a no site e crie outra.
 
-1. Crie a conta em [console.groq.com](https://console.groq.com) e vá em **API Keys** › **Create API Key**.
-2. No instalador, use:
-   - Endpoint: `https://api.groq.com/openai/v1`
-   - Modelo: um dos listados em **Models** no console (por exemplo `openai/gpt-oss-120b`).
-   - Chave: a que você criou.
-
-### OpenRouter
-
-1. Crie a conta em [openrouter.ai](https://openrouter.ai) e gere uma chave em **Keys**.
-2. No instalador, use:
-   - Endpoint: `https://openrouter.ai/api/v1`
-   - Modelo: um modelo terminado em `:free`, copiado da lista de modelos do site.
-
-## Como ligar o BYOK no servidor
+## Passo 2 — rodar o instalador
 
 Dentro da pasta `server`:
 
@@ -56,24 +44,35 @@ py setup.py
 
 1. **Perfil:** digite `2` (BYOK).
 2. **Hardware e rede:** responda igual ao Básico.
-3. **Endpoint, modelo e chave:** cole os valores do provedor escolhido (tabela acima). A chave fica oculta enquanto você digita e é guardada em `server/secrets/provider_key.txt`.
-4. Inicie e teste uma página antes de abrir um capítulo:
+3. **Qual IA vai traduzir:** digite os números em ordem de preferência. Para Groq e depois Gemini, digite `1,2`.
+4. **Modelo:** aperte **Enter** para usar o recomendado.
+5. **Chave:** cole a chave de cada provedor. Ela não aparece na tela e fica só em `server/secrets/provider_key.txt`.
+6. Inicie e teste uma página antes de abrir um capítulo:
 
 ```powershell
 docker compose --profile cpu up --build -d
 python check.py --warmup
 ```
 
-No celular nada muda: o endereço e a **Chave Mangalate** continuam os mesmos.
+No celular nada muda: o endereço e a **Chave Mangalate** continuam os mesmos. Para voltar ao Básico, rode `py setup.py` de novo e escolha `1`.
 
-Para voltar ao Básico, rode `py setup.py` de novo e escolha `1`.
+## O que acontece no limite
 
-## Grátis e sem internet: IA no próprio computador (em preparação)
+- Um provedor que responde "limite atingido" descansa pelo tempo que ele pedir (normalmente 1 minuto) e a página vai para o próximo.
+- Depois de três limites seguidos, ele descansa 1 hora — é o caso da cota do dia.
+- Chave errada, sem saldo ou modelo inexistente: descansa 1 hora e o próximo assume. O aviso aparece em `docker compose logs`.
+- Se todos estiverem no limite, o celular mostra erro naquela página e ela pode ser traduzida depois.
+- Páginas traduzidas por provedores diferentes podem variar um pouco o estilo.
 
-O [Ollama](https://ollama.com) roda modelos de IA no seu PC, sem conta e sem limite diário, e fala o mesmo "idioma" dos provedores acima. **Ainda não funciona pelo instalador**, porque ele só aceita endereços HTTPS e o Docker precisa enxergar o Ollama. Essa opção está prevista para a próxima versão. Ela exige um computador mais forte: em CPU, cada página pode levar dezenas de segundos.
+## Ollama: grátis e sem internet (experimental)
+
+1. Instale o [Ollama](https://ollama.com) e baixe um modelo, por exemplo `ollama pull qwen3:8b`.
+2. Deixe o Ollama aberto, rode `py setup.py`, escolha BYOK e a opção **Ollama** e digite o nome do modelo.
+
+Ainda não foi testado com um modelo real no Mangalate. Em CPU, cada página pode levar dezenas de segundos.
 
 ## Problemas comuns
 
-- **"Limite atingido" ou páginas que voltam em inglês no meio do capítulo:** a cota grátis do dia acabou. Espere o próximo dia ou troque de provedor.
+- **Páginas voltam com erro no meio do capítulo:** todos os provedores escolhidos estão no limite. Espere ou acrescente outro provedor no instalador.
 - **Chave recusada:** confira se colou a chave da IA no instalador e a **Chave Mangalate** no celular — são coisas diferentes.
-- **Modelo não encontrado:** o nome precisa ser exatamente o que o provedor mostra, incluindo prefixos como `openai/` ou o sufixo `:free`.
+- **Modelo não encontrado:** o nome precisa ser exatamente o do provedor, incluindo prefixos como `openai/` ou o sufixo `:free`.

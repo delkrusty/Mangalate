@@ -25,7 +25,7 @@ py setup.py
 
 Se `py` não funcionar, tente `python setup.py`. O assistente pergunta:
 
-1. **Básico ou BYOK:** escolha 1 para começar sem API paga.
+1. **Básico ou BYOK:** escolha 1 para começar sem API paga. Para o BYOK com Groq/Gemini grátis e alternância automática, siga o [guia do BYOK](BYOK.md).
 2. **Hardware:** escolha CPU se não souber. NVIDIA-CUDA exige driver compatível e Container Toolkit ([instalação NVIDIA](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)). AMD-ROCm é experimental e exige Linux compatível; não é um perfil para Windows.
 3. **Celular na mesma rede Wi-Fi:** escolha S para leitura ao vivo na rede local. Não exponha a porta 5003 no roteador.
 4. **Iniciar agora:** escolha S. Ele verifica Docker Compose e executa a instalação.

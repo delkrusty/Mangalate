@@ -125,12 +125,51 @@ async def run_nllb():
     return [{"provider": "Basico", "model": "nllb", "seconds": seconds, "output": output, "checks": checks(output)}]
 
 
+async def run_rotation():
+    """Groq with a model that does not exist must hand the page to Gemini."""
+    import engine_compat
+    from manga_translator.config import TranslatorConfig
+    from manga_translator.translators.custom_openai import CustomOpenAiTranslator
+    from providers import dump_secret
+    keys = {env: os.environ.get(env, "").strip() for _, env, _, _ in PROVIDERS}
+    if not all(keys.values()):
+        notice("Alternância: não testada", ["Precisa dos dois secrets."])
+        return []
+    secret = Path("/tmp/providers-live.json")
+    secret.write_text(dump_secret([
+        {"name": "groq", "base": PROVIDERS[0][2], "model": "modelo-que-nao-existe", "key": keys["GROQ_API_KEY"]},
+        {"name": "gemini", "base": PROVIDERS[1][2], "model": "gemini-flash-lite-latest", "key": keys["GEMINI_API_KEY"]},
+    ]))
+    os.environ["MANGALATE_API_KEY_FILE"] = str(secret)
+    engine_compat._POOL = None
+    translator = CustomOpenAiTranslator(model="modelo-que-nao-existe", api_base=PROVIDERS[0][2],
+                                        api_key=keys["GROQ_API_KEY"])
+    translator.parse_args(TranslatorConfig(translator="custom_openai", target_lang="PTB",
+                                           gpt_config=str(ROOT / "profiles/scan-prompt.yaml")))
+    started = time.monotonic()
+    try:
+        output = await translator.translate("ENG", "PTB", list(LINES[:3]))
+        pool = engine_compat.provider_pool()
+        resting = sorted(name for name, until in pool.resting.items() if until > pool.clock())
+        notice("Alternância: Groq com modelo inválido → Gemini",
+               [f"{round(time.monotonic() - started, 1)}s · em pausa: {', '.join(resting) or 'nenhum'}"]
+               + [f"{i + 1}. {src} → {dst}" for i, (src, dst) in enumerate(zip(LINES, output))])
+        return [{"rotation": "ok", "resting": resting, "output": output}]
+    except Exception as exc:
+        notice("Alternância falhou", [type(exc).__name__])
+        return [{"rotation": "error", "error": type(exc).__name__}]
+    finally:
+        await translator.client.close()
+        secret.unlink(missing_ok=True)
+
+
 async def main():
     from engine_compat import apply_compatibility
     apply_compatibility()
     report = []
     for provider in PROVIDERS:
         report += await run_provider(*provider) or []
+    report += await run_rotation()
     try:
         report += await run_nllb()
     except Exception as exc:

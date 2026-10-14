@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
 from hardware import detect
+from providers import PRESETS, dump_secret, validate_base
 
 ROOT = Path(__file__).resolve().parent
 
@@ -17,12 +18,19 @@ def save_secret(path, value):
     os.chmod(path, 0o600)
 
 
-def configure(profile, hardware, bind, api_base="", model="", provider_key="", root=ROOT):
+def configure(profile, hardware, bind, api_base="", model="", provider_key="", root=ROOT, providers=None):
     if profile not in {"basic", "byok"} or hardware not in {"cpu", "gpu", "amd-rocm"}:
         raise ValueError("Perfil/hardware inválidos.")
-    if profile == "byok":
-        url = urlparse(api_base)
-        if url.scheme != "https" or not url.netloc or not model or not provider_key:
+    if profile == "byok" and providers:
+        for item in providers:
+            if not validate_base(item["base"]) or not item["model"]:
+                raise ValueError(f"{item['name']}: endereço HTTPS (ou Ollama local) e modelo são obrigatórios.")
+            if not item["key"] and urlparse(item["base"]).hostname not in {"host.docker.internal", "localhost", "127.0.0.1"}:
+                raise ValueError(f"{item['name']}: falta a chave API.")
+        api_base, model = providers[0]["base"], providers[0]["model"]
+        provider_key = dump_secret(providers)
+    elif profile == "byok":
+        if not validate_base(api_base) or not model or not provider_key:
             raise ValueError("BYOK exige endpoint HTTPS, modelo e sua chave API.")
     key_path = root / "secrets/mangalate_key.txt"
     access = key_path.read_text().strip() if key_path.exists() else secrets.token_urlsafe(32)
@@ -44,6 +52,41 @@ def configure(profile, hardware, bind, api_base="", model="", provider_key="", r
     return key_path, hardware
 
 
+def choose_providers(ask=input, secret=getpass.getpass):
+    """BYOK menu: ready-made free providers, in the user's order of preference."""
+    names = list(PRESETS)
+    print("\nQual IA vai traduzir? Só o TEXTO das falas é enviado; as imagens ficam no seu PC.")
+    print("Dá para escolher mais de uma: quando a primeira atinge o limite grátis, a próxima assume.")
+    for number, name in enumerate(names, 1):
+        print(f"  {number} {PRESETS[name]['label']}")
+    print(f"  {len(names) + 1} Outro provedor compatível com OpenAI (endereço e modelo manuais)")
+    picked = ask("Números em ordem de preferência, separados por vírgula (1,2): ").strip() or "1,2"
+    providers = []
+    for part in picked.split(","):
+        part = part.strip()
+        if not part.isdigit() or not 1 <= int(part) <= len(names) + 1:
+            raise ValueError(f"Opção inválida: {part}")
+        index = int(part) - 1
+        if index == len(names):
+            name = f"outro{len(providers) + 1}"
+            base = ask("Endereço da API (https://...): ").strip()
+            model = ask("Nome do modelo: ").strip()
+        else:
+            name, preset = names[index], PRESETS[names[index]]
+            base = preset["base"]
+            print(f"\n{preset['label']}")
+            if preset["keys_url"]:
+                print(f"  Crie a chave em: {preset['keys_url']}")
+            if name == "ollama":
+                print("  Instale o Ollama (https://ollama.com), rode 'ollama pull NOME' e deixe-o aberto.")
+            default = preset["model"]
+            hint = f" (Enter = {default})" if default else (" (termine em :free)" if name == "openrouter" else "")
+            model = ask(f"  Modelo{hint}: ").strip() or default
+        key = "" if name == "ollama" else secret(f"  Chave API de {name} (oculta; fica só no servidor): ").strip()
+        providers.append({"name": name, "base": base, "model": model, "key": key})
+    return providers
+
+
 def main():
     print("MANGALATE | instalação guiada")
     print("Básico: sem API paga. BYOK: servidor e API pagos diretamente por você, sem cobrança Mangalate.")
@@ -61,15 +104,10 @@ def main():
     bind = "0.0.0.0" if input("Celular na mesma rede Wi-Fi? Liberar rede local [s/N]: ").lower() == "s" else "127.0.0.1"
     if bind == "0.0.0.0":
         print("Use somente rede confiável; NÃO abra a porta 5003 no roteador/internet.")
-    base = model = key = ""
-    if profile == "byok":
-        print("Requer API Chat Completions compatível (max_tokens/temperature/top_p). Limite gastos na conta do provedor.")
-        base = input("Endpoint HTTPS (ex.: https://api.deepseek.com/v1): ").strip()
-        model = input("Nome EXATO do modelo fornecido pelo provedor: ").strip()
-        key = getpass.getpass("Sua chave API (oculta; nunca será enviada ao app): ").strip()
+    providers = choose_providers() if profile == "byok" else None
     if (ROOT / ".env").exists() and input("Já existe configuração. Substituir .env? [s/N]: ").lower() != "s":
         return
-    path, hardware = configure(profile, hardware, bind, base, model, key)
+    path, hardware = configure(profile, hardware, bind, root=ROOT, providers=providers)
     print("\nArquivo da chave Mangalate:", path)
     print("No app cole o conteúdo desse arquivo em Chave Mangalate, NÃO a chave da API.")
     print("Essa senha é privada. Não compartilhe prints dela.")

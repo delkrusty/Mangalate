@@ -1,0 +1,152 @@
+"""BYOK providers: ready-made presets and automatic rotation between them.
+
+The provider secret (secrets/provider_key.txt, mounted at
+/run/secrets/provider_key) holds either a plain API key, for a single provider
+configured through CUSTOM_OPENAI_API_BASE/CUSTOM_OPENAI_MODEL, or a JSON list
+written by setup.py:
+
+    {"providers": [{"name": "groq", "base": "...", "model": "...", "key": "..."}, ...]}
+
+With several providers, a page goes to the first one that is not resting.  A
+provider that answers "limit reached" rests for the time it asks (or a minute);
+after three limits in a row it rests for an hour, which covers daily quotas.
+Wrong key or model rests it for an hour too, so reading continues on the next
+provider.  Keys never leave the server and are never logged.
+"""
+import json
+import time
+from urllib.parse import urlparse
+
+PRESETS = {
+    "groq": {
+        "label": "Groq (grátis, mais rápido)",
+        "base": "https://api.groq.com/openai/v1",
+        "model": "openai/gpt-oss-120b",
+        "keys_url": "https://console.groq.com/keys",
+    },
+    "gemini": {
+        "label": "Google Gemini (grátis, mais coloquial)",
+        "base": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "model": "gemini-flash-lite-latest",
+        "keys_url": "https://aistudio.google.com/apikey",
+    },
+    "openrouter": {
+        "label": "OpenRouter (modelos :free, 50 páginas por dia sem créditos)",
+        "base": "https://openrouter.ai/api/v1",
+        "model": "",
+        "keys_url": "https://openrouter.ai/keys",
+    },
+    "ollama": {
+        "label": "Ollama no seu computador (grátis, sem internet, exige PC forte)",
+        "base": "http://host.docker.internal:11434/v1",
+        "model": "",
+        "keys_url": "",
+    },
+}
+LOCAL_HOSTS = {"host.docker.internal", "localhost", "127.0.0.1"}
+SHORT_REST = 60
+LONG_REST = 3600
+
+
+def validate_base(url):
+    """HTTPS for remote providers; plain HTTP only for a model on this computer."""
+    parsed = urlparse(url)
+    if not parsed.netloc:
+        return False
+    if parsed.scheme == "https":
+        return True
+    return parsed.scheme == "http" and parsed.hostname in LOCAL_HOSTS
+
+
+def parse_secret(text):
+    """Return the provider list from the secret, or None for a plain single key."""
+    text = (text or "").strip()
+    if not text.startswith("{"):
+        return None
+    data = json.loads(text)
+    providers = data.get("providers") if isinstance(data, dict) else None
+    if not isinstance(providers, list) or not providers:
+        raise ValueError("Lista de provedores vazia.")
+    cleaned = []
+    for item in providers:
+        name, base, model = (str(item.get(k, "")).strip() for k in ("name", "base", "model"))
+        key = str(item.get("key", "")).strip()
+        if not name or not model or not validate_base(base):
+            raise ValueError("Provedor incompleto: confira nome, endereço e modelo.")
+        if not key and urlparse(base).hostname not in LOCAL_HOSTS:
+            raise ValueError(f"Provedor {name} sem chave.")
+        cleaned.append({"name": name, "base": base, "model": model, "key": key or "ollama"})
+    return cleaned
+
+
+def dump_secret(providers):
+    return json.dumps({"providers": providers}, ensure_ascii=False)
+
+
+class AllProvidersResting(RuntimeError):
+    """Every configured provider is at its limit or misconfigured."""
+
+    def __init__(self, seconds):
+        super().__init__(f"Todos os provedores estão no limite; tente em {max(1, round(seconds / 60))} min.")
+        self.seconds = seconds
+
+
+def classify(exc):
+    """'limit', 'config' or 'retry' (try the next provider)."""
+    status = getattr(exc, "status_code", None)
+    if status == 429:
+        return "limit"
+    if status in (401, 402, 403, 404):
+        return "config"
+    return "retry"
+
+
+def retry_after(exc):
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None) or {}
+    try:
+        return max(1.0, float(headers.get("retry-after")))
+    except (TypeError, ValueError):
+        return None
+
+
+class ProviderPool:
+    def __init__(self, providers, clock=time.monotonic, log=print):
+        self.providers = list(providers)
+        self.clock = clock
+        self.log = log
+        self.resting = {}
+        self.strikes = {}
+
+    def available(self):
+        now = self.clock()
+        return [p for p in self.providers if self.resting.get(p["name"], 0) <= now]
+
+    def rest(self, name, seconds, reason):
+        self.resting[name] = self.clock() + seconds
+        self.log(f"BYOK: {name} em pausa por {round(seconds)} s ({reason}); usando o próximo provedor.")
+
+    def failed(self, provider, exc):
+        name, kind = provider["name"], classify(exc)
+        if kind == "limit":
+            self.strikes[name] = self.strikes.get(name, 0) + 1
+            seconds = LONG_REST if self.strikes[name] >= 3 else (retry_after(exc) or SHORT_REST)
+            self.rest(name, seconds, "limite atingido")
+        elif kind == "config":
+            self.rest(name, LONG_REST, "chave, saldo ou modelo recusado")
+        else:
+            self.rest(name, SHORT_REST, type(exc).__name__)
+
+    async def run(self, attempt):
+        """Call attempt(provider) on each available provider until one succeeds."""
+        for provider in self.available():
+            try:
+                result = await attempt(provider)
+            except Exception as exc:  # provider bodies are never logged
+                self.failed(provider, exc)
+                continue
+            self.strikes[provider["name"]] = 0
+            return result
+        now = self.clock()
+        wait = min((t - now for t in self.resting.values() if t > now), default=SHORT_REST)
+        raise AllProvidersResting(wait)

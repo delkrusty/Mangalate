@@ -9,6 +9,8 @@ x-worker: &worker
     - models:/app/models
     - huggingface:/root/.cache/huggingface
   expose: ["8001"]
+  # Lets the BYOK "Ollama no seu computador" option reach the host on Linux too.
+  extra_hosts: ["host.docker.internal:host-gateway"]
   networks:
     default:
       aliases: [translator]

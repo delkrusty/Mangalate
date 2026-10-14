@@ -181,6 +181,9 @@ def create_app(key=None, upstream=None, profile=None, transport=None):
             raise HTTPException(504, "O motor demorou demais. Prepare os modelos com check.py --warmup.")
         except httpx.HTTPError:
             raise HTTPException(503, "Motor indisponível. Confira os logs locais do servidor.")
+        if result.status_code == 424:
+            raise HTTPException(502, "Limite gratuito de todos os provedores atingido. "
+                                     "A leitura continua sozinha quando um deles liberar.")
         if result.status_code != 200:
             # Never echo upstream errors containing provider keys, prompt text or paths.
             raise HTTPException(502, "Motor recusou a tradução. No BYOK, confira chave, modelo, saldo e logs.")

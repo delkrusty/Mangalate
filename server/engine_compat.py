@@ -55,18 +55,67 @@ async def infer_nllb(self, from_lang, to_lang, queries):
     return self._translate_batch(from_lang, to_lang, queries)
 
 
-async def request_byok_translation(self, to_lang, prompt):
+_POOL = None
+
+
+def provider_pool():
+    """Rotation pool when setup.py stored several providers; None for one key."""
+    global _POOL
+    if _POOL is None:
+        import os
+        from pathlib import Path
+        from providers import ProviderPool, parse_secret
+        try:
+            text = Path(os.environ.get("MANGALATE_API_KEY_FILE", "/run/secrets/provider_key")).read_text()
+        except OSError:
+            text = ""
+        providers = parse_secret(text)
+        _POOL = ProviderPool(providers) if providers else False
+        if providers:
+            print("BYOK: alternância entre " + ", ".join(p["name"] for p in providers), flush=True)
+    return _POOL or None
+
+
+def provider_client(pool, provider):
+    import openai
+    clients = pool.__dict__.setdefault("clients", {})
+    if provider["name"] not in clients:
+        clients[provider["name"]] = openai.AsyncOpenAI(api_key=provider["key"], base_url=provider["base"],
+                                                       max_retries=0)
+    return clients[provider["name"]]
+
+
+def parse_marked(content, count):
+    import re
+    markers = list(re.finditer(r"<\|(\d+)\|>", content))
+    if not markers and count == 1 and content:
+        return [content]
+    if [int(marker.group(1)) for marker in markers] != list(range(1, count + 1)):
+        raise ValueError("BYOK returned missing, duplicate or reordered markers")
+    if content[:markers[0].start()].strip():
+        raise ValueError("BYOK returned extra content before translations")
+    translations = []
+    for index, marker in enumerate(markers):
+        end = markers[index + 1].start() if index + 1 < len(markers) else len(content)
+        text = content[marker.end():end].strip()
+        if not text:
+            raise ValueError("BYOK returned an empty bubble")
+        translations.append(text)
+    return translations
+
+
+async def request_byok_translation(self, to_lang, prompt, client=None, model=None):
     messages = [{"role": "system", "content": self.chat_system_template.format(to_lang=to_lang)}]
     sample = self.get_chat_sample(to_lang)
     if sample:
         messages.extend([{"role": "user", "content": sample[0]},
                          {"role": "assistant", "content": sample[1]}])
     messages.append({"role": "user", "content": prompt})
-    model = self.model
+    model = model or self.model
     if not model:
         from manga_translator.translators.keys import CUSTOM_OPENAI_MODEL
         model = CUSTOM_OPENAI_MODEL
-    response = await self.client.chat.completions.create(
+    response = await (client or self.client).chat.completions.create(
         model=model,
         messages=messages,
         max_tokens=self._MAX_TOKENS,
@@ -87,27 +136,21 @@ async def request_byok_translation(self, to_lang, prompt):
 
 async def translate_byok(self, from_lang, to_lang, queries):
     import asyncio
-    import re
     translations = []
     # Avoid the upstream loop which restarts still-running paid requests.
     self.client.max_retries = 0
+    pool = provider_pool()
     for prompt, count in self._assemble_prompts(from_lang, to_lang, queries):
-        content = await asyncio.wait_for(self._request_translation(to_lang, prompt), timeout=180)
-        content = self.extract_capture_groups(content, rf"{self.rgx_capture}").strip()
-        markers = list(re.finditer(r"<\|(\d+)\|>", content))
-        if not markers and count == 1 and content:
-            translations.append(content)
+        if pool:
+            async def attempt(provider, prompt=prompt, count=count):
+                content = await asyncio.wait_for(
+                    self._request_translation(to_lang, prompt, provider_client(pool, provider), provider["model"]),
+                    timeout=180)
+                return parse_marked(self.extract_capture_groups(content, rf"{self.rgx_capture}").strip(), count)
+            translations += await pool.run(attempt)
             continue
-        if [int(marker.group(1)) for marker in markers] != list(range(1, count + 1)):
-            raise ValueError("BYOK returned missing, duplicate or reordered markers")
-        if content[:markers[0].start()].strip():
-            raise ValueError("BYOK returned extra content before translations")
-        for index, marker in enumerate(markers):
-            end = markers[index + 1].start() if index + 1 < len(markers) else len(content)
-            text = content[marker.end():end].strip()
-            if not text:
-                raise ValueError("BYOK returned an empty bubble")
-            translations.append(text)
+        content = await asyncio.wait_for(self._request_translation(to_lang, prompt), timeout=180)
+        translations += parse_marked(self.extract_capture_groups(content, rf"{self.rgx_capture}").strip(), count)
     return translations
 
 

@@ -63,6 +63,9 @@ def create_core(engine=None, config_factory=None):
                 result.save(output, "PNG")
                 return Response(output.getvalue(), media_type="image/png")
             except Exception as exc:
+                if type(exc).__name__ == "AllProvidersResting":
+                    print(f"Translation paused: {exc}", flush=True)
+                    raise HTTPException(424, str(exc))
                 # Never propagate provider bodies, URLs or credentials to logs/phone.
                 print(f"Translation failed: {type(exc).__name__}", flush=True)
                 for frame in traceback.extract_tb(exc.__traceback__)[-8:]:
