@@ -13,8 +13,8 @@ from providers import (AllProvidersResting, LONG_REST, PRESETS, ProviderPool, SH
                        parse_secret, validate_base)
 from setup import choose_providers, configure
 
-GROQ = {"name": "groq", "base": PRESETS["groq"]["base"], "model": "openai/gpt-oss-120b", "key": "k1"}
-GEMINI = {"name": "gemini", "base": PRESETS["gemini"]["base"], "model": "gemini-flash-lite-latest", "key": "k2"}
+GROQ = {"name": "groq", "base": PRESETS["groq"]["base"], "model": "openai/gpt-oss-120b", "key": "gsk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+GEMINI = {"name": "gemini", "base": PRESETS["gemini"]["base"], "model": "gemini-flash-lite-latest", "key": "AIzabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
 
 
 class Clock:
@@ -167,26 +167,40 @@ class TranslateWithPoolTest(unittest.TestCase):
 class InstallerTest(unittest.TestCase):
     def test_menu_builds_ordered_providers_with_default_models(self):
         answers = iter(["1,2", "", ""])
-        keys = iter(["k1", "k2"])
+        keys = iter([GROQ["key"], GEMINI["key"]])
         providers = choose_providers(ask=lambda prompt: next(answers), secret=lambda prompt: next(keys))
         self.assertEqual(providers, [GROQ, GEMINI])
 
     def test_ollama_needs_no_key_and_custom_provider_is_manual(self):
         answers = iter(["4,5", "qwen3:8b", "https://api.example.com/v1", "my-model"])
-        keys = iter(["k9"])
+        keys = iter(["custom-provider-key-123456"])
         providers = choose_providers(ask=lambda prompt: next(answers), secret=lambda prompt: next(keys))
         self.assertEqual(providers[0], {"name": "ollama", "base": PRESETS["ollama"]["base"],
                                         "model": "qwen3:8b", "key": ""})
         self.assertEqual(providers[1]["base"], "https://api.example.com/v1")
 
-    def test_ctrl_v_in_hidden_prompt_is_explained_and_retried(self):
+    def test_bad_paste_or_half_typed_key_is_retried(self):
         answers = iter(["1", ""])
-        keys = iter(["\x16", "", "gsk_valid"])
+        keys = iter(["\x16", "abcdefghijklmnopqrstuvwxhgdf", GROQ["key"]])
         providers = choose_providers(ask=lambda prompt: next(answers), secret=lambda prompt: next(keys))
-        self.assertEqual(providers[0]["key"], "gsk_valid")
+        self.assertEqual(providers[0]["key"], GROQ["key"])
         with self.assertRaises(ValueError):
             choose_providers(ask=lambda prompt: "1" if "Números" in prompt else "",
                              secret=lambda prompt: "\x16")
+
+    def test_key_is_read_from_clipboard_without_pasting(self):
+        from setup import ask_key
+        prompts = []
+        key = ask_key("groq", secret=lambda prompt: self.fail("should not ask to paste"),
+                      ask=prompts.append, clipboard=lambda: GROQ["key"] + "\n")
+        self.assertEqual(key, GROQ["key"])
+        self.assertIn("não precisa colar", prompts[0])
+
+    def test_yes_no_insists_on_a_clear_answer(self):
+        from setup import yes_no
+        answers = iter(["h", "S"])
+        self.assertTrue(yes_no("?", ask=lambda prompt: next(answers)))
+        self.assertFalse(yes_no("?", ask=lambda prompt: ""))
 
     def test_invalid_choice_is_rejected(self):
         with self.assertRaises(ValueError):
@@ -198,7 +212,7 @@ class InstallerTest(unittest.TestCase):
             configure("byok", "cpu", "127.0.0.1", root=root, providers=[GROQ, GEMINI])
             env = (root / ".env").read_text()
             self.assertIn(f"CUSTOM_OPENAI_API_BASE={GROQ['base']}", env)
-            self.assertNotIn("k1", env)
+            self.assertNotIn(GROQ["key"], env)
             self.assertEqual(json.loads((root / "secrets/provider_key.txt").read_text())["providers"][1]["name"],
                              "gemini")
             with self.assertRaises(ValueError):

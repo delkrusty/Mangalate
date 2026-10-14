@@ -52,23 +52,55 @@ def configure(profile, hardware, bind, api_base="", model="", provider_key="", r
     return key_path, hardware
 
 
-def ask_key(name, secret):
-    """Hidden key prompt that survives the Windows console paste trap.
+KEY_PREFIXES = {"groq": ("gsk_",), "gemini": ("AIza", "AQ."), "openrouter": ("sk-or-",)}
 
-    In the hidden prompt, Ctrl+V does not paste: it inserts an invisible
-    control character.  Right-click pastes.  Detect it and explain.
+
+def read_clipboard():
+    """Windows clipboard via PowerShell; '' when unavailable."""
+    if os.name != "nt":
+        return ""
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", "Get-Clipboard"],
+                             capture_output=True, text=True, timeout=10)
+        return out.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def ask_key(name, secret, ask=input, clipboard=read_clipboard):
+    """Get an API key without the Windows hidden-prompt paste trap.
+
+    On Windows: copy the key on the website and press Enter; it is read from
+    the clipboard, so nothing needs to be pasted.  Elsewhere, or if the
+    clipboard is empty, it can be pasted/typed.  The format is checked, so a
+    half-typed key is caught before anything is saved.
     """
+    prefixes = KEY_PREFIXES.get(name, ())
     for _ in range(3):
-        raw = secret(f"  Chave API de {name} (cole com o BOTÃO DIREITO do mouse e aperte Enter; ela não aparece): ")
-        key = raw.strip()
-        if key and all(ch.isprintable() and not ch.isspace() for ch in key):
-            print(f"  Chave recebida: {len(key)} caracteres, termina em ...{key[-4:]}")
-            return key
-        if any(not ch.isprintable() for ch in raw):
-            print("  Isso foi um Ctrl+V: no PowerShell ele não cola aqui. Use o botão direito do mouse.")
-        else:
-            print("  Nada foi colado. Copie a chave no site e cole com o botão direito do mouse.")
+        key = ""
+        if os.name == "nt" or clipboard is not read_clipboard:
+            ask(f"  Copie a chave de {name} no site e aperte Enter aqui (não precisa colar): ")
+            key = clipboard().strip()
+        if not key:
+            key = secret(f"  Cole a chave de {name} e aperte Enter (ela não aparece): ").strip()
+        if not key or not all(ch.isprintable() and not ch.isspace() for ch in key):
+            print("  Não recebi uma chave. Copie de novo no site (Ctrl+C ou botão Copiar) e tente outra vez.")
+            continue
+        if prefixes and not key.startswith(prefixes) or len(key) < 20:
+            looks = " ou ".join(prefixes) or "uma sequência longa"
+            print(f"  Isso não parece uma chave de {name} (deveria começar com {looks}). Copie de novo no site.")
+            continue
+        print(f"  Chave recebida: {len(key)} caracteres, termina em ...{key[-4:]}")
+        return key
     raise ValueError(f"Chave de {name} não recebida.")
+
+
+def yes_no(question, ask=input):
+    while True:
+        answer = ask(question).strip().lower()
+        if answer in {"s", "sim", "n", "nao", "não", ""}:
+            return answer in {"s", "sim"}
+        print("  Responda s (sim) ou n (não).")
 
 
 def choose_providers(ask=input, secret=getpass.getpass):
@@ -101,7 +133,7 @@ def choose_providers(ask=input, secret=getpass.getpass):
             default = preset["model"]
             hint = f" (Enter = {default})" if default else (" (termine em :free)" if name == "openrouter" else "")
             model = ask(f"  Modelo{hint}: ").strip() or default
-        key = "" if name == "ollama" else ask_key(name, secret)
+        key = "" if name == "ollama" else ask_key(name, secret, ask)
         providers.append({"name": name, "base": base, "model": model, "key": key})
     return providers
 
@@ -123,9 +155,10 @@ def main():
     bind = "0.0.0.0" if input("Celular na mesma rede Wi-Fi? Liberar rede local [s/N]: ").lower() == "s" else "127.0.0.1"
     if bind == "0.0.0.0":
         print("Use somente rede confiável; NÃO abra a porta 5003 no roteador/internet.")
-    providers = choose_providers() if profile == "byok" else None
-    if (ROOT / ".env").exists() and input("Já existe configuração. Substituir .env? [s/N]: ").lower() != "s":
+    if (ROOT / ".env").exists() and not yes_no("Já existe configuração. Substituir pela nova? [s/n]: "):
+        print("Nada foi alterado.")
         return
+    providers = choose_providers() if profile == "byok" else None
     path, hardware = configure(profile, hardware, bind, root=ROOT, providers=providers)
     print("\nArquivo da chave Mangalate:", path)
     print("No app cole o conteúdo desse arquivo em Chave Mangalate, NÃO a chave da API.")
@@ -134,7 +167,7 @@ def main():
     print("Endereço no app: http://IP-DO-COMPUTADOR:5003 (use ipconfig no Windows / hostname -I no Linux)")
     print("Para iniciar: docker compose --profile", hardware, "up --build -d")
     print("Prepare modelos e teste UMA página antes de abrir um capítulo: python check.py --warmup")
-    if input("Verificar Docker e iniciar agora? [s/N]: ").lower() == "s":
+    if yes_no("Verificar Docker e iniciar agora? [s/n]: "):
         subprocess.run(["docker", "compose", "version"], cwd=ROOT, check=True)
         subprocess.run(["docker", "compose", "--profile", hardware, "up", "--build", "-d", "--force-recreate"], cwd=ROOT, check=True)
 
