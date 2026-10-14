@@ -18,14 +18,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 LINES = [
-    "Understood, Kaiser.",
+    "UNDERSTOOD, KAISER.",
     "Haru, about what you told the Kaiser this morning...",
     "This morning? What are you talking about?",
     "We lost last time because of their wizards, right?",
     "He's been acting weird ever since the cat ran away.",
     "I need you as my partner...",
     "...at the ball tomorrow night.",
-    "No way! Absolutely not!",
+    "NO WAY! ABSOLUTELY NOT!",
 ]
 PROVIDERS = [
     ("Groq", "GROQ_API_KEY", "https://api.groq.com/openai/v1",
@@ -55,6 +55,8 @@ def checks(output):
     european = sorted({m.group(0).lower() for text in output for m in EUROPEAN.finditer(text)})
     if european:
         found.append("formas de Portugal: " + ", ".join(european))
+    if any(len(re.findall(r"[^\W\d_]", text)) > 6 and text == text.upper() for text in output):
+        found.append("tradução toda em maiúsculas")
     if any(re.search(r"[,;:!?](?=[^\W\d_])", text) for text in output):
         found.append("falta espaço após pontuação")
     return found or ["nenhum problema automático encontrado"]

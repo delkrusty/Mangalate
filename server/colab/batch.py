@@ -145,7 +145,8 @@ async def run(args):
             entry.update(inspect_result(original, result))
             pairs = [
                 {"original": str(getattr(r, "text_raw", r.text)), "translation": str(r.translation)}
-                for r in getattr(ctx, "text_regions", [])
+                # The engine leaves text_regions as None on pages without text.
+                for r in (getattr(ctx, "text_regions", None) or [])
             ]
             entry["regions"] = pairs
             if args.diagnostics:

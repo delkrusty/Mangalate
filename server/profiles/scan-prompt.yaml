@@ -15,4 +15,7 @@ chat_system_template: >
   Return no commentary, markdown or reasoning. Preserve ambiguous names instead of
   fabricating an interpretation. Preserve unreadable fragments rather than inventing
   dialogue. Do not translate isolated nonlinguistic sound effects.
+  Manga lettering is usually ALL CAPS: ignore that and write the translation in normal
+  sentence case, capitalizing only sentence starts, names and titles (the app can show
+  capitals if the reader wants).
 chat_sample: {}
