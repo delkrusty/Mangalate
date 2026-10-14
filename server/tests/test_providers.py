@@ -166,13 +166,13 @@ class TranslateWithPoolTest(unittest.TestCase):
 
 class InstallerTest(unittest.TestCase):
     def test_menu_builds_ordered_providers_with_default_models(self):
-        answers = iter(["1,2", "", ""])
+        answers = iter(["1", "", "s", "2", "", "n"])
         keys = iter([GROQ["key"], GEMINI["key"]])
         providers = choose_providers(ask=lambda prompt: next(answers), secret=lambda prompt: next(keys))
         self.assertEqual(providers, [GROQ, GEMINI])
 
     def test_ollama_needs_no_key_and_custom_provider_is_manual(self):
-        answers = iter(["4,5", "qwen3:8b", "https://api.example.com/v1", "my-model"])
+        answers = iter(["4,5", "qwen3:8b", "https://api.example.com/v1", "my-model", "n"])
         keys = iter(["custom-provider-key-123456"])
         providers = choose_providers(ask=lambda prompt: next(answers), secret=lambda prompt: next(keys))
         self.assertEqual(providers[0], {"name": "ollama", "base": PRESETS["ollama"]["base"],
@@ -180,12 +180,12 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(providers[1]["base"], "https://api.example.com/v1")
 
     def test_bad_paste_or_half_typed_key_is_retried(self):
-        answers = iter(["1", ""])
+        answers = iter(["1", "", "n"])
         keys = iter(["\x16", "abcdefghijklmnopqrstuvwxhgdf", GROQ["key"]])
         providers = choose_providers(ask=lambda prompt: next(answers), secret=lambda prompt: next(keys))
         self.assertEqual(providers[0]["key"], GROQ["key"])
         with self.assertRaises(ValueError):
-            choose_providers(ask=lambda prompt: "1" if "Números" in prompt else "",
+            choose_providers(ask=lambda prompt: "1" if "Número" in prompt else "",
                              secret=lambda prompt: "\x16")
 
     def test_key_is_read_from_clipboard_without_pasting(self):
@@ -201,6 +201,15 @@ class InstallerTest(unittest.TestCase):
         answers = iter(["h", "S"])
         self.assertTrue(yes_no("?", ask=lambda prompt: next(answers)))
         self.assertFalse(yes_no("?", ask=lambda prompt: ""))
+
+    def test_enter_picks_groq_and_comma_list_still_works(self):
+        answers = iter(["", "", "n"])
+        keys = iter([GROQ["key"]])
+        self.assertEqual(choose_providers(ask=lambda prompt: next(answers), secret=lambda prompt: next(keys)), [GROQ])
+        answers = iter(["1,2", "", "", "n"])
+        keys = iter([GROQ["key"], GEMINI["key"]])
+        self.assertEqual(choose_providers(ask=lambda prompt: next(answers), secret=lambda prompt: next(keys)),
+                         [GROQ, GEMINI])
 
     def test_invalid_choice_is_rejected(self):
         with self.assertRaises(ValueError):

@@ -104,38 +104,57 @@ def yes_no(question, ask=input):
 
 
 def choose_providers(ask=input, secret=getpass.getpass):
-    """BYOK menu: ready-made free providers, in the user's order of preference."""
+    """BYOK menu, one provider at a time, offering a backup after each key."""
     names = list(PRESETS)
     print("\nQual IA vai traduzir? Só o TEXTO das falas é enviado; as imagens ficam no seu PC.")
-    print("Dá para escolher mais de uma: quando a primeira atinge o limite grátis, a próxima assume.")
-    for number, name in enumerate(names, 1):
-        print(f"  {number} {PRESETS[name]['label']}")
-    print(f"  {len(names) + 1} Outro provedor compatível com OpenAI (endereço e modelo manuais)")
-    picked = ask("Números em ordem de preferência, separados por vírgula (1,2): ").strip() or "1,2"
+    print("Depois de configurar uma, você pode acrescentar outra de reserva: quando a primeira")
+    print("atinge o limite grátis, a reserva assume sozinha.")
     providers = []
-    for part in picked.split(","):
-        part = part.strip()
+    queue = []
+    while True:
+        if not queue:
+            used = {p["name"] for p in providers}
+            print()
+            for number, name in enumerate(names, 1):
+                mark = "  (já configurado)" if name in used else ""
+                print(f"  {number} {PRESETS[name]['label']}{mark}")
+            print(f"  {len(names) + 1} Outro provedor compatível com OpenAI (endereço e modelo manuais)")
+            default = "1" if not providers else ""
+            picked = ask("Número da IA" + (" (Enter = 1 Groq)" if default else "") + ": ").strip() or default
+            queue = [part.strip() for part in picked.split(",") if part.strip()]
+        part = queue.pop(0)
         if not part.isdigit() or not 1 <= int(part) <= len(names) + 1:
             raise ValueError(f"Opção inválida: {part}")
         index = int(part) - 1
-        if index == len(names):
-            name = f"outro{len(providers) + 1}"
-            base = ask("Endereço da API (https://...): ").strip()
-            model = ask("Nome do modelo: ").strip()
+        if index < len(names) and names[index] in {p["name"] for p in providers}:
+            print(f"  {names[index]} já está configurado.")
         else:
-            name, preset = names[index], PRESETS[names[index]]
-            base = preset["base"]
-            print(f"\n{preset['label']}")
-            if preset["keys_url"]:
-                print(f"  Crie a chave em: {preset['keys_url']}")
-            if name == "ollama":
-                print("  Instale o Ollama (https://ollama.com), rode 'ollama pull NOME' e deixe-o aberto.")
-            default = preset["model"]
-            hint = f" (Enter = {default})" if default else (" (termine em :free)" if name == "openrouter" else "")
-            model = ask(f"  Modelo{hint}: ").strip() or default
-        key = "" if name == "ollama" else ask_key(name, secret, ask)
-        providers.append({"name": name, "base": base, "model": model, "key": key})
-    return providers
+            providers.append(configure_one(index, names, providers, ask, secret))
+        if queue:
+            continue
+        print("\nOrdem de uso: " + " → ".join(p["name"] for p in providers))
+        if len(providers) > len(names) or not yes_no("Tem chave de outra IA para usar como reserva? [s/n]: ", ask):
+            return providers
+
+
+def configure_one(index, names, providers, ask, secret):
+    if index == len(names):
+        name = f"outro{len(providers) + 1}"
+        base = ask("Endereço da API (https://...): ").strip()
+        model = ask("Nome do modelo: ").strip()
+    else:
+        name, preset = names[index], PRESETS[names[index]]
+        base = preset["base"]
+        print(f"\n{preset['label']}")
+        if preset["keys_url"]:
+            print(f"  Crie a chave em: {preset['keys_url']}")
+        if name == "ollama":
+            print("  Instale o Ollama (https://ollama.com), rode 'ollama pull NOME' e deixe-o aberto.")
+        default = preset["model"]
+        hint = f" (Enter = {default})" if default else (" (termine em :free)" if name == "openrouter" else "")
+        model = ask(f"  Modelo{hint}: ").strip() or default
+    key = "" if name == "ollama" else ask_key(name, secret, ask)
+    return {"name": name, "base": base, "model": model, "key": key}
 
 
 def main():

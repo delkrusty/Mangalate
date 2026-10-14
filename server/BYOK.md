@@ -44,10 +44,12 @@ py setup.py
 
 1. **Perfil:** digite `2` (BYOK).
 2. **Hardware e rede:** responda igual ao Básico.
-3. **Qual IA vai traduzir:** digite os números em ordem de preferência. Para Groq e depois Gemini, digite `1,2`.
-4. **Modelo:** aperte **Enter** para usar o recomendado.
-5. **Chave:** cole a chave de cada provedor. Ela não aparece na tela e fica só em `server/secrets/provider_key.txt`.
-6. Inicie e teste uma página antes de abrir um capítulo:
+3. **Substituir a configuração:** `s`.
+4. **Número da IA:** `1` para Groq (ou só Enter).
+5. **Modelo:** aperte **Enter** para usar o recomendado.
+6. **Chave:** no site, copie a chave (botão **Copiar** ou Ctrl+C), volte ao PowerShell e **só aperte Enter** — no Windows o instalador lê a chave copiada, sem precisar colar. Deve aparecer "Chave recebida: … caracteres". Ela fica só em `server/secrets/provider_key.txt`.
+7. **Tem chave de outra IA para usar como reserva?** `s`, escolha `2` (Gemini) e repita os passos 5 e 6. Quando não tiver mais, responda `n`.
+8. Inicie e teste uma página antes de abrir um capítulo:
 
 ```powershell
 docker compose --profile cpu up --build -d
