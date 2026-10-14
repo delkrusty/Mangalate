@@ -5,6 +5,7 @@ import csv
 import json
 import re
 import sys
+import traceback
 import zipfile
 from pathlib import Path
 
@@ -157,7 +158,10 @@ async def run(args):
             # Keep the original, clearly flagging failures; never export a blank page.
             result = original
             consecutive_failures += 1
-            entry.update(status="blocked_original_preserved", error=type(exc).__name__)
+            entry.update(status="blocked_original_preserved", error=type(exc).__name__,
+                         # File/line/function only: no page text, keys or provider bodies.
+                         trace=[f"{Path(f.filename).name}:{f.lineno}:{f.name}"
+                                for f in traceback.extract_tb(exc.__traceback__)[-8:]])
         translated = output / "translated"
         translated.mkdir(exist_ok=True)
         result.save(translated / name)
