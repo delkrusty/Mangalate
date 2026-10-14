@@ -52,6 +52,25 @@ def configure(profile, hardware, bind, api_base="", model="", provider_key="", r
     return key_path, hardware
 
 
+def ask_key(name, secret):
+    """Hidden key prompt that survives the Windows console paste trap.
+
+    In the hidden prompt, Ctrl+V does not paste: it inserts an invisible
+    control character.  Right-click pastes.  Detect it and explain.
+    """
+    for _ in range(3):
+        raw = secret(f"  Chave API de {name} (cole com o BOTÃO DIREITO do mouse e aperte Enter; ela não aparece): ")
+        key = raw.strip()
+        if key and all(ch.isprintable() and not ch.isspace() for ch in key):
+            print(f"  Chave recebida: {len(key)} caracteres, termina em ...{key[-4:]}")
+            return key
+        if any(not ch.isprintable() for ch in raw):
+            print("  Isso foi um Ctrl+V: no PowerShell ele não cola aqui. Use o botão direito do mouse.")
+        else:
+            print("  Nada foi colado. Copie a chave no site e cole com o botão direito do mouse.")
+    raise ValueError(f"Chave de {name} não recebida.")
+
+
 def choose_providers(ask=input, secret=getpass.getpass):
     """BYOK menu: ready-made free providers, in the user's order of preference."""
     names = list(PRESETS)
@@ -82,7 +101,7 @@ def choose_providers(ask=input, secret=getpass.getpass):
             default = preset["model"]
             hint = f" (Enter = {default})" if default else (" (termine em :free)" if name == "openrouter" else "")
             model = ask(f"  Modelo{hint}: ").strip() or default
-        key = "" if name == "ollama" else secret(f"  Chave API de {name} (oculta; fica só no servidor): ").strip()
+        key = "" if name == "ollama" else ask_key(name, secret)
         providers.append({"name": name, "base": base, "model": model, "key": key})
     return providers
 

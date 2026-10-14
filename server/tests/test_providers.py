@@ -179,6 +179,15 @@ class InstallerTest(unittest.TestCase):
                                         "model": "qwen3:8b", "key": ""})
         self.assertEqual(providers[1]["base"], "https://api.example.com/v1")
 
+    def test_ctrl_v_in_hidden_prompt_is_explained_and_retried(self):
+        answers = iter(["1", ""])
+        keys = iter(["\x16", "", "gsk_valid"])
+        providers = choose_providers(ask=lambda prompt: next(answers), secret=lambda prompt: next(keys))
+        self.assertEqual(providers[0]["key"], "gsk_valid")
+        with self.assertRaises(ValueError):
+            choose_providers(ask=lambda prompt: "1" if "Números" in prompt else "",
+                             secret=lambda prompt: "\x16")
+
     def test_invalid_choice_is_rejected(self):
         with self.assertRaises(ValueError):
             choose_providers(ask=lambda prompt: "9", secret=lambda prompt: "")
