@@ -159,11 +159,20 @@ def create_app(key=None, upstream=None, profile=None, transport=None):
                 raise HTTPException(413, "Página maior que 40 MB.")
         request._body = bytes(raw)
         try:
-            async with request.form(max_files=1, max_fields=1, max_part_size=MAX_BODY) as form:
+            async with request.form(max_files=3, max_fields=1, max_part_size=MAX_BODY) as form:
                 upload = form.get("image")
                 if not isinstance(upload, UploadFile):
                     raise ValueError("Envie o campo image.")
                 data = await upload.read()
+                # Optional neighbouring webtoon slices, used to translate bubbles cut between pages.
+                neighbours = {}
+                for name in ("above", "below"):
+                    extra = form.get(name)
+                    if isinstance(extra, UploadFile):
+                        content = await extra.read()
+                        if content:
+                            await asyncio.to_thread(open_page, content)
+                            neighbours[name] = (f"{name}.png", content, "application/octet-stream")
                 requested = json.loads(str(form.get("config", "{}")))
                 if not isinstance(requested, dict):
                     raise ValueError("Configuração deve ser um objeto JSON.")
@@ -174,7 +183,7 @@ def create_app(key=None, upstream=None, profile=None, transport=None):
         try:
             result = await app.state.client.post(
                 "/translate/with-form/image",
-                files={"image": ("page.png", data, "application/octet-stream")},
+                files={"image": ("page.png", data, "application/octet-stream"), **neighbours},
                 data={"config": json.dumps(config)},
             )
         except httpx.TimeoutException:

@@ -122,6 +122,14 @@ async def run(args):
     translator = MangaTranslator({"use_gpu": args.gpu, "use_gpu_limited": args.gpu_limited,
                                   "verbose": False, "kernel_size": int(config.get("kernel_size", 3))})
     history, report, consecutive_failures = [], [], 0
+    from seams import SeamCache, Strip, finish
+    seam_cache, salt = SeamCache(), json.dumps(config, sort_keys=True)
+
+    def neighbour(position):
+        if args.no_seams or not 1 <= position <= len(pages):
+            return None
+        return open_page(pages[position - 1].read_bytes())
+
     for index, path in select_pages(list(enumerate(pages, 1)), args.pages):
         name = f"{index:04d}.png"
         print(f"Página {index}/{len(pages)}: {path.name}", flush=True)
@@ -140,8 +148,11 @@ async def run(args):
                 prompt_path.parent.mkdir(exist_ok=True)
                 prompt_path.write_text(yaml.safe_dump(prompt, allow_unicode=True), encoding="utf-8")
                 config["translator"]["gpt_config"] = str(prompt_path)
-            ctx = await translator.translate(original, Config(**config))
-            result = ctx.result.convert("RGB")
+            strip = Strip(original, neighbour(index - 1), neighbour(index + 1))
+            ctx = await translator.translate(strip.image, Config(**config))
+            result = finish(strip, ctx.result, getattr(ctx, "text_regions", None) if strip.stitched else None,
+                            seam_cache, salt)
+            entry["seams"] = {"above": strip.above is not None, "below": strip.below is not None}
             entry.update(inspect_result(original, result))
             pairs = [
                 {"original": str(getattr(r, "text_raw", r.text)), "translation": str(r.translation)}
@@ -150,7 +161,8 @@ async def run(args):
             ]
             entry["regions"] = pairs
             if args.diagnostics:
-                rows = save_diagnostics(output / "diagnostico" / f"{index:04d}", ctx, original)
+                # Diagnostic images use the strip, whose coordinates match the regions.
+                rows = save_diagnostics(output / "diagnostico" / f"{index:04d}", ctx, strip.image)
                 entry["preserved_regions"] = sum(row["estado"] == "original_preservada" for row in rows)
             entry["status"] = "review" if pairs else "no_text_review"
             history.append(pairs)
@@ -203,6 +215,8 @@ if __name__ == "__main__":
     parser.add_argument("--pages", help="Só estas páginas, ex.: 2,22-26,114")
     parser.add_argument("--diagnostics", action="store_true",
                         help="Salva máscaras, regiões, OCR e tradução de cada página em diagnostico/")
+    parser.add_argument("--no-seams", action="store_true",
+                        help="Traduz cada página sozinha, sem emendar balões cortados entre páginas")
     parser.add_argument("--legacy", action="store_true",
                         help="Usa a limpeza e o espaçamento da 0.5.2, para comparar antes/depois")
     asyncio.run(run(parser.parse_args()))
