@@ -120,10 +120,68 @@ def validate_byok_results(original_translate):
     return translate
 
 
+def legacy_quality():
+    """MANGALATE_LEGACY_QUALITY=true restores 0.5.2 cleanup/spacing for A/B comparison."""
+    import os
+    return os.environ.get("MANGALATE_LEGACY_QUALITY", "false").lower() == "true"
+
+
+def protect_art(config):
+    # Profiles keep ignore_bubble=8 as the "protect text on artwork" switch;
+    # the gateway sets it to 0 when MANGALATE_ALLOW_ART_TEXT=true.
+    value = getattr(config.ocr, "ignore_bubble", 0) or 0
+    return 1 <= value <= 50
+
+
+def classify_regions(original_merge):
+    """Decide once, before translation, which blocks are cleaned and translated.
+
+    A block on artwork is removed from the page's regions, so it is neither
+    translated, masked nor rendered: the original stays intact and the block is
+    reported for review instead of receiving Portuguese over English.
+    """
+    async def merge(self, config, ctx):
+        import cv2
+        from quality import classify_region
+        regions = await original_merge(self, config, ctx)
+        ctx.mangalate_preserved = []
+        if not regions or not protect_art(config):
+            return regions
+        image, raw = ctx.img_rgb, ctx.mask_raw
+        if raw is not None and raw.shape[:2] != image.shape[:2]:
+            raw = cv2.resize(raw, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
+        kept = []
+        for region in regions:
+            region.mangalate_background = classify_region(image, raw, region.lines)
+            if region.mangalate_background["kind"] == "interior":
+                kept.append(region)
+            else:
+                ctx.mangalate_preserved.append(region)
+        print(f"Region check: kept={len(kept)} preserved_original={len(ctx.mangalate_preserved)}", flush=True)
+        return kept
+    return merge
+
+
+async def refine_mask_consistently(self, config, ctx):
+    """Mask every kept region; the art decision was already taken in classify_regions.
+
+    The engine would otherwise re-run its colour test here and silently drop
+    the mask of blocks that are still translated and rendered.
+    """
+    from manga_translator.mask_refinement import dispatch
+    return await dispatch(ctx.text_regions, ctx.img_rgb, ctx.mask_raw, "fit_text",
+                          config.mask_dilation_offset, 0, self.verbose, self.kernel_size)
+
+
 def validate_page_translations(original_translate):
     async def translate(self, config, ctx):
         regions = list(ctx.text_regions or [])
         result = await original_translate(self, config, ctx)
+        if not legacy_quality() and isinstance(result, list):
+            from quality import normalize_spacing
+            for region in result:
+                if isinstance(getattr(region, "translation", None), str):
+                    region.translation = normalize_spacing(region.translation)
         blank = sum(not getattr(region, "translation", "").strip() for region in regions)
         unchanged = sum(getattr(region, "translation", "").strip().lower() == region.text.strip().lower()
                         for region in regions)
@@ -207,4 +265,12 @@ def apply_compatibility():
         CustomOpenAiTranslator._mangalate_compat_applied = True
     if not getattr(MangaTranslator, "_mangalate_compat_applied", False):
         MangaTranslator._run_text_translation = validate_page_translations(MangaTranslator._run_text_translation)
+        if not legacy_quality():
+            MangaTranslator._run_textline_merge = classify_regions(MangaTranslator._run_textline_merge)
+            MangaTranslator._run_mask_refinement = refine_mask_consistently
+            from manga_translator.rendering import text_render
+            from quality import compact_symbols, whole_word_breaker
+            text_render.compact_special_symbols = compact_symbols(text_render.compact_special_symbols)
+            text_render.calc_horizontal = whole_word_breaker(text_render.calc_horizontal,
+                                                             text_render.get_string_width)
         MangaTranslator._mangalate_compat_applied = True

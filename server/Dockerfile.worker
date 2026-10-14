@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir torch==2.14.1 torchvision==0.29.1 --index-url htt
 COPY worker.py /mangalate/worker.py
 COPY core.py /mangalate/core.py
 COPY engine_compat.py /mangalate/engine_compat.py
+COPY quality.py /mangalate/quality.py
 COPY profiles /mangalate/profiles
 COPY gateway.py /mangalate/gateway.py
 COPY colab/batch.py /mangalate/batch.py
@@ -29,6 +30,7 @@ RUN python -c "from pathlib import Path;p=Path('requirements.txt');s=p.read_text
 COPY worker.py /mangalate/worker.py
 COPY core.py /mangalate/core.py
 COPY engine_compat.py /mangalate/engine_compat.py
+COPY quality.py /mangalate/quality.py
 COPY profiles /mangalate/profiles
 COPY gateway.py /mangalate/gateway.py
 COPY colab/batch.py /mangalate/batch.py
@@ -45,6 +47,7 @@ RUN sed -i 's/@fix\/python313-cython3/@3ca3d8f0cbd9701f4a765f97fbad43f9b2fe80a6/
 COPY worker.py /mangalate/worker.py
 COPY core.py /mangalate/core.py
 COPY engine_compat.py /mangalate/engine_compat.py
+COPY quality.py /mangalate/quality.py
 COPY profiles /mangalate/profiles
 COPY gateway.py /mangalate/gateway.py
 COPY colab/batch.py /mangalate/batch.py
