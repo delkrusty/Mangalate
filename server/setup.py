@@ -149,10 +149,24 @@ def configure_one(index, names, providers, ask, secret):
         if preset["keys_url"]:
             print(f"  Crie a chave em: {preset['keys_url']}")
         if name == "ollama":
-            print("  Instale o Ollama (https://ollama.com), rode 'ollama pull NOME' e deixe-o aberto.")
+            print("  1) Instale o Ollama: https://ollama.com")
+            print("  2) Em outro terminal, baixe UM modelo e deixe o Ollama aberto:")
+            print("       16 GB de RAM ou mais:  ollama pull gpt-oss:20b   (14 GB)")
+            print("       menos memória:         ollama pull gemma3:4b     (3,4 GB, qualidade menor)")
+            print("  3) Digite abaixo o mesmo nome que você baixou.")
+        if name == "openrouter":
+            print("  Copie o nome de um modelo terminado em :free na lista do site.")
         default = preset["model"]
-        hint = f" (Enter = {default})" if default else (" (termine em :free)" if name == "openrouter" else "")
-        model = ask(f"  Modelo{hint}: ").strip() or default
+        hint = f" (Enter = {default})" if default else ""
+        model = ""
+        for _ in range(3):
+            model = ask(f"  Modelo{hint}: ").strip() or default
+            if model and model.upper() != "NOME":
+                break
+            print("  Digite o nome exato do modelo (ex.: gpt-oss:20b).")
+            model = ""
+        if not model:
+            raise ValueError(f"Modelo de {name} não informado.")
     key = "" if name == "ollama" else ask_key(name, secret, ask)
     return {"name": name, "base": base, "model": model, "key": key}
 
