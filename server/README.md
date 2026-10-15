@@ -73,6 +73,7 @@ Opções úteis:
 | `--glossary /work/glossario.csv` | Nomes e termos fixos (colunas `source,target`) |
 | `--speed fast` / `--speed quality` | Força uma velocidade |
 | `--diagnostics` | Salva máscaras e regiões de cada página em `diagnostico/` |
+| `--box-layout` | Encaixa o texto na caixa do original, como na 0.5.3 (para comparar) |
 
 Com placa NVIDIA, use `--profile gpu run ... translator-gpu` e acrescente `--gpu`. No Linux/macOS, troque `${PWD}` por `$PWD`.
 

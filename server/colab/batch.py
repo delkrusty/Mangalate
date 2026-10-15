@@ -148,6 +148,8 @@ async def run(args):
     import os
     if args.legacy:
         os.environ["MANGALATE_LEGACY_QUALITY"] = "true"
+    if args.box_layout:
+        os.environ["MANGALATE_BUBBLE_LAYOUT"] = "false"
     from engine_compat import apply_compatibility
     apply_compatibility()
     from manga_translator import MangaTranslator, Config
@@ -283,6 +285,8 @@ if __name__ == "__main__":
                         help="quality: limpeza mais fina; fast: mais rápido em CPU (padrão: o do servidor)")
     parser.add_argument("--no-seams", action="store_true",
                         help="Traduz cada página sozinha, sem emendar balões cortados entre páginas")
+    parser.add_argument("--box-layout", action="store_true",
+                        help="Encaixa o texto na caixa do original, como na 0.5.3, para comparar com o ajuste ao balão")
     parser.add_argument("--legacy", action="store_true",
                         help="Usa a limpeza e o espaçamento da 0.5.2, para comparar antes/depois")
     asyncio.run(run(parser.parse_args()))

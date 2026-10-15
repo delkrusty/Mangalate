@@ -5,6 +5,7 @@ Based on NLLBTranslator at:
 https://github.com/zyddnys/manga-image-translator/blob/d6de6ab62a7be6afc0d07a3184149cdefbcd32f2/manga_translator/translators/nllb.py
 Retains GPL-3.0 licensing. No warranty; upstream LICENSE is in the Docker source tree.
 """
+import os
 
 
 def translate_nllb_batch(self, from_lang, to_lang, queries):
@@ -568,6 +569,7 @@ def apply_compatibility():
             text_render.compact_special_symbols = compact_symbols(text_render.compact_special_symbols)
             text_render.calc_horizontal = whole_word_breaker(text_render.calc_horizontal,
                                                              text_render.get_string_width)
-            import manga_translator.rendering as rendering
-            bubble_layout(rendering, text_render)
+            if os.environ.get("MANGALATE_BUBBLE_LAYOUT", "true").lower() != "false":
+                import manga_translator.rendering as rendering
+                bubble_layout(rendering, text_render)
         MangaTranslator._mangalate_compat_applied = True
