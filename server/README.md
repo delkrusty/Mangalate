@@ -113,6 +113,22 @@ docker compose -f docker-compose.yml -f docker-compose.public.yml --profile gpu 
 
 O Caddy cuida do HTTPS e a porta 5003 deixa de ficar exposta. No firewall, libere só as portas 80 e 443. No app, use `https://seu-dominio.exemplo` ([HTTPS automático do Caddy](https://caddyserver.com/docs/automatic-https)).
 
+## Sem PC ou sem placa: servidor alugado (RunPod, experimental)
+
+Uma máquina com placa de vídeo alugada por hora roda o servidor inteiro, e o app usa como se fosse o seu PC. Você paga só o tempo ligado direto ao RunPod (uma RTX A5000 custa por volta de US$ 0,27 por hora); a IA continua sendo a sua chave grátis.
+
+1. Crie uma conta em [runpod.io](https://www.runpod.io) e coloque crédito (o mínimo é US$ 10).
+2. Em **Pods › Deploy**, escolha uma placa com 16 GB ou mais (RTX A5000, RTX 3090 ou RTX 4090) e clique em **Change Template** › **Custom**:
+   - **Container Image:** `ghcr.io/delkrusty/mangalate-cloud:latest`
+   - **Container Disk:** 30 GB; **Volume Disk:** 20 GB, em `/workspace` (guarda os modelos e a memória das obras quando o pod para)
+   - **Expose HTTP Ports:** `5003`
+   - **Environment Variables:** `MANGALATE_KEY` = uma senha longa sua (24 caracteres ou mais) e ao menos uma chave de IA: `GROQ_API_KEY`, `GEMINI_API_KEY` (as duas é melhor, uma cobre a outra no limite).
+3. Clique em **Deploy** e abra **Logs**. Na primeira vez a imagem e os modelos são baixados; espere aparecer `Pronto para o app`.
+4. Em **Connect**, copie o link da porta 5003 (`https://...-5003.proxy.runpod.net`). No app, em Mais › Tradução (Mangalate) › Servidor, cole esse link como endereço e a `MANGALATE_KEY` como Chave Mangalate.
+5. Ao terminar de ler, clique em **Stop**. Parado, só o disco de 20 GB é cobrado (centavos por dia); **Terminate** apaga tudo.
+
+Sem `MANGALATE_KEY`, o servidor cria uma senha e mostra no log. Qualquer pessoa com o link e a senha usa a sua máquina; não compartilhe os dois.
+
 ## Colab
 
 O [notebook Colab](https://colab.research.google.com/github/delkrusty/Mangalate/blob/main/server/colab/Mangalate_Colab.ipynb) traduz um ZIP/CBZ sem instalar Docker e exporta o CBZ e o pacote de revisão. Ele não é um servidor para o app e não usa a Chave Mangalate. Se usar uma IA, coloque a chave num Secret chamado `MANGALATE_PROVIDER_KEY`, nunca numa célula. O notebook ainda está na versão 0.5.2 e será atualizado. As regras de uso são as do [Colab](https://research.google.com/colaboratory/intl/pt-BR/faq.html).

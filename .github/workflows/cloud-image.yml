@@ -1,0 +1,39 @@
+name: Cloud GPU image
+on:
+  push:
+    branches: [main]
+    paths: ['server/**', '.github/workflows/cloud-image.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
+      - name: Contract tests
+        run: |
+          pip install -r server/requirements-gateway.txt numpy==2.5.4 opencv-python-headless
+          python -m unittest discover -s server/tests -p test_cloud.py -v
+      - name: Build
+        working-directory: server
+        run: docker build -f Dockerfile.worker --target cloud -t mangalate-cloud .
+      - name: Check the entry point inside the image
+        run: |
+          docker run --rm --entrypoint python -e GROQ_API_KEY=gsk_test mangalate-cloud -c "import sys; sys.path.insert(0,'/mangalate'); import cloud, gateway; env=cloud.prepare({'GROQ_API_KEY':'gsk_test'}); assert env['MANGALATE_UPSTREAM']=='http://127.0.0.1:8001'; print('ok')"
+      - name: Publish
+        if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          for tag in latest "${GITHUB_SHA::7}"; do
+            docker tag mangalate-cloud "ghcr.io/$owner/mangalate-cloud:$tag"
+            docker push "ghcr.io/$owner/mangalate-cloud:$tag"
+          done

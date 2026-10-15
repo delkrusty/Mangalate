@@ -16,6 +16,7 @@ def main():
     parser.add_argument("--url", default="http://127.0.0.1:5003")
     parser.add_argument("--key-file", type=Path, default=ROOT / "secrets/mangalate_key.txt")
     parser.add_argument("--warmup", action="store_true")
+    parser.add_argument("--yes", action="store_true", help="não perguntar antes de usar a API (servidor na nuvem)")
     args = parser.parse_args()
     key = args.key_file.read_text().strip()
     headers = {"X-Mangalate-Key": key}
@@ -25,7 +26,7 @@ def main():
     with call("/v1/info") as response:
         info = json.load(response)
     print("Perfil:", info["edition"], "| motor:", info["translator"])
-    deadline = time.monotonic() + 120
+    deadline = time.monotonic() + (600 if args.yes else 120)
     while True:
         try:
             with call("/queue-size", b"") as response:
@@ -39,7 +40,7 @@ def main():
     if not args.warmup:
         print("A conexão não prova que os modelos já foram baixados. Execute --warmup para traduzir uma página sintética.")
         return
-    if info["edition"] == "byok" and input("O teste envia texto Hello à sua API e pode consumir saldo. Continuar [s/N]? ").lower() != "s":
+    if info["edition"] == "byok" and not args.yes and input("O teste envia texto Hello à sua API e pode consumir saldo. Continuar [s/N]? ").lower() != "s":
         return
     from PIL import Image, ImageDraw, ImageFont
     page = Image.new("RGB", (900, 600), "white")

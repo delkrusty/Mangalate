@@ -2,6 +2,11 @@
 
 As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://github.com/mihonapp/mihon/blob/main/CHANGELOG.md).
 
+## Em teste (próxima versão)
+
+### Servidor
+- Servidor alugado: uma imagem pronta para máquinas com placa de vídeo por hora (RunPod), para quem não tem PC ou placa. O app usa o link e a senha como faz com o PC. Passo a passo no manual do servidor.
+
 ## 0.5.5
 
 ### Modo no celular

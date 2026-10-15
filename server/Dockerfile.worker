@@ -68,3 +68,14 @@ COPY gateway.py /mangalate/gateway.py
 COPY colab/batch.py /mangalate/batch.py
 ENV PYTHONPATH=/app
 ENTRYPOINT ["python", "/mangalate/worker.py"]
+
+# One container for a rented GPU machine (RunPod and similar): engine + gateway, port 5003.
+FROM gpu AS cloud
+LABEL org.opencontainers.image.source=https://github.com/delkrusty/Mangalate
+# The engine image already carries what the gateway imports; check, don't re-pin.
+RUN python -c "import fastapi, uvicorn, httpx, multipart, PIL, numpy"
+COPY cloud.py /mangalate/cloud.py
+COPY check.py /mangalate/check.py
+ENV MANGALATE_USE_GPU=true
+EXPOSE 5003
+ENTRYPOINT ["python", "/mangalate/cloud.py"]
