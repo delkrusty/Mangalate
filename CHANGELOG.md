@@ -2,7 +2,7 @@
 
 As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://github.com/mihonapp/mihon/blob/main/CHANGELOG.md).
 
-## Em teste (próxima versão)
+## 0.5.4
 
 ### Tradução e limpeza
 - O texto traduzido ocupa o balão, não só a caixa do texto original: letras maiores e mais espaço entre as linhas.
@@ -10,6 +10,9 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 - Falas que aparecem só na emenda com a página vizinha não são mais mandadas para a IA nessa página.
 - Instruções da IA reforçadas para expressões e interjeições brasileiras ("Cuidado!", "Pode vir!") e sem palavras em inglês esquecidas.
 - Memória da obra: o servidor aprende os nomes e termos de cada obra (glossário) e manda à IA as falas das páginas anteriores do capítulo. Um termo sai igual em todas as páginas e capítulos, e frases cortadas entre páginas ganham contexto. Vale na leitura pelo app e no capítulo inteiro no PC.
+- Onomatopeias em japonês, títulos, créditos e avisos do site do scan ficam como foram desenhados.
+- Fala que a IA devolvia toda em maiúsculas volta para a caixa normal; vírgula antes do ponto é removida.
+- Palavra lida errado pelo OCR ("HARI" por "HARD") não é mais tratada como nome, e a IA não chuta o gênero de quem fala.
 
 ## 0.5.3
 
