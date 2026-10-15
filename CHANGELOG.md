@@ -2,7 +2,12 @@
 
 As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://github.com/mihonapp/mihon/blob/main/CHANGELOG.md).
 
-## 0.5.3 (em teste, ainda não publicada)
+## Em teste (próxima versão)
+
+### Tradução e limpeza
+- O texto traduzido ocupa o balão, não só a caixa do texto original: letras maiores e mais espaço entre as linhas.
+
+## 0.5.3
 
 ### Servidor + IA
 - O instalador vai direto ao menu de IAs e configura uma de cada vez, oferecendo uma reserva: Groq, Gemini, OpenRouter, Ollama ou outra compatível com OpenAI.
