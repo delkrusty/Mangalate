@@ -1,7 +1,7 @@
 name: Verify Mangalate server
 on:
   push:
-    branches: [server-first, 'candidate/**']
+    branches: ['candidate/**', 'melhoria/**', 'teste/**']
   workflow_dispatch:
   workflow_call:
 jobs:
@@ -42,7 +42,10 @@ jobs:
           python -c "import zipfile; z=zipfile.ZipFile('review/chapter.zip','w'); z.write('review/teste-original.png','001.png'); z.close()"
           worker=$(docker compose --profile cpu ps -q translator-cpu)
           docker cp review/chapter.zip "$worker":/tmp/chapter.zip
-          docker compose --profile cpu exec -T translator-cpu python /mangalate/batch.py --input /tmp/chapter.zip --output /tmp/batch-review --profile basic --diagnostics
+          docker compose --profile cpu exec -T translator-cpu python /mangalate/batch.py --input /tmp/chapter.zip --output /tmp/batch-review --profile basic --diagnostics 2>&1 | tee batch.log
+          # The translation must be fitted to the bubble by lettering.py, not silently fall back.
+          grep -E "Bubble layout: [1-9][0-9]* of" batch.log
+          ! grep -q "Bubble layout skipped" batch.log
           docker compose --profile cpu exec -T translator-cpu python -c "import json; from pathlib import Path; d=Path('/tmp/batch-review/diagnostico/0001'); assert all((d/n).exists() for n in ('1-original.png','3-regioes.png','regioes.json')), list(d.iterdir()); print(json.load(open(d/'regioes.json')))"
           docker cp "$worker":/tmp/batch-review/review.json review/batch-review.json
           python -c "import json; r=json.load(open('review/batch-review.json')); assert r and r[0]['status']=='review',r; assert any(x['translation'].strip() and x['translation'].lower()!=x['original'].lower() for x in r[0]['regions']),r"

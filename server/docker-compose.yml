@@ -8,6 +8,8 @@ x-worker: &worker
   volumes:
     - models:/app/models
     - huggingface:/root/.cache/huggingface
+    # Glossary and recent dialogue per work (memory.py); survives rebuilds.
+    - memoria:/data/memoria
   expose: ["8001"]
   # Lets the BYOK "Ollama no seu computador" option reach the host on Linux too.
   extra_hosts: ["host.docker.internal:host-gateway"]
@@ -74,3 +76,4 @@ secrets:
 volumes:
   models:
   huggingface:
+  memoria:

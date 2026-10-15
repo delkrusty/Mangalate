@@ -52,6 +52,7 @@ object MangalateDownloadTranslator {
                                 context,
                                 bytes,
                                 keepOffline = true,
+                                work = PageWork(mangaTitle, chapterName, index + 1),
                                 neighbors = { MangalateNeighbors.ofList(readers, index) },
                             )
                         } catch (e: CancellationException) {

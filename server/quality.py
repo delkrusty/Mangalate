@@ -129,12 +129,43 @@ def normalize_spacing(text):
     if not text or has_cjk(text):
         return text
     text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"[,;:]\s*(?=[.!?…—])", "", text)  # "da muralha,." (TBATE new p108)
     text = re.sub(r" +([,;:!?…])", r"\1", text)
     text = re.sub(r"(?<!\.) +\.(?!\.)", ".", text)
     text = re.sub(rf"(?<={_LETTER})([,;:])(?={_LETTER})", r"\1 ", text)
     text = re.sub(rf"([!?…]+)(?={_LETTER})", r"\1 ", text)
     text = re.sub(rf"(?<={_LETTER}{{2}})\.(?=[A-ZÀ-Ý])", ". ", text)
     return text.strip()
+
+
+def sentence_case(text, names=()):
+    """Undo an answer written all in capitals, as the prompt asks for sentence case.
+
+    TBATE new episode p74/p79: one bubble per page came back in capitals
+    ("...SUA SUPPOSTA DIETA.") while the rest of the page was in sentence case.
+    Sentence starts are capitalized again, and so are the ``names`` (glossary
+    and names written with a capital elsewhere on the page).  Short shouts
+    ("NÃO!", "PARE!") and text with no letters are left alone; "ISSO FOI..." is fixed.
+    """
+    letters = [c for c in text or "" if c.isalpha()]
+    if len(letters) < 6 or has_cjk(text) or any(c.islower() for c in letters):
+        return text
+    out = text.lower()
+    out = re.sub(r"(^|[.!?…]\s+|^[\W_]+)(\w)", lambda m: m.group(1) + m.group(2).upper(), out)
+    for name in sorted({n for n in names if n and n[:1].isupper()}, key=len, reverse=True):
+        out = re.sub(rf"(?<!\w){re.escape(name.lower())}(?!\w)", name, out)
+    return out
+
+
+def page_names(translations):
+    """Words written with a capital in the middle of a sentence elsewhere on the page."""
+    names = set()
+    for text in translations:
+        if not text or text == text.upper():
+            continue
+        for match in re.finditer(r"(?<=[\w,;:] )([A-ZÀ-Ý][\wà-ÿ'-]+)", text):
+            names.add(match.group(1))
+    return names
 
 
 def compact_symbols(original):
@@ -168,6 +199,78 @@ def whole_word_breaker(original, string_width):
 def broken_words(text, lines):
     """True when the laid-out lines do not keep every word of ``text`` whole."""
     return " ".join(lines).split() != text.split()
+
+
+# Letter pixels enclosed by a flat background -----------------------------------
+
+GLYPH_TOLERANCE = 40     # antialiased letter edges still differ this much from the interior
+GLYPH_REACH = 1.5        # search window around the text, in line heights
+GLYPH_NEAR = 0.8         # letters kept only this close to the text box, in line heights
+
+
+def bubble_glyphs(image, box, line_height, near=GLYPH_NEAR):
+    """Pixels of letters around ``box``: holes in the flat interior that surrounds the text.
+
+    The detector mask misses parts of bold italic lettering (TBATE new episode
+    p12: the T of "THIS", the end of "HARD", the whole line "OF US.").  Inside a
+    bubble, every letter is a hole in the flat interior, whatever the detector
+    saw.  Returns a boolean mask of the image size, empty when the text does not
+    sit on a flat background.
+    """
+    h, w = image.shape[:2]
+    out = np.zeros((h, w), bool)
+    x0, y0, x1, y1 = (int(v) for v in box)
+    lh = max(4.0, float(line_height))
+    g = int(lh * GLYPH_REACH) + 4
+    wx0, wy0, wx1, wy1 = max(0, x0 - g), max(0, y0 - g), min(w, x1 + g), min(h, y1 + g)
+    window = image[wy0:wy1, wx0:wx1, :3].astype(int)
+    if window.size == 0:
+        return out
+    # Interior colour: the most frequent colour around the text (bins of 24 levels).
+    quant = window.reshape(-1, 3) // 24
+    keys = quant[:, 0] * 10000 + quant[:, 1] * 100 + quant[:, 2]
+    values, counts = np.unique(keys, return_counts=True)
+    colour = np.median(window.reshape(-1, 3)[keys == values[counts.argmax()]], axis=0)
+    flat = (np.abs(window - colour).max(axis=2) <= GLYPH_TOLERANCE).astype(np.uint8)
+    # The interior: the largest flat component touching the text box.
+    count, labels = cv2.connectedComponents(flat, connectivity=4)
+    bx0, by0, bx1, by1 = x0 - wx0, y0 - wy0, x1 - wx0, y1 - wy0
+    seeds = labels[by0:by1, bx0:bx1]
+    seeds = seeds[seeds > 0]
+    if seeds.size == 0:
+        return out
+    interior = labels == np.bincount(seeds).argmax()
+    if interior[by0:by1, bx0:bx1].mean() < 0.35:
+        return out
+    # Holes: not interior and not reachable from the window border through non-interior pixels.
+    outside = (~interior).astype(np.uint8)
+    reach = np.zeros((outside.shape[0] + 2, outside.shape[1] + 2), np.uint8)
+    reached = outside.copy()
+    for y in range(outside.shape[0]):
+        for x in (0, outside.shape[1] - 1):
+            if reached[y, x] == 1:
+                cv2.floodFill(reached, reach, (x, y), 2)
+    for x in range(outside.shape[1]):
+        for y in (0, outside.shape[0] - 1):
+            if reached[y, x] == 1:
+                cv2.floodFill(reached, reach, (x, y), 2)
+    holes = reached == 1
+    # Thin curves (the inner line of a double outline, TBATE new p5/p6) are holes
+    # too, but not letters: long and almost empty inside their bounding box.
+    # Letters have strokes; a hairline is at most a couple of pixels thick.
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(holes.astype(np.uint8), connectivity=8)
+    depth = cv2.distanceTransform(holes.astype(np.uint8), cv2.DIST_L2, 3)
+    thin = max(1.6, 0.05 * lh)
+    for label in range(1, count):
+        bw, bh, area = stats[label, 2], stats[label, 3], stats[label, 4]
+        part = labels == label
+        if depth[part].max() < thin or (max(bw, bh) > 1.5 * lh and area < 0.12 * bw * bh):
+            holes[part] = False
+    near = int(lh * near)
+    keep = np.zeros_like(holes)
+    keep[max(0, by0 - near):by1 + near, max(0, bx0 - near):bx1 + near] = True
+    out[wy0:wy1, wx0:wx1] = holes & keep
+    return out
 
 
 # Line boxes from the detector mask -----------------------------------------

@@ -5,6 +5,7 @@ Based on NLLBTranslator at:
 https://github.com/zyddnys/manga-image-translator/blob/d6de6ab62a7be6afc0d07a3184149cdefbcd32f2/manga_translator/translators/nllb.py
 Retains GPL-3.0 licensing. No warranty; upstream LICENSE is in the Docker source tree.
 """
+import os
 
 
 def translate_nllb_batch(self, from_lang, to_lang, queries):
@@ -148,8 +149,38 @@ def parse_marked(content, count):
     return translations
 
 
+# Work memory for the page being translated (memory.WorkMemory.context), set by the
+# caller before each page like PAGE_ROWS; terms the AI listed are collected here.
+PAGE_CONTEXT = None
+LEARNED_TERMS = []
+
+
+def set_page_context(context):
+    global PAGE_CONTEXT
+    PAGE_CONTEXT = context
+    LEARNED_TERMS.clear()
+
+
+def take_learned_terms():
+    terms = list(LEARNED_TERMS)
+    LEARNED_TERMS.clear()
+    return terms
+
+
+def strip_terms(content):
+    """(answer without the optional <|termos|> line, terms); kept only if the answer parses."""
+    if PAGE_CONTEXT is None:
+        return content, []
+    from memory import split_terms
+    return split_terms(content)
+
+
 async def request_byok_translation(self, to_lang, prompt, client=None, model=None):
-    messages = [{"role": "system", "content": self.chat_system_template.format(to_lang=to_lang)}]
+    system = self.chat_system_template.format(to_lang=to_lang)
+    if PAGE_CONTEXT is not None:
+        from memory import context_block
+        system += context_block(PAGE_CONTEXT, prompt)
+    messages = [{"role": "system", "content": system}]
     sample = self.get_chat_sample(to_lang)
     if sample:
         messages.extend([{"role": "user", "content": sample[0]},
@@ -192,9 +223,12 @@ async def translate_byok(self, from_lang, to_lang, queries):
                 content = await asyncio.wait_for(
                     self._request_translation(to_lang, prompt, provider_client(pool, provider), provider["model"]),
                     timeout=180)
-                extracted = (self.extract_capture_groups(content, rf"{self.rgx_capture}") or "").strip()
+                answer, terms = strip_terms(content)
+                extracted = (self.extract_capture_groups(answer, rf"{self.rgx_capture}") or "").strip()
                 try:
-                    return parse_marked(extracted, count)
+                    parsed = parse_marked(extracted, count)
+                    LEARNED_TERMS.extend(terms)
+                    return parsed
                 except ValueError:
                     # Kept in memory for the local --diagnostics report only; never logged.
                     pool.__dict__.setdefault("raw", []).append((provider["name"], count, prompt, content))
@@ -202,7 +236,9 @@ async def translate_byok(self, from_lang, to_lang, queries):
             translations += await pool.run(attempt)
             continue
         content = await asyncio.wait_for(self._request_translation(to_lang, prompt), timeout=180)
-        translations += parse_marked(self.extract_capture_groups(content, rf"{self.rgx_capture}").strip(), count)
+        answer, terms = strip_terms(content)
+        translations += parse_marked(self.extract_capture_groups(answer, rf"{self.rgx_capture}").strip(), count)
+        LEARNED_TERMS.extend(terms)
     return translations
 
 
@@ -228,6 +264,66 @@ def protect_art(config):
     return 1 <= value <= 50
 
 
+# Rows of the page inside the strip being translated (seams.Strip), set by the
+# caller before each page; pages are translated one at a time.
+PAGE_ROWS = None
+
+
+def set_page_rows(top, bottom):
+    global PAGE_ROWS
+    PAGE_ROWS = (int(top), int(bottom))
+
+
+def on_page(regions, rows):
+    """Regions whose text touches the page rows; the rest lie wholly in borrowed context.
+
+    TBATE (new episode) p6: the top of a bubble belonging to p7, cut by the end
+    of the borrowed strip, was sent to the AI as "AWW, THATS N" and came back
+    untranslated.  Such regions are never part of the page and only confuse the
+    translation, so they are dropped before it.
+    """
+    if not rows:
+        return list(regions), []
+    top, bottom = rows
+    inside, outside = [], []
+    for region in regions:
+        y0, y1 = float(region.xyxy[1]), float(region.xyxy[3])
+        (inside if y1 > top and y0 < bottom else outside).append(region)
+    return inside, outside
+
+
+def is_sound_effect(text):
+    """Japanese lettering in an English scan is a sound effect drawn on the art.
+
+    Grand Blue 87 p6: the line repair joined "BOB" to the kana "ぷか" below it;
+    the OCR read "BOBふ。か", the AI answered "Bob?" and the effect was erased.
+    Kana or kanji with only a few Latin letters around them is left as drawn.
+    """
+    import re
+    text = str(text or "")
+    if not re.search(r"[\u3040-\u30ff\u3400-\u9fff\uff66-\uff9f]", text):
+        return False
+    return len(re.findall(r"[A-Za-z]", text)) < 12
+
+
+CREDIT = None
+
+
+def is_credit(text):
+    """Title, credit and scan-group lettering stays as drawn.
+
+    TBATE new p84 "THE BEGINNING AFTER™END"; TBATE 236 p27 the "thunderscans"
+    watermark was translated.
+    """
+    import re
+    global CREDIT
+    if CREDIT is None:
+        CREDIT = re.compile(r"[™©®]|\b\w{3,}scans?\b|discord|patreon|ko-?fi|www\.|\.(?:com|net|org|gg)\b"
+                            r"|read (?:the |this |more |latest )?chapters? (?:at|on)|support us|our (?:web)?site",
+                            re.I)
+    return bool(CREDIT.search(str(text or "")))
+
+
 def classify_regions(original_merge):
     """Decide once, before translation, which blocks are cleaned and translated.
 
@@ -240,6 +336,10 @@ def classify_regions(original_merge):
         from quality import classify_region
         regions = await original_merge(self, config, ctx)
         ctx.mangalate_preserved = []
+        if regions:
+            regions, context_only = on_page(regions, PAGE_ROWS)
+            if context_only:
+                print(f"Region check: {len(context_only)} only in the neighbouring pages, skipped", flush=True)
         if not regions or not protect_art(config):
             return regions
         image, raw = ctx.img_rgb, ctx.mask_raw
@@ -247,6 +347,11 @@ def classify_regions(original_merge):
             raw = cv2.resize(raw, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
         kept = []
         for region in regions:
+            text = getattr(region, "text", "")
+            if is_sound_effect(text) or is_credit(text):
+                region.mangalate_background = {"kind": "efeito_sonoro" if is_sound_effect(text) else "creditos"}
+                ctx.mangalate_preserved.append(region)
+                continue
             region.mangalate_background = classify_region(image, raw, region.lines)
             if region.mangalate_background["kind"] == "interior":
                 kept.append(region)
@@ -298,7 +403,13 @@ def repair_textlines(original_detect):
             return result
         horizontal = [i for i, line in enumerate(textlines) if getattr(line, "direction", "h") == "h"]
         boxes = [_box(textlines[i].pts) for i in horizontal]
-        repaired, changes = repair_lines(mask_raw, boxes)
+        # Letters inside a flat interior count even where the detector mask missed them.
+        from quality import bubble_glyphs, NEAR_LINES
+        seen = np.asarray(mask_raw) > 127
+        if image is not None:
+            for box in boxes:
+                seen = seen | bubble_glyphs(np.asarray(image), box, box[3] - box[1], near=NEAR_LINES)
+        repaired, changes = repair_lines(seen.astype(np.uint8) * 255, boxes)
         ctx.mangalate_line_repairs = [{"tipo": kind, "antes": before, "depois": after} for kind, before, after in changes]
         if not changes:
             return result
@@ -315,6 +426,102 @@ def repair_textlines(original_detect):
         print(f"Line repair: split={split} added={len(changes) - split}", flush=True)
         return (lines, mask_raw, mask) + tuple(result[3:])
     return detect
+
+
+def bubble_layout(rendering, text_render):
+    """Replace the engine's 'fit to the original text box' with 'fit to the bubble'.
+
+    See lettering.py.  Regions without a usable bubble keep the engine's own
+    sizing and drawing.
+    """
+    import numpy as np
+    import lettering
+    from quality import has_cjk
+    original_resize = rendering.resize_regions_to_font_size
+    original_render = rendering.render
+
+    def horizontal(region):
+        direction = getattr(region, "_direction", None) or region.direction
+        return direction in ("horizontal", "h") or (direction == "auto" and region.horizontal)
+
+    def line_height(region):
+        heights = [float(np.linalg.norm(np.asarray(l[3]) - np.asarray(l[0]))) for l in region.lines]
+        return float(np.median(heights)) if heights else float(region.font_size)
+
+    def resize(img, text_regions, font_size_fixed, font_size_offset, font_size_minimum):
+        points = original_resize(img, text_regions, font_size_fixed, font_size_offset, font_size_minimum)
+        if font_size_fixed is not None:
+            return points
+        minimum = font_size_minimum if font_size_minimum and font_size_minimum > 0 else round((img.shape[0] + img.shape[1]) / 200)
+        boxes = [tuple(int(v) for v in r.xyxy) for r in text_regions]
+        planned = 0
+        for i, region in enumerate(text_regions):
+            region.mangalate_plan = None
+            text = region.get_translation_for_rendering()
+            if not text or not horizontal(region) or has_cjk(text):
+                continue
+            def layout(size, width, height, text=text, lang=region.target_lang):
+                return text_render.calc_horizontal(size, text, width, height, lang, False)
+            others = boxes[:i] + boxes[i + 1:]
+            try:
+                plan = lettering.plan(img, boxes[i], others, text, layout,
+                                      line_height(region) + 0, max(8, round(minimum * 0.6)),
+                                      offset=font_size_offset or 0)
+            except Exception as exc:  # never lose a page over the nicer layout
+                print(f"Bubble layout skipped: {type(exc).__name__}", flush=True)
+                plan = None
+            if plan is None:
+                continue
+            size, (x0, y0, x1, y1) = plan
+            region.mangalate_plan = plan
+            region.font_size = size
+            points[i] = np.array([[[x0, y0], [x1, y0], [x1, y1], [x0, y1]]], dtype=np.int64)
+            planned += 1
+        print(f"Bubble layout: {planned} of {len(text_regions)} regions fitted to the bubble", flush=True)
+        return points
+
+    def render(img, region, dst_points, hyphenate, line_spacing, disable_font_border):
+        plan = getattr(region, "mangalate_plan", None)
+        if plan is None:
+            return original_render(img, region, dst_points, hyphenate, line_spacing, disable_font_border)
+        import cv2
+        size, (x0, y0, x1, y1) = plan
+        fg, bg = rendering.fg_bg_compare(*region.get_font_colors())
+        if disable_font_border:
+            bg = None
+        box = text_render.put_text_horizontal(size, region.get_translation_for_rendering(), x1 - x0, y1 - y0,
+                                              "center", False, fg, bg, region.target_lang, False,
+                                              lettering.LINE_SPACING)
+        if box is None:
+            return img
+        h, w = box.shape[:2]
+        scale = min(1.0, (x1 - x0) / w, (y1 - y0) / h)
+        if scale < 1.0:
+            box = cv2.resize(box, (max(1, int(w * scale)), max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
+            h, w = box.shape[:2]
+        left = (x0 + x1) // 2 - w // 2
+        top = (y0 + y1) // 2 - h // 2
+        H, W = img.shape[:2]
+        cx0, cy0, cx1, cy1 = max(0, left), max(0, top), min(W, left + w), min(H, top + h)
+        if cx1 <= cx0 or cy1 <= cy0:
+            return img
+        part = box[cy0 - top:cy1 - top, cx0 - left:cx1 - left]
+        alpha = part[:, :, 3:4].astype(np.float32) / 255.0
+        target = img[cy0:cy1, cx0:cx1].astype(np.float32)
+        img[cy0:cy1, cx0:cx1] = np.clip(target * (1 - alpha) + part[:, :, :3].astype(np.float32) * alpha, 0, 255).astype(np.uint8)
+        return img
+
+    rendering.resize_regions_to_font_size = resize
+    rendering.render = render
+
+
+def keep_clean_copy(original_render):
+    """The renderer draws into ctx.img_inpainted; keep the cleaned page for diagnostics."""
+    async def render(self, config, ctx):
+        image = getattr(ctx, "img_inpainted", None)
+        ctx.mangalate_clean = image.copy() if image is not None else None
+        return await original_render(self, config, ctx)
+    return render
 
 
 RESCUE_PROB = 0.02
@@ -364,9 +571,37 @@ async def refine_mask_consistently(self, config, ctx):
     The engine would otherwise re-run its colour test here and silently drop
     the mask of blocks that are still translated and rendered.
     """
+    import cv2
+    import numpy as np
     from manga_translator.mask_refinement import dispatch
-    return await dispatch(ctx.text_regions, ctx.img_rgb, ctx.mask_raw, "fit_text",
+    from quality import bubble_glyphs
+    mask = await dispatch(ctx.text_regions, ctx.img_rgb, ctx.mask_raw, "fit_text",
                           config.mask_dilation_offset, 0, self.verbose, self.kernel_size)
+    # Pieces of letters the detector mask missed (italic overhangs) would stay
+    # on the page as stray marks: add every letter inside the bubble interior.
+    # Grown like the detector's own mask (about a quarter of the line height): with a
+    # thin margin the cleaner left a grey ghost of the anti-aliased letter edges
+    # (TBATE new episode p12, "OF US.").  The growth stays near the text box, never
+    # reaching the bubble outline.
+    h, w = mask.shape[:2]
+    grown = np.zeros((h, w), bool)
+    for region in ctx.text_regions or []:
+        heights = [float(np.linalg.norm(np.asarray(l[3]) - np.asarray(l[0]))) for l in region.lines]
+        line = float(np.median(heights)) if heights else float(region.font_size)
+        glyphs = bubble_glyphs(ctx.img_rgb, region.xyxy, line)
+        if not glyphs.any():
+            continue
+        size = max(5, int(round(line * 0.25)) | 1)
+        near = cv2.dilate(glyphs.astype(np.uint8), np.ones((size, size), np.uint8)) > 0
+        x0, y0, x1, y1 = (int(v) for v in region.xyxy)
+        pad = size
+        limit = np.zeros((h, w), bool)
+        limit[max(0, y0 - pad):min(h, y1 + pad), max(0, x0 - pad):min(w, x1 + pad)] = True
+        grown |= near & limit
+    if grown.any():
+        mask = mask.copy()
+        mask[grown] = 255
+    return mask
 
 
 def validate_page_translations(original_translate):
@@ -374,10 +609,13 @@ def validate_page_translations(original_translate):
         regions = list(ctx.text_regions or [])
         result = await original_translate(self, config, ctx)
         if not legacy_quality() and isinstance(result, list):
-            from quality import normalize_spacing
+            from quality import normalize_spacing, page_names, sentence_case
+            texts = [getattr(region, "translation", None) for region in result]
+            names = page_names([t for t in texts if isinstance(t, str)])
+            names |= {g["target"] for g in (PAGE_CONTEXT or {}).get("glossary", [])}
             for region in result:
                 if isinstance(getattr(region, "translation", None), str):
-                    region.translation = normalize_spacing(region.translation)
+                    region.translation = normalize_spacing(sentence_case(region.translation, names))
         blank = sum(not getattr(region, "translation", "").strip() for region in regions)
         unchanged = sum(getattr(region, "translation", "").strip().lower() == region.text.strip().lower()
                         for region in regions)
@@ -465,10 +703,14 @@ def apply_compatibility():
             MangaTranslator._run_textline_merge = classify_regions(MangaTranslator._run_textline_merge)
             MangaTranslator._run_mask_refinement = refine_mask_consistently
             MangaTranslator._run_ocr = rescue_ocr(MangaTranslator._run_ocr)
+            MangaTranslator._run_text_rendering = keep_clean_copy(MangaTranslator._run_text_rendering)
             MangaTranslator._run_detection = repair_textlines(detection_fallback(MangaTranslator._run_detection))
             from manga_translator.rendering import text_render
             from quality import compact_symbols, whole_word_breaker
             text_render.compact_special_symbols = compact_symbols(text_render.compact_special_symbols)
             text_render.calc_horizontal = whole_word_breaker(text_render.calc_horizontal,
                                                              text_render.get_string_width)
+            if os.environ.get("MANGALATE_BUBBLE_LAYOUT", "true").lower() != "false":
+                import manga_translator.rendering as rendering
+                bubble_layout(rendering, text_render)
         MangaTranslator._mangalate_compat_applied = True

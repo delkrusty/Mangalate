@@ -70,11 +70,16 @@ Opções úteis:
 | Opção | Para quê |
 |---|---|
 | `--pages 1-10` | Só algumas páginas, bom para testar |
-| `--glossary /work/glossario.csv` | Nomes e termos fixos (colunas `source,target`) |
+| `--glossary /work/glossario.csv` | Nomes e termos fixos (colunas `source,target`); vencem os termos aprendidos |
+| `--work "Nome da obra"` | Obra para a memória (padrão: nome do arquivo). Use o mesmo nome em todos os capítulos |
+| `--no-memory` | Traduz sem a memória da obra (sem glossário aprendido e sem páginas anteriores) |
 | `--speed fast` / `--speed quality` | Força uma velocidade |
 | `--diagnostics` | Salva máscaras e regiões de cada página em `diagnostico/` |
+| `--box-layout` | Encaixa o texto na caixa do original, como na 0.5.3 (para comparar) |
 
 Com placa NVIDIA, use `--profile gpu run ... translator-gpu` e acrescente `--gpu`. No Linux/macOS, troque `${PWD}` por `$PWD`.
+
+**Memória da obra.** A cada página, o servidor guarda os nomes e termos que a IA usou e as falas da página. Nas próximas páginas e capítulos da mesma obra, a IA recebe esses termos e as falas das duas páginas anteriores, então um nome sai sempre igual. A memória é a mesma para o app e para este comando, e fica no volume `memoria` do Docker (não some com o `py rebuild.py`). O lote também grava `glossario.csv` com tudo o que a obra já tem: corrija o que quiser e passe de volta com `--glossary`.
 
 Na saída, `capitulo-para-revisar.cbz` traz as páginas em ordem; quando uma página falha, fica o original, nunca uma página em branco. Em `revisao-completa.zip` estão os originais, os resultados e um `revisao.md` com o texto lido e o traduzido de cada página. Se três páginas seguidas falharem, o lote para de chamar a IA.
 

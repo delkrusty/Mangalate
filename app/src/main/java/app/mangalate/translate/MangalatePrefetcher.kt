@@ -35,7 +35,12 @@ object MangalatePrefetcher {
                         val stream = page.stream ?: return@launch
                         val bytes = stream().use { it.readBytes() }
                         if (bytes.size < 2048) return@launch
-                        MangalateTranslator.translate(context, bytes, neighbors = { MangalateNeighbors.of(page) })
+                        MangalateTranslator.translate(
+                            context,
+                            bytes,
+                            work = MangalateWork.of(page),
+                            neighbors = { MangalateNeighbors.of(page) },
+                        )
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Throwable) {

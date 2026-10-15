@@ -176,6 +176,7 @@ object MangalateTranslator {
     suspend fun maybeTranslate(
         context: Context,
         source: Buffer,
+        work: PageWork? = null,
         neighbors: (suspend () -> Pair<ByteArray?, ByteArray?>)? = null,
     ): BufferedSource {
         if (!isEnabled(context)) return source
@@ -183,7 +184,7 @@ object MangalateTranslator {
         if (isGifOrAnimated(source)) return source
         return try {
             val bytes = source.peek().readByteArray()
-            val translated = translate(context, bytes, neighbors = neighbors)
+            val translated = translate(context, bytes, work = work, neighbors = neighbors)
             Buffer().write(translated)
         } catch (e: CancellationException) {
             throw e
@@ -209,6 +210,7 @@ object MangalateTranslator {
         context: Context,
         image: ByteArray,
         keepOffline: Boolean = false,
+        work: PageWork? = null,
         neighbors: (suspend () -> Pair<ByteArray?, ByteArray?>)? = null,
     ): ByteArray {
         init(context)
@@ -242,7 +244,7 @@ object MangalateTranslator {
                                 TranslateMode.SERVER -> {
                                     // Vizinhas só no modo servidor: ele emenda balões cortados entre fatias.
                                     val (above, below) = neighbors?.invoke() ?: (null to null)
-                                    request(s, s.toServerConfig(), image, above, below)
+                                    request(s, s.toServerConfig(), image, above, below, work)
                                 }
                                 else -> LocalPipeline.process(context.applicationContext, image, s) { _status.value = it }
                             }
@@ -270,6 +272,7 @@ object MangalateTranslator {
         image: ByteArray,
         above: ByteArray? = null,
         below: ByteArray? = null,
+        work: PageWork? = null,
     ): ByteArray {
         val mime = sniffMime(image)
         val ext = mime.substringAfter('/')
@@ -277,6 +280,7 @@ object MangalateTranslator {
             .setType(MultipartBody.FORM)
             .addFormDataPart("image", "page.$ext", image.toRequestBody(mime.toMediaType()))
             .addFormDataPart("config", config)
+            .apply { if (work != null) addFormDataPart("work", work.toJson()) }
             .apply {
                 for ((name, bytes) in listOf("above" to above, "below" to below)) {
                     if (bytes == null) continue

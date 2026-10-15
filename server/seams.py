@@ -100,7 +100,12 @@ class Strip:
 
 
 def region_box(region):
+    """Original text box, grown to the rectangle the translation was fitted to (lettering.py)."""
     x0, y0, x1, y1 = (int(v) for v in region.xyxy)
+    plan = getattr(region, "mangalate_plan", None)
+    if plan:
+        px0, py0, px1, py1 = plan[1]
+        x0, y0, x1, y1 = min(x0, px0), min(y0, py0), max(x1, px1), max(y1, py1)
     return x0, y0, x1, y1
 
 

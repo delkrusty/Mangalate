@@ -45,7 +45,8 @@ def create_core(engine=None, config_factory=None):
 
     @app.post("/translate/with-form/image")
     async def translate(image: UploadFile = File(...), config: str = Form("{}"),
-                        above: UploadFile | None = File(None), below: UploadFile | None = File(None)):
+                        above: UploadFile | None = File(None), below: UploadFile | None = File(None),
+                        work: str = Form("")):
         if lock.locked():
             raise HTTPException(429, "Engine busy")
         async with lock:
@@ -68,7 +69,18 @@ def create_core(engine=None, config_factory=None):
             except (ValueError, TypeError, AttributeError):
                 raise HTTPException(422, "Invalid page or configuration")
             try:
+                from engine_compat import set_page_context, set_page_rows, take_learned_terms
+                from memory import default_memory, parse_work, remember
+                set_page_rows(strip.top, strip.bottom)
+                # Glossary and previous pages of the same work, when the app names it.
+                page_work = parse_work(work)
+                set_page_context(default_memory().context(page_work["obra"], page_work["capitulo"],
+                                                          page_work["pagina"]) if page_work else None)
                 ctx = await engine.translate(strip.image, parsed)
+                try:
+                    remember(default_memory(), page_work, getattr(ctx, "text_regions", None), take_learned_terms())
+                except Exception as exc:  # the page is done; memory is a bonus
+                    print(f"Memória da obra: {type(exc).__name__}", flush=True)
                 result = finish(strip, ctx.result, getattr(ctx, "text_regions", None) if strip.stitched else None,
                                 seam_cache, config)
                 if strip.stitched:

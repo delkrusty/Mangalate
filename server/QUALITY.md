@@ -8,7 +8,7 @@ O resultado automático é uma versão para revisar, não um scan final. Compare
 2. **Reparo de linhas (0.5.3):** linhas que a máscara do detector cobre, mas que ficaram sem caixa ou dividindo uma caixa com outra, ganham caixa própria. Linhas que o OCR descartou por baixa confiança no meio de um parágrafo são lidas de novo. Sem isso, essas linhas ficavam em inglês.
 3. **OCR:** leitura das linhas (modelo 48px).
 4. **Balão ou arte:** cada fala é classificada pelo fundo ao redor das linhas. Fundo liso ou em degradê é balão: a fala é limpa e traduzida. Fundo com desenho é arte: a fala fica no original e a página é marcada para revisão. Assim, a arte nunca é apagada para receber texto.
-5. **Tradução:** pela IA escolhida. No capítulo inteiro (`batch.py`), as duas páginas anteriores e o glossário opcional entram como contexto; na leitura pelo app, cada página é traduzida sozinha. Uma resposta incompleta ou fora do formato não é aceita como tradução.
+5. **Tradução:** pela IA escolhida. A IA recebe a memória da obra: os termos do glossário que aparecem na página e as falas das duas páginas anteriores do capítulo. Ela devolve, numa linha à parte, os nomes e termos da página; um termo só entra no glossário se estiver mesmo no texto lido, e a primeira tradução vale para as próximas. Isso vale no app (que manda o nome da obra, do capítulo e o número da página) e no `batch.py`. Uma resposta incompleta ou fora do formato não é aceita como tradução.
 6. **Limpeza:** LaMa, Large no modo Qualidade e MPE no Rápido. As dimensões da página são preservadas.
 7. **Escrita:** fonte horizontal, sem cortar palavras e com espaço após a pontuação.
 8. **Emendas (webtoon):** um balão cortado entre duas páginas é traduzido inteiro, usando os pedaços das páginas vizinhas, e as duas metades combinam.
@@ -19,7 +19,7 @@ O `batch.py` gera um relatório de cada página (`review.json` e `revisao.md`). 
 
 - Onomatopeias e letras muito estilizadas podem ser lidas errado ou ignoradas.
 - Fala sobre o desenho fica no original, de propósito.
-- A IA às vezes erra gírias ou deixa um termo em inglês. Use o glossário para nomes e termos fixos.
+- A IA às vezes erra gírias ou deixa um termo em inglês. O glossário aprendido mantém nomes e termos iguais; para corrigir um termo, edite o `glossario.csv` do lote e passe com `--glossary`.
 - O tamanho do texto nem sempre aproveita bem o balão.
 
 ## Como testar uma mudança

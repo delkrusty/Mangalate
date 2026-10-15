@@ -64,6 +64,28 @@ def profile_config(profile, requested, speed=None):
     return config
 
 
+def page_work(value):
+    """Optional {"obra", "capitulo", "pagina"} from the app, for the work's glossary and context.
+
+    Only these three short fields are forwarded; anything else is dropped.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return ""
+    if len(value) > 2000:
+        raise ValueError("Campo work grande demais.")
+    data = json.loads(value)
+    if not isinstance(data, dict):
+        raise ValueError("Campo work deve ser um objeto JSON.")
+    clean = {}
+    for name in ("obra", "capitulo"):
+        if isinstance(data.get(name), str) and data[name].strip():
+            clean[name] = data[name].strip()[:200]
+    page = data.get("pagina")
+    if isinstance(page, int) and not isinstance(page, bool) and 0 <= page < 100_000:
+        clean["pagina"] = page
+    return json.dumps(clean, ensure_ascii=False) if clean.get("obra") else ""
+
+
 def open_page(data):
     try:
         with Image.open(io.BytesIO(data)) as page:
@@ -173,7 +195,7 @@ def create_app(key=None, upstream=None, profile=None, transport=None):
                 raise HTTPException(413, "Página maior que 40 MB.")
         request._body = bytes(raw)
         try:
-            async with request.form(max_files=3, max_fields=1, max_part_size=MAX_BODY) as form:
+            async with request.form(max_files=3, max_fields=2, max_part_size=MAX_BODY) as form:
                 upload = form.get("image")
                 if not isinstance(upload, UploadFile):
                     raise ValueError("Envie o campo image.")
@@ -191,6 +213,7 @@ def create_app(key=None, upstream=None, profile=None, transport=None):
                 if not isinstance(requested, dict):
                     raise ValueError("Configuração deve ser um objeto JSON.")
                 config = profile_config(profile, requested)
+                work = page_work(form.get("work"))
                 original = await asyncio.to_thread(open_page, data)
         except (ValueError, TypeError, AttributeError) as exc:
             raise HTTPException(422, str(exc))
@@ -198,7 +221,7 @@ def create_app(key=None, upstream=None, profile=None, transport=None):
             result = await app.state.client.post(
                 "/translate/with-form/image",
                 files={"image": ("page.png", data, "application/octet-stream"), **neighbours},
-                data={"config": json.dumps(config)},
+                data={"config": json.dumps(config), **({"work": work} if work else {})},
             )
         except httpx.TimeoutException:
             raise HTTPException(504, "O motor demorou demais. Prepare os modelos com check.py --warmup.")
