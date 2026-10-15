@@ -27,14 +27,15 @@ LINES = [
     "...at the ball tomorrow night.",
     "NO WAY! ABSOLUTELY NOT!",
     "IN YOVEMBER?! IF I COULD JUST AC7 LIKE NORMAL...",
-    "WATCH OUT! HERE IT COMES!",
-    "AWW, COME ON. THAT'S NOT FAIR.",
-    "YOU WANNA FIGHT? BRING IT ON!",
-    "ALL RIGHT, LET'S CALL IT A DAY.",
+    # Expressions NOT among the prompt's examples, to see if the rule generalizes.
+    "HEADS UP! IT'S HEADING YOUR WAY!",
+    "AWW, GIVE ME A BREAK. YOU'RE NO FUN.",
+    "A RACE? YOU'RE ON!",
+    "NICE ONE! NOW SPILL IT, WHAT HAPPENED?",
 ]
 # English left in the translation (words that are never Portuguese).
-ENGLISH = re.compile(r"\b(aww|the|come on|bring it|that's|you|it's|let's|day)\b", re.I)
-CALQUES = re.compile(r"chamar? (isso )?de (um )?dia|traga|trazer isso", re.I)
+ENGLISH = re.compile(r"\b(aww|the|heads up|spill|you're|that's|you|it's|nice one)\b", re.I)
+CALQUES = re.compile(r"cabeças? (pra|para) cima|me dê uma pausa|derrame|derrama|você está ligado", re.I)
 PROVIDERS = [
     ("Groq", "GROQ_API_KEY", "https://api.groq.com/openai/v1",
      ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "llama-3.3-70b-versatile"]),
