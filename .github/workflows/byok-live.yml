@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
   push:
     branches: ['candidate/**', 'melhoria/**', 'teste/**']
-    paths: ['server/tests/byok_live.py', '.github/workflows/byok-live.yml', 'server/profiles/scan-prompt.yaml']
+    paths: ['server/tests/byok_live.py', '.github/workflows/byok-live.yml', 'server/profiles/scan-prompt.yaml', 'server/memory.py']
 jobs:
   live:
     runs-on: ubuntu-latest

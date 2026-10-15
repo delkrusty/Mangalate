@@ -37,10 +37,12 @@ MAX_CONTEXT_CHARS = 3000
 
 TERMS_INSTRUCTION = (
     "\nAfter the last bubble you may add ONE final line starting with <|termos|> that lists the "
-    "names and fixed terms of THIS page (people, places, ranks, techniques, items, organizations) "
-    "as SOURCE=translation pairs separated by \";\", for example "
-    "\"<|termos|>GREY=Grey; MANA CORE=núcleo de mana\". Use the glossary's translation when a "
-    "term is already in it. Omit the line when the page has no such term; never put it inside a bubble."
+    "names and fixed terms of THIS page as SOURCE=translation pairs separated by \";\": not only "
+    "people, but also places, ranks, magic or power systems, techniques, items, creatures and "
+    "organizations a reader expects to stay the same, for example "
+    "\"<|termos|>GREY=Grey; MANA CORE=núcleo de mana; SKY PALACE=Palácio Celeste\". Write SOURCE "
+    "exactly as in the text. Use the glossary's translation when a term is already in it. Omit the "
+    "line when the page has no such term; never put it inside a bubble."
 )
 
 
