@@ -320,3 +320,22 @@ class ModelNameTest(unittest.TestCase):
         self.assertEqual(clean_model("meu modelo"), "")
         self.assertEqual(clean_model("NOME"), "")
         self.assertEqual(clean_model(""), "")
+
+
+class PlainLinesAnswerTest(unittest.TestCase):
+    def test_exact_line_count_without_markers_is_accepted(self):
+        from engine_compat import parse_marked
+        answer = "Ei, Chisa.\nPreciso chegar à minha próxima aula.\n\nChi-\nスタスタスタ"
+        self.assertEqual(parse_marked(answer, 4), ["Ei, Chisa.", "Preciso chegar à minha próxima aula.",
+                                                  "Chi-", "スタスタスタ"])
+
+    def test_wrong_line_count_without_markers_is_rejected(self):
+        from engine_compat import parse_marked
+        for bad, count in (("Ei, Chisa.\nPreciso ir.", 3), ("a\nb\nc\nd", 3)):
+            with self.assertRaises(ValueError):
+                parse_marked(bad, count)
+
+    def test_google_invalid_key_400_pauses_for_an_hour(self):
+        p, clock, _ = pool()
+        RotationTest.run_pool(self, p, lambda n: ProviderError(400) if n == "groq" else ["ok"])
+        self.assertEqual(p.resting["groq"], clock.now + LONG_REST)

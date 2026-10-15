@@ -108,6 +108,21 @@ def parse_numbered_lines(content, count):
     return texts
 
 
+def parse_plain_lines(content, count):
+    """Fallback for answers with one translation per line and no markers at all.
+
+    Accepted only when there are exactly `count` non-empty lines (Grand Blue 87:
+    Groq answered 8 correct lines for 8 bubbles, without markers).
+    """
+    import re
+    lines = [line.strip() for line in content.strip().splitlines() if line.strip()]
+    # Numbered answers are judged only by parse_numbered_lines: a reordered "1. 3. 2."
+    # must never be accepted here as plain lines.
+    if any(re.match(r"^(?:<\|?\d+\|?>|\[\d+\]|\d+[.):])", line) for line in lines):
+        return None
+    return lines if count > 1 and len(lines) == count else None
+
+
 def parse_marked(content, count):
     import re
     markers = list(re.finditer(r"<\|(\d+)\|>", content))
@@ -115,6 +130,8 @@ def parse_marked(content, count):
         return [content]
     if not markers:
         fallback = parse_numbered_lines(content, count)
+        if fallback is None:
+            fallback = parse_plain_lines(content, count)
         if fallback is not None:
             return fallback
     if [int(marker.group(1)) for marker in markers] != list(range(1, count + 1)):

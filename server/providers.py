@@ -100,7 +100,8 @@ def classify(exc):
     status = getattr(exc, "status_code", None)
     if status == 429:
         return "limit"
-    if status in (401, 402, 403, 404):
+    # Google answers an invalid API key with 400, not 401.
+    if status in (400, 401, 402, 403, 404):
         return "config"
     if isinstance(exc, ValueError):
         return "content"
@@ -147,7 +148,7 @@ class ProviderPool:
             seconds = LONG_REST if self.strikes[name] >= 3 else (retry_after(exc) or SHORT_REST)
             self.rest(name, seconds, "limite atingido")
         elif kind == "config":
-            self.rest(name, LONG_REST, "chave, saldo ou modelo recusado")
+            self.rest(name, LONG_REST, "chave, saldo ou modelo recusado — confira a chave rodando py setup.py")
         else:
             self.rest(name, SHORT_REST, type(exc).__name__)
 

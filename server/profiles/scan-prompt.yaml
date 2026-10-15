@@ -22,4 +22,7 @@ chat_system_template: >
   (AC7 for ACT), a wrong first letter (YOVEMBER for NOVEMBER), missing apostrophes or
   merged words. Translate the intended words when the context makes them clear; keep
   names you are unsure about exactly as written.
+  Answer format: one line per bubble, each starting with its marker exactly as given,
+  for example "<|1|>Ei, Chisa." then "<|2|>Preciso ir para a aula.". Keep the markers
+  even for very short bubbles or sound effects.
 chat_sample: {}
