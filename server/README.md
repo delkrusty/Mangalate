@@ -74,6 +74,16 @@ Get-Content .\secrets\mangalate_key.txt
 
 Copie o conteúdo do arquivo, não esse caminho. Essa é uma senha privada; não envie prints dela. Para usar outro local, altere `MANGALATE_KEY_FILE` em `.env` para o caminho do arquivo no computador. O Docker o monta em `/run/secrets/mangalate_key`; isso **não** significa que você deva criar uma pasta `/run` no Windows.
 
+### Atualizar o servidor
+
+Quando sair uma versão nova, dentro da pasta `server`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\atualizar.ps1
+```
+
+Ele baixa o código, constrói as imagens sem depender do "bake" do Docker Compose (que falha em algumas instalações do Docker Desktop), reinicia o servidor e confere a versão. Chaves, configuração e modelos baixados são mantidos. Com placa NVIDIA, acrescente `-Perfil gpu`.
+
 ### Teste de verdade antes de usar no celular
 
 Ainda dentro da pasta `server`:

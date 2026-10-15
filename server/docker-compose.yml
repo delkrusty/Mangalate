@@ -19,10 +19,12 @@ services:
   translator-cpu:
     <<: *worker
     profiles: [cpu]
+    image: mangalate-translator-cpu:local
     build: {context: ., dockerfile: Dockerfile.worker, target: cpu}
   translator-gpu:
     <<: *worker
     profiles: [gpu]
+    image: mangalate-translator-gpu:local
     build: {context: ., dockerfile: Dockerfile.worker, target: gpu}
     environment:
       MANGALATE_API_KEY_FILE: /run/secrets/provider_key
@@ -36,6 +38,7 @@ services:
               capabilities: [gpu]
   gateway:
     profiles: [cpu, gpu, amd-rocm]
+    image: mangalate-gateway:local
     build: {context: ., dockerfile: Dockerfile.gateway}
     restart: unless-stopped
     env_file: .env
@@ -52,6 +55,7 @@ services:
   translator-amd:
     <<: *worker
     profiles: [amd-rocm]
+    image: mangalate-translator-amd:local
     build: {context: ., dockerfile: Dockerfile.worker, target: rocm}
     environment:
       MANGALATE_API_KEY_FILE: /run/secrets/provider_key
