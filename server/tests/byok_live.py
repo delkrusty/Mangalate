@@ -96,6 +96,15 @@ async def run_provider(name, env, base, preferred):
         translator = CustomOpenAiTranslator(model=model, api_base=base, api_key=key)
         translator.parse_args(TranslatorConfig(translator="custom_openai", target_lang="PTB",
                                                gpt_config=str(ROOT / "profiles/scan-prompt.yaml")))
+        # Keep the raw answer: the dialogue is synthetic, so showing it on failure is safe.
+        raw = []
+        original_request = translator._request_translation
+
+        async def recording(*args, **kwargs):
+            content = await original_request(*args, **kwargs)
+            raw.append(content)
+            return content
+        translator._request_translation = recording
         started = time.monotonic()
         try:
             output = await translator.translate("ENG", "PTB", list(LINES))
@@ -107,7 +116,8 @@ async def run_provider(name, env, base, preferred):
             results.append({"provider": name, "model": model, "seconds": seconds, "output": output,
                             "checks": checks(output)})
         except Exception as exc:
-            notice(f"{name}: {model} falhou", [type(exc).__name__])
+            notice(f"{name}: {model} falhou", [f"{type(exc).__name__}: {exc}"[:200]]
+                   + ["Resposta bruta:"] + (raw[-1][:900].splitlines() if raw else ["(nenhuma)"]))
             results.append({"provider": name, "model": model, "error": type(exc).__name__})
         finally:
             await translator.client.close()
