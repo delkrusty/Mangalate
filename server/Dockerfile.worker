@@ -53,7 +53,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends git g++ ffmpeg 
 WORKDIR /app
 ARG UPSTREAM_REV=d6de6ab62a7be6afc0d07a3184149cdefbcd32f2
 RUN git clone https://github.com/zyddnys/manga-image-translator.git . && git checkout "$UPSTREAM_REV"
-RUN sed -i 's/@fix\/python313-cython3/@3ca3d8f0cbd9701f4a765f97fbad43f9b2fe80a6/' requirements.txt && pip install --no-cache-dir -r requirements.txt
+# The base image's Python is marked "externally managed" (PEP 668); this image is the
+# whole environment, so pip may install into it. Keep the image's CUDA torch builds.
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
+RUN python -c "from pathlib import Path;p=Path('requirements.txt');s=p.read_text();p.write_text('\n'.join(x for x in s.splitlines() if not x.startswith(('torch==','torchvision=='))).replace('@fix/python313-cython3','@3ca3d8f0cbd9701f4a765f97fbad43f9b2fe80a6'))" && pip install --no-cache-dir -r requirements.txt
 COPY worker.py /mangalate/worker.py
 COPY core.py /mangalate/core.py
 COPY engine_compat.py /mangalate/engine_compat.py
