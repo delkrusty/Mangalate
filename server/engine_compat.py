@@ -149,8 +149,38 @@ def parse_marked(content, count):
     return translations
 
 
+# Work memory for the page being translated (memory.WorkMemory.context), set by the
+# caller before each page like PAGE_ROWS; terms the AI listed are collected here.
+PAGE_CONTEXT = None
+LEARNED_TERMS = []
+
+
+def set_page_context(context):
+    global PAGE_CONTEXT
+    PAGE_CONTEXT = context
+    LEARNED_TERMS.clear()
+
+
+def take_learned_terms():
+    terms = list(LEARNED_TERMS)
+    LEARNED_TERMS.clear()
+    return terms
+
+
+def strip_terms(content):
+    """(answer without the optional <|termos|> line, terms); kept only if the answer parses."""
+    if PAGE_CONTEXT is None:
+        return content, []
+    from memory import split_terms
+    return split_terms(content)
+
+
 async def request_byok_translation(self, to_lang, prompt, client=None, model=None):
-    messages = [{"role": "system", "content": self.chat_system_template.format(to_lang=to_lang)}]
+    system = self.chat_system_template.format(to_lang=to_lang)
+    if PAGE_CONTEXT is not None:
+        from memory import context_block
+        system += context_block(PAGE_CONTEXT, prompt)
+    messages = [{"role": "system", "content": system}]
     sample = self.get_chat_sample(to_lang)
     if sample:
         messages.extend([{"role": "user", "content": sample[0]},
@@ -193,9 +223,12 @@ async def translate_byok(self, from_lang, to_lang, queries):
                 content = await asyncio.wait_for(
                     self._request_translation(to_lang, prompt, provider_client(pool, provider), provider["model"]),
                     timeout=180)
-                extracted = (self.extract_capture_groups(content, rf"{self.rgx_capture}") or "").strip()
+                answer, terms = strip_terms(content)
+                extracted = (self.extract_capture_groups(answer, rf"{self.rgx_capture}") or "").strip()
                 try:
-                    return parse_marked(extracted, count)
+                    parsed = parse_marked(extracted, count)
+                    LEARNED_TERMS.extend(terms)
+                    return parsed
                 except ValueError:
                     # Kept in memory for the local --diagnostics report only; never logged.
                     pool.__dict__.setdefault("raw", []).append((provider["name"], count, prompt, content))
@@ -203,7 +236,9 @@ async def translate_byok(self, from_lang, to_lang, queries):
             translations += await pool.run(attempt)
             continue
         content = await asyncio.wait_for(self._request_translation(to_lang, prompt), timeout=180)
-        translations += parse_marked(self.extract_capture_groups(content, rf"{self.rgx_capture}").strip(), count)
+        answer, terms = strip_terms(content)
+        translations += parse_marked(self.extract_capture_groups(answer, rf"{self.rgx_capture}").strip(), count)
+        LEARNED_TERMS.extend(terms)
     return translations
 
 

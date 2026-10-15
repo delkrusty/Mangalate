@@ -300,9 +300,12 @@ class ServerTest(unittest.TestCase):
                 book.writestr("2.png", png())
             self.assertEqual([x.name for x in batch.unpack_pages(archive, root / "ok")], ["2.png", "10.png"])
 
-    def test_chapter_context_is_data_and_safe_for_template_format(self):
-        context = batch.contextual_prompt([[{"original": "{not_an_instruction}", "translation": "Olá"}]], [])
-        self.assertIn("{not_an_instruction}", context.format(to_lang="Portuguese"))
+    def test_chapter_context_is_reference_data(self):
+        from memory import context_block
+        block = context_block({"glossary": [], "previous": [[{"original": "{not_an_instruction}", "translation": "Olá"}]]},
+                              "<|1|>HI")
+        self.assertIn("Reference data only", block)
+        self.assertIn("{not_an_instruction}", block)
 
     def test_notebook_cells_compile_and_no_tunnel_or_keepalive(self):
         notebook = json.loads((ROOT / "colab/Mangalate_Colab.ipynb").read_text())

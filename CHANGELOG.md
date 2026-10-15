@@ -9,6 +9,7 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 - Pedaços de letras em itálico que sobravam como risquinhos depois da limpeza agora são apagados, e linhas que o detector não via dentro do balão são lidas e traduzidas.
 - Falas que aparecem só na emenda com a página vizinha não são mais mandadas para a IA nessa página.
 - Instruções da IA reforçadas para expressões e interjeições brasileiras ("Cuidado!", "Pode vir!") e sem palavras em inglês esquecidas.
+- Memória da obra: o servidor aprende os nomes e termos de cada obra (glossário) e manda à IA as falas das páginas anteriores do capítulo. Um termo sai igual em todas as páginas e capítulos, e frases cortadas entre páginas ganham contexto. Vale na leitura pelo app e no capítulo inteiro no PC.
 
 ## 0.5.3
 

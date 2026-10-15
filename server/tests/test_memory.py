@@ -1,0 +1,163 @@
+"""Work memory: learned glossary and previous pages of the chapter (no network)."""
+import asyncio
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import engine_compat
+from gateway import page_work
+from memory import (WorkMemory, accept_terms, context_block, parse_work, relevant_glossary, remember,
+                    split_terms)
+
+
+def region(text, translation):
+    return SimpleNamespace(text=text, text_raw=text, translation=translation)
+
+
+class TermsTest(unittest.TestCase):
+    def test_terms_line_is_removed_before_parsing(self):
+        answer, terms = split_terms("<|1|>O restritor falhou.\n<|2|>Grey!\n<|termos|>RESTRAINER=restritor; GREY=Grey")
+        self.assertEqual(answer, "<|1|>O restritor falhou.\n<|2|>Grey!")
+        self.assertEqual(terms, [("RESTRAINER", "restritor"), ("GREY", "Grey")])
+        self.assertEqual(engine_compat.parse_marked(answer, 2), ["O restritor falhou.", "Grey!"])
+
+    def test_variant_spellings_of_the_terms_line(self):
+        for line in ("Termos: GREY=Grey", "<termos> GREY=Grey", "<|TERMS|>GREY=Grey"):
+            answer, terms = split_terms("<|1|>Oi, Grey.\n" + line)
+            self.assertEqual(answer, "<|1|>Oi, Grey.", line)
+            self.assertEqual(terms, [("GREY", "Grey")], line)
+
+    def test_terms_on_the_last_bubble_line_are_cut_off(self):
+        answer, terms = split_terms("<|1|>Oi, Grey. <|termos|>GREY=Grey")
+        self.assertEqual((answer, terms), ("<|1|>Oi, Grey.", [("GREY", "Grey")]))
+
+    def test_the_word_termos_inside_dialogue_is_kept(self):
+        self.assertEqual(split_terms("<|1|>Nesses termos: aceito."), ("<|1|>Nesses termos: aceito.", []))
+
+    def test_answer_without_terms_is_unchanged(self):
+        self.assertEqual(split_terms("<|1|>Oi.\n<|2|>Tchau."), ("<|1|>Oi.\n<|2|>Tchau.", []))
+
+    def test_only_terms_present_on_the_page_are_accepted(self):
+        page = "THE RESTRAINER K MUST'VE MAL- FUNCTIONED. GREY!"
+        terms = [("RESTRAINER", "restritor"), ("ARTHUR", "Arthur"), ("GREY", ""), ("X" * 80, "y"),
+                 ("GREY", "<|1|>Grey")]
+        self.assertEqual(accept_terms(terms, page), [("RESTRAINER", "restritor")])
+
+    def test_pinned_terms_are_not_overridden(self):
+        self.assertEqual(accept_terms([("GREY", "Cinza")], "GREY!", pinned=["Grey"]), [])
+
+
+class MemoryTest(unittest.TestCase):
+    def test_first_translation_of_a_term_wins_and_persists(self):
+        with tempfile.TemporaryDirectory() as folder:
+            memory = WorkMemory(folder)
+            memory.record("TBATE", "Cap 236", 6, [], [("RESTRAINER", "restritor")], "THE RESTRAINER K")
+            memory.record("TBATE", "Cap 236", 7, [], [("RESTRAINER", "restrainer")], "RESTRAINER KI")
+            again = WorkMemory(folder)
+            self.assertEqual(again.glossary("TBATE"), [{"source": "RESTRAINER", "target": "restritor"}])
+            self.assertEqual(len(list(Path(folder).glob("*.json"))), 1)
+
+    def test_previous_pages_come_from_the_same_chapter_and_before_the_page(self):
+        memory = WorkMemory()
+        for page in (1, 2, 3, 5):
+            memory.record("Obra", "Cap 1", page, [{"original": f"P{page}", "translation": f"T{page}"}], [], "")
+        memory.record("Obra", "Cap 2", 1, [{"original": "OTHER", "translation": "Outro"}], [], "")
+        previous = memory.context("Obra", "Cap 1", 4)["previous"]
+        self.assertEqual([p[0]["original"] for p in previous], ["P2", "P3"])
+        self.assertEqual(memory.context("Obra", "Cap 1", 1)["previous"], [])
+        self.assertIsNone(memory.context("", "Cap 1", 1))
+
+    def test_only_recent_chapters_are_kept(self):
+        memory = WorkMemory()
+        for chapter in range(5):
+            memory.record("Obra", f"Cap {chapter}", 1, [{"original": "A", "translation": "B"}], [], "")
+        self.assertEqual(list(memory.load("Obra")["chapters"]), ["Cap 2", "Cap 3", "Cap 4"])
+
+    def test_glossary_sent_is_only_what_the_page_uses(self):
+        glossary = [{"source": "GREY", "target": "Grey"}, {"source": "MANA CORE", "target": "núcleo de mana"},
+                    {"source": "ELIJAH", "target": "Elijah"}]
+        self.assertEqual([g["source"] for g in relevant_glossary(glossary, "<|1|>MY MANA CORE, GREY...")],
+                         ["GREY", "MANA CORE"])
+        block = context_block({"glossary": glossary, "previous": []}, "<|1|>GREY?")
+        self.assertIn('"GREY"', block)
+        self.assertNotIn("ELIJAH", block)
+        self.assertIn("<|termos|>", block)
+
+    def test_remember_records_page_dialogue_and_terms(self):
+        memory = WorkMemory()
+        work = {"obra": "TBATE", "capitulo": "236", "pagina": 6}
+        added = remember(memory, work, [region("THE RESTRAINER K", "O restritor K")], [("RESTRAINER", "restritor")])
+        self.assertEqual(added, [("RESTRAINER", "restritor")])
+        self.assertEqual(memory.context("TBATE", "236", 7)["previous"][0][0]["translation"], "O restritor K")
+
+
+class WorkFieldTest(unittest.TestCase):
+    def test_gateway_forwards_only_known_short_fields(self):
+        forwarded = json.loads(page_work(json.dumps({"obra": " TBATE ", "capitulo": "236", "pagina": 6,
+                                                     "gpt_config": "/etc/passwd"})))
+        self.assertEqual(forwarded, {"obra": "TBATE", "capitulo": "236", "pagina": 6})
+        self.assertEqual(page_work(json.dumps({"capitulo": "1"})), "")
+        self.assertEqual(page_work(None), "")
+        with self.assertRaises(ValueError):
+            page_work("[1]")
+
+    def test_worker_ignores_invalid_work(self):
+        self.assertIsNone(parse_work("not json"))
+        self.assertIsNone(parse_work(json.dumps({"obra": ""})))
+        self.assertEqual(parse_work(json.dumps({"obra": "A", "pagina": True}))["pagina"], None)
+
+
+class PromptTest(unittest.TestCase):
+    def tearDown(self):
+        engine_compat.set_page_context(None)
+
+    def translator(self, answer):
+        calls = []
+
+        class Completions:
+            async def create(self, **kwargs):
+                calls.append(kwargs["messages"])
+                message = SimpleNamespace(content=answer)
+                return SimpleNamespace(choices=[SimpleNamespace(message=message, finish_reason="stop")], usage=None)
+
+        fake = SimpleNamespace(
+            chat_system_template="System {to_lang}.", get_chat_sample=lambda lang: None, model="m",
+            _MAX_TOKENS=100, temperature=0.2, top_p=1, token_count=0,
+            client=SimpleNamespace(chat=SimpleNamespace(completions=Completions()), max_retries=2),
+            rgx_capture="(.*)", extract_capture_groups=lambda text, regex: text,
+            _assemble_prompts=lambda f, t, q: iter([("\n".join(f"<|{i}|>{x}" for i, x in enumerate(q, 1)), len(q))]))
+        fake._request_translation = lambda to, prompt, client=None, model=None: engine_compat.request_byok_translation(
+            fake, to, prompt, client, model)
+        return fake, calls
+
+    def test_context_goes_to_the_system_prompt_and_terms_are_collected(self):
+        engine_compat.set_page_context({"glossary": [{"source": "GREY", "target": "Grey"}], "previous": []})
+        fake, calls = self.translator("<|1|>Ei, Grey!\n<|termos|>GREY=Grey; SWORD=espada")
+        original = engine_compat.provider_pool
+        engine_compat.provider_pool = lambda: None
+        try:
+            result = asyncio.run(engine_compat.translate_byok(fake, "ENG", "PTB", ["HEY, GREY!"]))
+        finally:
+            engine_compat.provider_pool = original
+        self.assertEqual(result, ["Ei, Grey!"])
+        self.assertIn('"GREY"', calls[0][0]["content"])
+        self.assertEqual(engine_compat.take_learned_terms(), [("GREY", "Grey"), ("SWORD", "espada")])
+
+    def test_without_work_the_prompt_is_unchanged(self):
+        engine_compat.set_page_context(None)
+        fake, calls = self.translator("<|1|>Oi.")
+        original = engine_compat.provider_pool
+        engine_compat.provider_pool = lambda: None
+        try:
+            asyncio.run(engine_compat.translate_byok(fake, "ENG", "PTB", ["HI."]))
+        finally:
+            engine_compat.provider_pool = original
+        self.assertEqual(calls[0][0]["content"], "System PTB.")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -192,12 +192,77 @@ async def run_rotation():
         secret.unlink(missing_ok=True)
 
 
+# Three synthetic pages of one chapter: terms learned on page 1 must keep their
+# Portuguese on pages 2 and 3 (memory.py), and the <|termos|> line must never
+# break the bubble parsing.
+MEMORY_PAGES = [
+    ["THE MANA RESTRAINER ON YOUR WRIST... IT MUST'VE MALFUNCTIONED.", "SYLVIE, STAY CLOSE TO ME.",
+     "THE BEAST GLADE IS NO PLACE FOR A WHITE CORE MAGE."],
+    ["TAKE OFF THE MANA RESTRAINER, ARTHUR.", "IF YOU DO, EVERY BEAST IN THE GLADE WILL SENSE IT."],
+    ["A WHITE CORE MAGE... IN THE BEAST GLADE?", "SYLVIE! THE MANA RESTRAINER IS BROKEN!"],
+]
+MEMORY_TERMS = ["MANA RESTRAINER", "BEAST GLADE", "WHITE CORE"]
+
+
+async def run_memory(name, env, base, model):
+    import engine_compat
+    from manga_translator.config import TranslatorConfig
+    from manga_translator.translators.custom_openai import CustomOpenAiTranslator
+    from memory import WorkMemory
+    key = os.environ.get(env, "").strip()
+    if not key:
+        return []
+    engine_compat._POOL = False  # one provider, as in run_provider
+    memory, lines, outputs = WorkMemory(), [], []
+    translator = CustomOpenAiTranslator(model=model, api_base=base, api_key=key)
+    translator.parse_args(TranslatorConfig(translator="custom_openai", target_lang="PTB",
+                                           gpt_config=str(ROOT / "profiles/scan-prompt.yaml")))
+    try:
+        for page, texts in enumerate(MEMORY_PAGES, 1):
+            engine_compat.set_page_context(memory.context("Obra de teste", "Cap 1", page))
+            try:
+                output = await translator.translate("ENG", "PTB", list(texts))
+            except Exception as exc:
+                lines.append(f"p{page}: falhou ({type(exc).__name__}: {str(exc)[:120]})")
+                outputs.append([])
+                continue
+            terms = engine_compat.take_learned_terms()
+            added = memory.record("Obra de teste", "Cap 1", page,
+                                  [{"original": a, "translation": b} for a, b in zip(texts, output)],
+                                  terms, " ".join(texts))
+            outputs.append(output)
+            lines += [f"p{page}. {src} → {dst}" for src, dst in zip(texts, output)]
+            lines.append(f"p{page} termos aceitos: " + ("; ".join(f"{a}={b}" for a, b in added) or "nenhum"))
+        glossary = {g["source"].upper(): g["target"] for g in memory.glossary("Obra de teste")}
+        problems = []
+        for term in MEMORY_TERMS:
+            target = next((t for s, t in glossary.items() if term in s or s in term), None)
+            if not target:
+                problems.append(f"{term} não entrou no glossário")
+                continue
+            for page, (texts, output) in enumerate(zip(MEMORY_PAGES, outputs), 1):
+                for src, dst in zip(texts, output):
+                    if term in src and target.lower() not in dst.lower():
+                        problems.append(f"p{page}: {term} não saiu como \"{target}\"")
+        if any("<|" in dst or "termos" in dst.lower() for out in outputs for dst in out):
+            problems.append("linha de termos dentro de um balão")
+        lines.append("Verificação: " + ("; ".join(problems) or "termos consistentes nas 3 páginas"))
+        notice(f"Memória da obra: {name} {model}", lines)
+        return [{"memory": name, "model": model, "glossary": glossary, "problems": problems}]
+    finally:
+        engine_compat.set_page_context(None)
+        engine_compat._POOL = None
+        await translator.client.close()
+
+
 async def main():
     from engine_compat import apply_compatibility
     apply_compatibility()
     report = []
     for provider in PROVIDERS:
         report += await run_provider(*provider) or []
+    for name, env, base, models in PROVIDERS:
+        report += await run_memory(name, env, base, models[0])
     report += await run_rotation()
     try:
         report += await run_nllb()
