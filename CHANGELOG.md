@@ -2,6 +2,13 @@
 
 As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://github.com/mihonapp/mihon/blob/main/CHANGELOG.md).
 
+## Em teste (próxima versão)
+
+### Velocidade
+- A limpeza da página começa enquanto a IA traduz, em vez de esperar a resposta.
+- Texto em balão liso é apagado com a própria cor do balão, sem passar pelo modelo de limpeza; o modelo só roda no texto sobre o desenho, e só na parte da página ao redor dele.
+- O servidor mostra quanto tempo cada etapa da página levou.
+
 ## 0.5.4
 
 ### Tradução e limpeza

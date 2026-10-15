@@ -13,11 +13,18 @@ original, a number), its text must stay on the page, so the mask and the
 cleaning are computed again, as before.
 
 MANGALATE_OVERLAP=false turns the overlap off (for comparison).
+
+Most text sits in plain bubbles. There the cleaning does not need the
+inpainting model: the letters are covered with the bubble's own colour, taken
+from the pixels around them. The model runs only for text over art, and only
+on the part of the page around it. MANGALATE_FLAT_FILL=false turns this off.
 """
 import asyncio
 import os
 import time
 from types import SimpleNamespace
+
+import numpy as np
 
 STEPS = {
     "_run_detection": "deteccao",
@@ -110,10 +117,83 @@ def reuse_cleaning(original_inpaint):
     return inpaint
 
 
+def flat_fill_enabled():
+    return os.environ.get("MANGALATE_FLAT_FILL", "true").lower() != "false"
+
+
+FLAT_SPREAD = 10    # max distance (0-255) of 95% of the ring from its median colour
+GROUP = 15          # letters this close (px) belong to the same blob of text
+RING = 6            # width (px) of the border read around a blob
+CROP_PADDING = 96   # context (px) given to the model around text over art
+MAX_CROP_SHARE = 0.6
+
+
+def split_flat(image, mask):
+    """Fill blobs of text that sit on a flat colour; return (page, mask left for the model)."""
+    import cv2
+    text = mask > 0
+    blobs = cv2.dilate(text.astype(np.uint8), np.ones((GROUP, GROUP), np.uint8))
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(blobs, connectivity=8)
+    page = image.copy()
+    left = mask.copy()
+    ring_kernel = np.ones((2 * RING + 1, 2 * RING + 1), np.uint8)
+    height, width = mask.shape[:2]
+    for label in range(1, count):
+        x, y, w, h = stats[label, :4]
+        x0, y0 = max(0, x - RING - 1), max(0, y - RING - 1)
+        x1, y1 = min(width, x + w + RING + 1), min(height, y + h + RING + 1)
+        blob = labels[y0:y1, x0:x1] == label
+        letters = blob & text[y0:y1, x0:x1]
+        ring = cv2.dilate(letters.astype(np.uint8), ring_kernel).astype(bool) & ~text[y0:y1, x0:x1]
+        pixels = image[y0:y1, x0:x1][ring]
+        if len(pixels) < 4 * RING:
+            continue
+        colour = np.median(pixels, axis=0)
+        spread = np.percentile(np.abs(pixels.astype(np.int16) - colour).max(axis=1), 95)
+        if spread > FLAT_SPREAD:
+            continue
+        page[y0:y1, x0:x1][letters] = colour.round().astype(image.dtype)
+        left[y0:y1, x0:x1][letters] = 0
+    return page, left
+
+
+def flat_first(original_inpaint):
+    async def inpaint(self, config, ctx):
+        image, mask = getattr(ctx, "img_rgb", None), getattr(ctx, "mask", None)
+        if (not flat_fill_enabled() or not isinstance(image, np.ndarray) or not isinstance(mask, np.ndarray)
+                or image.ndim != 3 or mask.shape[:2] != image.shape[:2]):
+            return await original_inpaint(self, config, ctx)
+        try:
+            page, left = split_flat(image, mask)
+        except Exception as exc:
+            print(f"Limpeza lisa falhou ({type(exc).__name__}); usando o modelo.", flush=True)
+            return await original_inpaint(self, config, ctx)
+        ys, xs = np.nonzero(left)
+        if not len(ys):
+            return page
+        height, width = mask.shape[:2]
+        x0, x1 = max(0, xs.min() - CROP_PADDING), min(width, xs.max() + 1 + CROP_PADDING)
+        y0, y1 = max(0, ys.min() - CROP_PADDING), min(height, ys.max() + 1 + CROP_PADDING)
+        if (x1 - x0) * (y1 - y0) > MAX_CROP_SHARE * width * height:
+            x0, y0, x1, y1 = 0, 0, width, height
+        # The same fields the early cleaning hands to the engine.
+        part = SimpleNamespace(text_regions=getattr(ctx, "text_regions", None), mask_raw=getattr(ctx, "mask_raw", None),
+                               img_rgb=np.ascontiguousarray(page[y0:y1, x0:x1]),
+                               mask=np.ascontiguousarray(left[y0:y1, x0:x1]))
+        cleaned = np.asarray(await original_inpaint(self, config, part))
+        if cleaned.shape[:2] != part.mask.shape[:2]:
+            return await original_inpaint(self, config, ctx)
+        area = page[y0:y1, x0:x1]
+        area[part.mask > 0] = cleaned[part.mask > 0]
+        return page
+    return inpaint
+
+
 def install(MangaTranslator):
     """Wrap the steps; call after the other Mangalate wrappers."""
     if getattr(MangaTranslator, "_mangalate_speed_applied", False):
         return
+    MangaTranslator._run_inpainting = flat_first(MangaTranslator._run_inpainting)
     for method, name in STEPS.items():
         setattr(MangaTranslator, method, timed(name, getattr(MangaTranslator, method)))
     MangaTranslator._run_text_translation = prepare_cleaning(MangaTranslator._run_text_translation)

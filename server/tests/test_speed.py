@@ -83,5 +83,64 @@ class OverlapTest(unittest.TestCase):
             del os.environ["MANGALATE_OVERLAP"]
 
 
+class FlatFillTest(unittest.TestCase):
+    """Text in a plain bubble is covered with the bubble colour; text over art goes to the model."""
+
+    def engine(self):
+        seen = []
+
+        class Engine:
+            async def _run_inpainting(self, config, ctx):
+                seen.append((ctx.img_rgb.shape, int((ctx.mask > 0).sum())))
+                out = ctx.img_rgb.copy()
+                out[ctx.mask > 0] = (1, 2, 3)  # what the model would paint
+                return out
+
+        Engine._run_inpainting = speed.flat_first(Engine._run_inpainting)
+        return Engine(), seen
+
+    def page(self):
+        import numpy as np
+        image = np.full((600, 400, 3), 120, np.uint8)
+        image[50:250, 50:350] = (250, 248, 245)              # plain bubble
+        rng = np.random.default_rng(1)
+        image[400:560, 40:360] = rng.integers(0, 255, (160, 320, 3))  # art
+        mask = np.zeros((600, 400), np.uint8)
+        image[120:140, 100:300] = 0                           # letters in the bubble
+        mask[116:144, 96:304] = 255
+        mask[460:480, 120:280] = 255                          # letters over the art
+        return image, mask
+
+    def test_bubble_is_filled_without_model_and_art_goes_to_model_in_a_crop(self):
+        engine, seen = self.engine()
+        image, mask = self.page()
+        out = asyncio.run(engine._run_inpainting(None, SimpleNamespace(img_rgb=image, mask=mask, text_regions=[])))
+        self.assertTrue((out[116:144, 96:304] == (250, 248, 245)).all())   # bubble colour, no letters left
+        self.assertEqual(len(seen), 1)
+        shape, painted = seen[0]
+        self.assertEqual(painted, 20 * 160)                                 # only the text over art
+        self.assertLess(shape[0] * shape[1], 600 * 400)                     # a crop, not the page
+        self.assertTrue((out[460:480, 120:280] == (1, 2, 3)).all())
+        self.assertTrue((out[0:40] == image[0:40]).all())                   # untouched elsewhere
+
+    def test_only_bubbles_skips_the_model(self):
+        engine, seen = self.engine()
+        image, mask = self.page()
+        mask[460:480] = 0
+        asyncio.run(engine._run_inpainting(None, SimpleNamespace(img_rgb=image, mask=mask)))
+        self.assertEqual(seen, [])
+
+    def test_can_be_turned_off(self):
+        import os
+        engine, seen = self.engine()
+        image, mask = self.page()
+        os.environ["MANGALATE_FLAT_FILL"] = "false"
+        try:
+            asyncio.run(engine._run_inpainting(None, SimpleNamespace(img_rgb=image, mask=mask)))
+        finally:
+            del os.environ["MANGALATE_FLAT_FILL"]
+        self.assertEqual(seen[0], ((600, 400, 3), int((mask > 0).sum())))
+
+
 if __name__ == "__main__":
     unittest.main()
