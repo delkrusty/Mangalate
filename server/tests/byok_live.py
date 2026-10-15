@@ -27,7 +27,14 @@ LINES = [
     "...at the ball tomorrow night.",
     "NO WAY! ABSOLUTELY NOT!",
     "IN YOVEMBER?! IF I COULD JUST AC7 LIKE NORMAL...",
+    "WATCH OUT! HERE IT COMES!",
+    "AWW, COME ON. THAT'S NOT FAIR.",
+    "YOU WANNA FIGHT? BRING IT ON!",
+    "ALL RIGHT, LET'S CALL IT A DAY.",
 ]
+# English left in the translation (words that are never Portuguese).
+ENGLISH = re.compile(r"\b(aww|the|come on|bring it|that's|you|it's|let's|day)\b", re.I)
+CALQUES = re.compile(r"chamar? (isso )?de (um )?dia|traga|trazer isso", re.I)
 PROVIDERS = [
     ("Groq", "GROQ_API_KEY", "https://api.groq.com/openai/v1",
      ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "llama-3.3-70b-versatile"]),
@@ -56,6 +63,12 @@ def checks(output):
     european = sorted({m.group(0).lower() for text in output for m in EUROPEAN.finditer(text)})
     if european:
         found.append("formas de Portugal: " + ", ".join(european))
+    english = sorted({m.group(0).lower() for text in output for m in ENGLISH.finditer(text)})
+    if english:
+        found.append("inglês na tradução: " + ", ".join(english))
+    calques = sorted({m.group(0).lower() for text in output for m in CALQUES.finditer(text)})
+    if calques:
+        found.append("tradução literal: " + ", ".join(calques))
     if any(re.search(r"yovember|ac7", text, re.I) for text in output):
         found.append("erro de OCR copiado")
     if any(len(re.findall(r"[^\W\d_]", text)) > 6 and text == text.upper() for text in output):

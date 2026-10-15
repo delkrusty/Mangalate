@@ -150,7 +150,7 @@ async def run(args):
         os.environ["MANGALATE_LEGACY_QUALITY"] = "true"
     if args.box_layout:
         os.environ["MANGALATE_BUBBLE_LAYOUT"] = "false"
-    from engine_compat import apply_compatibility
+    from engine_compat import apply_compatibility, set_page_rows
     apply_compatibility()
     from manga_translator import MangaTranslator, Config
     import yaml
@@ -200,6 +200,7 @@ async def run(args):
                 config["translator"]["gpt_config"] = str(prompt_path)
             started = time.monotonic()
             strip = Strip(original, neighbour(index - 1), neighbour(index + 1))
+            set_page_rows(strip.top, strip.bottom)
             ctx = await translate_with_patience(translator, strip.image, Config(**config))
             result = finish(strip, ctx.result, getattr(ctx, "text_regions", None) if strip.stitched else None,
                             seam_cache, salt)

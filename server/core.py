@@ -68,6 +68,8 @@ def create_core(engine=None, config_factory=None):
             except (ValueError, TypeError, AttributeError):
                 raise HTTPException(422, "Invalid page or configuration")
             try:
+                from engine_compat import set_page_rows
+                set_page_rows(strip.top, strip.bottom)
                 ctx = await engine.translate(strip.image, parsed)
                 result = finish(strip, ctx.result, getattr(ctx, "text_regions", None) if strip.stitched else None,
                                 seam_cache, config)

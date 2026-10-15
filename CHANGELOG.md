@@ -6,6 +6,9 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 
 ### Tradução e limpeza
 - O texto traduzido ocupa o balão, não só a caixa do texto original: letras maiores e mais espaço entre as linhas.
+- Pedaços de letras em itálico que sobravam como risquinhos depois da limpeza agora são apagados, e linhas que o detector não via dentro do balão são lidas e traduzidas.
+- Falas que aparecem só na emenda com a página vizinha não são mais mandadas para a IA nessa página.
+- Instruções da IA reforçadas para expressões e interjeições brasileiras ("Cuidado!", "Pode vir!") e sem palavras em inglês esquecidas.
 
 ## 0.5.3
 

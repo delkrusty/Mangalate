@@ -202,11 +202,13 @@ def plan(image, region_box, others, text, layout, original_size, minimum, offset
     centre = ((x0 + x1) / 2 - wx0, (y0 + y1) / 2 - wy0)
     floor = max(1, int(minimum))
     rects = rectangles(mask, centre, margin, floor)
-    if not rects:
-        return None
     # A few heights are enough to find the best shape.
     step = max(1, len(rects) // 24)
-    rects = rects[::step] + [rects[-1]]
+    rects = rects[::step] + rects[-1:]
+    # The original text box is always a candidate: the text was there, so the
+    # result is never worse than the engine's own fit (TBATE p7: a translucent
+    # bubble let the art through and left only a sliver of flat interior).
+    rects.append((x0 - wx0, y0 - wy0, x1 - wx0, y1 - wy0))
     # The app's font size setting (-3..+3) moves the cap like it moves the engine's size.
     cap = max(floor, int(round(original_size * MAX_SCALE)) + int(offset))
     chosen = best_layout(text, rects, layout, cap, floor)

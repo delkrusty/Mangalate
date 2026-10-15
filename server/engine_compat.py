@@ -229,6 +229,34 @@ def protect_art(config):
     return 1 <= value <= 50
 
 
+# Rows of the page inside the strip being translated (seams.Strip), set by the
+# caller before each page; pages are translated one at a time.
+PAGE_ROWS = None
+
+
+def set_page_rows(top, bottom):
+    global PAGE_ROWS
+    PAGE_ROWS = (int(top), int(bottom))
+
+
+def on_page(regions, rows):
+    """Regions whose text touches the page rows; the rest lie wholly in borrowed context.
+
+    TBATE (new episode) p6: the top of a bubble belonging to p7, cut by the end
+    of the borrowed strip, was sent to the AI as "AWW, THATS N" and came back
+    untranslated.  Such regions are never part of the page and only confuse the
+    translation, so they are dropped before it.
+    """
+    if not rows:
+        return list(regions), []
+    top, bottom = rows
+    inside, outside = [], []
+    for region in regions:
+        y0, y1 = float(region.xyxy[1]), float(region.xyxy[3])
+        (inside if y1 > top and y0 < bottom else outside).append(region)
+    return inside, outside
+
+
 def classify_regions(original_merge):
     """Decide once, before translation, which blocks are cleaned and translated.
 
@@ -241,6 +269,10 @@ def classify_regions(original_merge):
         from quality import classify_region
         regions = await original_merge(self, config, ctx)
         ctx.mangalate_preserved = []
+        if regions:
+            regions, context_only = on_page(regions, PAGE_ROWS)
+            if context_only:
+                print(f"Region check: {len(context_only)} only in the neighbouring pages, skipped", flush=True)
         if not regions or not protect_art(config):
             return regions
         image, raw = ctx.img_rgb, ctx.mask_raw
@@ -299,7 +331,13 @@ def repair_textlines(original_detect):
             return result
         horizontal = [i for i, line in enumerate(textlines) if getattr(line, "direction", "h") == "h"]
         boxes = [_box(textlines[i].pts) for i in horizontal]
-        repaired, changes = repair_lines(mask_raw, boxes)
+        # Letters inside a flat interior count even where the detector mask missed them.
+        from quality import bubble_glyphs, NEAR_LINES
+        seen = np.asarray(mask_raw) > 127
+        if image is not None:
+            for box in boxes:
+                seen = seen | bubble_glyphs(np.asarray(image), box, box[3] - box[1], near=NEAR_LINES)
+        repaired, changes = repair_lines(seen.astype(np.uint8) * 255, boxes)
         ctx.mangalate_line_repairs = [{"tipo": kind, "antes": before, "depois": after} for kind, before, after in changes]
         if not changes:
             return result
@@ -461,9 +499,23 @@ async def refine_mask_consistently(self, config, ctx):
     The engine would otherwise re-run its colour test here and silently drop
     the mask of blocks that are still translated and rendered.
     """
+    import cv2
+    import numpy as np
     from manga_translator.mask_refinement import dispatch
-    return await dispatch(ctx.text_regions, ctx.img_rgb, ctx.mask_raw, "fit_text",
+    from quality import bubble_glyphs
+    mask = await dispatch(ctx.text_regions, ctx.img_rgb, ctx.mask_raw, "fit_text",
                           config.mask_dilation_offset, 0, self.verbose, self.kernel_size)
+    # Pieces of letters the detector mask missed (italic overhangs) would stay
+    # on the page as stray marks: add every letter inside the bubble interior.
+    extra = np.zeros(mask.shape[:2], bool)
+    for region in ctx.text_regions or []:
+        heights = [float(np.linalg.norm(np.asarray(l[3]) - np.asarray(l[0]))) for l in region.lines]
+        extra |= bubble_glyphs(ctx.img_rgb, region.xyxy, float(np.median(heights)) if heights else region.font_size)
+    if extra.any():
+        grown = cv2.dilate(extra.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+        mask = mask.copy()
+        mask[grown] = 255
+    return mask
 
 
 def validate_page_translations(original_translate):

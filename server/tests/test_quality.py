@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from quality import (broken_words, classify_region, compact_symbols, normalize_spacing,
+from quality import (broken_words, bubble_glyphs, classify_region, compact_symbols, normalize_spacing,
                      repair_lines, whole_word_breaker)
 
 RNG = np.random.default_rng(65)
@@ -382,6 +382,68 @@ class OcrRescueTest(unittest.TestCase):
         result, seen, _ = self.run_ocr(lines, [lines[1]])
         self.assertEqual(seen, {})
         self.assertEqual(len(result), 1)
+
+
+class BubbleGlyphTest(unittest.TestCase):
+    """Letters the detector mask missed are found as holes in the flat interior (TBATE new p12)."""
+
+    def page(self, double_outline=False):
+        image = np.full((400, 500, 3), 60, np.uint8)
+        cv2.ellipse(image, (250, 200), (200, 150), 0, 0, 360, (250, 250, 250), -1)
+        cv2.ellipse(image, (250, 200), (200, 150), 0, 0, 360, (0, 0, 0), 4)
+        if double_outline:
+            cv2.ellipse(image, (250, 200), (185, 135), 0, 0, 360, (170, 170, 170), 1)
+        for i, text in enumerate(["THIS IS", "GOING TO BE", "OF US."]):
+            cv2.putText(image, text, (150, 150 + i * 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (10, 10, 10), 3)
+        return image
+
+    def test_letters_below_the_box_are_found(self):
+        image = self.page()
+        found = bubble_glyphs(image, (145, 120, 360, 200), 30, near=1.6)
+        self.assertGreater(found[205:240, 150:300].sum(), 100)   # "OF US." line
+        self.assertFalse(found[:, :60].any())                    # nothing outside the bubble
+
+    def test_hairline_of_a_double_outline_is_not_a_letter(self):
+        image = self.page(double_outline=True)
+        found = bubble_glyphs(image, (145, 120, 360, 240), 30, near=3)
+        self.assertFalse(found[60:70, 200:300].any())            # top of the inner hairline
+
+    def test_text_on_art_gives_nothing(self):
+        image = noisy_art((500, 400))
+        write(image, "CLENCH", (100, 200), (10, 10, 10), 1.4)
+        self.assertFalse(bubble_glyphs(image, (95, 160, 300, 210), 40).any())
+
+    def test_missing_line_is_added_when_the_mask_misses_it(self):
+        image = self.page()
+        mask = np.zeros(image.shape[:2], np.uint8)
+        mask[120:200, 145:360] = 255  # detector saw the first two lines only
+        boxes = [(145, 122, 290, 158), (145, 162, 360, 198)]
+        seen = mask > 0
+        for box in boxes:
+            seen |= bubble_glyphs(image, box, box[3] - box[1], near=1.6)
+        _, changes = repair_lines(seen.astype(np.uint8) * 255, boxes)
+        self.assertEqual([kind for kind, _, _ in changes], ["added"])
+
+
+class PageRowsTest(unittest.TestCase):
+    """Regions lying only in the borrowed neighbour strips are not translated."""
+
+    def test_only_regions_touching_the_page_are_kept(self):
+        from types import SimpleNamespace
+        from engine_compat import on_page
+        above = SimpleNamespace(xyxy=(0, 10, 50, 90))
+        crossing = SimpleNamespace(xyxy=(0, 90, 50, 130))
+        inside = SimpleNamespace(xyxy=(0, 300, 50, 340))
+        below = SimpleNamespace(xyxy=(0, 1010, 50, 1060))
+        kept, skipped = on_page([above, crossing, inside, below], (100, 1000))
+        self.assertEqual(kept, [crossing, inside])
+        self.assertEqual(skipped, [above, below])
+
+    def test_without_a_strip_everything_is_kept(self):
+        from types import SimpleNamespace
+        from engine_compat import on_page
+        regions = [SimpleNamespace(xyxy=(0, 0, 10, 10))]
+        self.assertEqual(on_page(regions, None), (regions, []))
 
 
 if __name__ == "__main__":
