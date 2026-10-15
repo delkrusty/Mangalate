@@ -62,18 +62,18 @@ object OnDeviceOcr {
 
     private suspend fun detectLocked(page: Bitmap, lang: SourceLanguage): List<TextRegion> {
         val lines = ArrayList<Line>()
-        for (tile in PageTiles.split(page.width, page.height)) {
-            val bmp = if (tile.top == 0 && tile.height() == page.height) {
+        for (tile in OverlappingTiles.split(page.width, page.height)) {
+            val bmp = if (tile.top == 0 && tile.height == page.height) {
                 page
             } else {
-                Bitmap.createBitmap(page, 0, tile.top, page.width, tile.height())
+                Bitmap.createBitmap(page, 0, tile.top, page.width, tile.height)
             }
             val result = recognizer(lang).process(InputImage.fromBitmap(bmp, 0)).awaitTask()
             for (block in result.textBlocks) {
                 for (line in block.lines) {
                     val r = line.boundingBox ?: continue
                     r.offset(0, tile.top)
-                    lines += Line(Rect(r), line.text)
+                    if (tile.owns(r.centerY())) lines += Line(Rect(r), line.text)
                 }
             }
             if (bmp !== page) bmp.recycle()

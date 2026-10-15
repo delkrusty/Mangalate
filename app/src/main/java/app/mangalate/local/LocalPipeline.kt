@@ -34,7 +34,7 @@ object LocalPipeline {
                 else -> {
                     val found = stage("reconhecimento do texto (OCR)") {
                         OnDeviceOcr.detect(page, s.sourceLanguage)
-                    }
+                    }.filter { OfflineText.keep(it.original, s.sourceLanguage) }
                     if (found.isEmpty()) {
                         emptyList()
                     } else {
@@ -52,12 +52,13 @@ object LocalPipeline {
                                 status(null)
                             }
                         }
-                        found.zip(translated) { r, t -> r.copy(translation = t) }
+                        found.zip(translated) { r, t -> r.copy(translation = OfflineText.tidy(t, r.original)) }
                     }
                 }
             }
-            if (regions.isEmpty()) return@withContext bytes
-            PageRenderer.render(context, page, regions, s)
+            val kept = regions.filter { OfflineText.keep(it.original, s.sourceLanguage) }
+            if (kept.isEmpty()) return@withContext bytes
+            PageRenderer.render(context, page, kept, s)
             ByteArrayOutputStream(bytes.size).use {
                 page.compress(Bitmap.CompressFormat.JPEG, 94, it)
                 it.toByteArray()
