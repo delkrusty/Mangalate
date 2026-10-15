@@ -96,8 +96,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="build-${{ github.run_number }}"
+          VERSION=$(sed -n 's/^ *versionName = "\(.*\)"/\1/p' app/build.gradle.kts | head -1)
+          # Release notes: the CHANGELOG section of this version, plus the download hint.
+          awk -v v="$VERSION" '/^## /{p = index($0, "## " v) == 1; next} p' CHANGELOG.md > notes.md
+          printf '\nBaixe **Mangalate-arm64-v8a.apk** para celulares atuais ou **Mangalate-universal.apk**. Commit %s.\n' "${GITHUB_SHA::7}" >> notes.md
           gh release create "$TAG" dist/*.apk \
             --target "$GITHUB_SHA" \
-            --title "Mangalate 0.5.2 (build ${{ github.run_number }})" \
-            --notes "Foco em tradução offline e servidor. Gemini e DeepL diretos saem da seleção principal; limpeza local da 0.5.0 preservada. Docker com instalação guiada, caminho da chave Mangalate e perfis Básico/BYOK. BYOK usa servidor e API do próprio usuário, sem cobrança ou comissão Mangalate. Colab revisado para tradução interativa de capítulos, exportando CBZ e pacote de revisão sem túnel/keepalive. O acabamento automático exige revisão visual; não há garantia de perfeição de scan humano. APK de ${GITHUB_SHA::7}. Baixe **Mangalate-arm64-v8a.apk** para celulares atuais ou **Mangalate-universal.apk**." \
+            --title "Mangalate $VERSION (build ${{ github.run_number }})" \
+            --notes-file notes.md \
             --latest

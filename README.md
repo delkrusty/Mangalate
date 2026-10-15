@@ -4,90 +4,59 @@
 
 # Mangalate
 
-Leitor de mangá para Android, baseado no [Mihon](https://github.com/mihonapp/mihon), que **traduz as páginas automaticamente** para o idioma que você escolher, colocando o texto traduzido dentro dos próprios balões.
+Leitor de mangá para Android, baseado no [Mihon](https://github.com/mihonapp/mihon), que **traduz as páginas** e escreve a tradução dentro dos próprios balões.
+
+[Baixar](https://github.com/delkrusty/Mangalate/releases/latest) · [Ajuda](HELP.md) · [Servidor + IA](server/README.md) · [Novidades](CHANGELOG.md)
 
 </div>
 
-## Como usar (3 passos)
+## Começar
 
-1. **Instale** o APK em [Releases](https://github.com/delkrusty/Mangalate/releases/latest) (`Mangalate-arm64-v8a.apk` serve na maioria dos celulares; se não instalar, use `Mangalate-universal.apk`).
-2. **Abra um capítulo** e toque no botão **文A** na barra de baixo do leitor.
-3. Escolha **o idioma do mangá** e **para qual idioma traduzir** e toque em **Traduzir**. Pronto.
+1. Baixe o APK em [Releases](https://github.com/delkrusty/Mangalate/releases/latest). `Mangalate-arm64-v8a.apk` serve na maioria dos celulares; se não instalar, use `Mangalate-universal.apk`.
+2. Abra um capítulo e toque em **文A** na barra do leitor.
+3. Escolha o idioma do mangá e o idioma da tradução e toque em **Traduzir**.
 
-Não precisa de servidor, conta nem configuração. Para desligar e ver o original, toque em 文A de novo.
+Para voltar ao original, toque em 文A de novo. O app não traz fontes de conteúdo: as extensões são instaladas por você, como no Mihon.
 
-## Os dois modos
+## Dois modos
 
-| Modo | Precisa de quê | Como funciona |
+| | **No celular** (padrão) | **Servidor + IA** |
 |---|---|---|
-| **No celular** (padrão) | Baixar os modelos dos idiomas na primeira utilização | OCR, tradução e limpeza offline no aparelho; mantém a limpeza local da 0.5.0 |
-| **Servidor** | Docker no seu PC ou servidor contratado, URL e chave Mangalate | OCR, tradução, reconstrução e diagramação executados fora do celular |
+| Onde roda | No próprio celular, offline | No seu PC, com Docker |
+| Tradução | Google ML Kit | IA escolhida por você: Groq e Gemini (grátis, com troca automática), OpenRouter ou Ollama no PC |
+| Qualidade | Boa para entender a história | Português natural, nomes e tom dos personagens respeitados |
+| Precisa de | Baixar os idiomas uma vez | PC ligado, Docker e uma chave grátis de IA |
 
-### Servidor + IA
+Para usar o servidor, siga o [manual do servidor](server/README.md); a escolha da IA está no [guia de IAs](server/BYOK.md). Só o texto das falas vai para a IA, nunca as imagens. A chave da IA fica no seu PC, e o Mangalate não cobra nada.
 
-1. Siga o [manual do servidor](server/README.md). O assistente `python setup.py` gera sua chave Mangalate e mostra um menu de IAs.
-2. **Qual IA:** Groq e Gemini têm cota grátis; configure os dois e um assume sozinho quando o outro atinge o limite. O Ollama roda a IA no próprio computador, sem internet. Passo a passo no [guia de IAs](server/BYOK.md).
-3. O servidor lê o texto, apaga o original e escreve a tradução; só o texto das falas vai para a IA. A chave da IA fica no servidor, não no celular. O Mangalate não cobra nem recebe comissão.
-4. No app, selecione **Servidor**, informe a URL e copie o conteúdo de `server/secrets/mangalate_key.txt`. Toque em **Testar conexão**.
+## Ler offline
 
-O perfil Básico (tradução NLLB) saiu na 0.5.3: nos testes ele deixava o português com cara de Portugal e perdia falas. Instalações antigas continuam funcionando até você rodar o instalador de novo.
+- **Pré-tradução:** enquanto você lê, as páginas seguintes já vão sendo traduzidas.
+- **Traduzir ao baixar:** ligue em Mais › Tradução (Mangalate). Os capítulos baixados chegam traduzidos e podem ser lidos sem internet.
+- Mudar idioma, modo ou servidor pode exigir traduzir de novo. Prepare os capítulos antes de sair.
 
-Gemini e DeepL diretos não fazem parte da seleção nesta versão. Quem tinha um modo antigo configurado começa em No celular; o servidor BYOK aceita provedores compatíveis com sua API configurada.
+## Limitações
 
-Para preparar um capítulo sem instalar Docker, use o [notebook Colab](https://colab.research.google.com/github/delkrusty/Mangalate/blob/main/server/colab/Mangalate_Colab.ipynb). Ele recebe ZIP/CBZ e exporta CBZ traduzido mais um pacote de revisão; não é um servidor permanente para o app e não exige chave Mangalate.
-
-## Mais rápido e offline
-
-- **Pré-tradução:** com a tradução ligada, o aplicativo prepara páginas seguintes enquanto você lê. A velocidade depende do aparelho, da infraestrutura, dos modelos e da API; no servidor, as páginas são processadas uma por vez para evitar filas descontroladas.
-- **Baixar já traduzido:** ligue **Traduzir capítulos ao baixar** (em Mais › Tradução). Quando você baixar um capítulo pelo botão de download de sempre, o Mangalate traduz todas as páginas junto, com uma notificação de progresso. Depois dá para ler traduzido **sem internet**.
-- As páginas traduzidas de capítulos baixados ficam guardadas até você apagá-las na mesma tela.
-
-## O que acontece em cada página
-
-1. O texto é localizado por OCR no celular ou no servidor.
-2. As falas são traduzidas.
-3. O modo local mantém a segmentação e limpeza da 0.5.0; o servidor reconstrói regiões de texto com seu próprio pipeline. A arte fora do texto deve ser preservada e precisa de revisão visual.
-4. O texto traduzido é diagramado no balão em fonte de quadrinho, com tamanho e quebra de linha ajustados automaticamente.
-5. A página fica salva no celular. As páginas seguintes já vão sendo traduzidas enquanto você lê.
-
-## Diagramação local
-
-- Texto centralizado na área útil do corpo do balão, com margens internas e sem aumentar a caixa para fora do balão.
-- Fonte limitada pelo tamanho da página e reduzida até a fala caber; não há cortes arbitrários dentro de palavras.
-- Divisão silábica em português brasileiro com hífen quando uma palavra não cabe inteira, usando o dicionário DivSilab.
-- Mudanças de modo, idioma e motor podem invalidar traduções em cache. Prepare os capítulos novamente antes de sair para ler offline.
-
-## Limpeza e identidade na versão 0.5.0
-
-- Segmentação do interior completo de balões de fundo uniforme e contorno fechado. Remove inclusive caracteres fora da caixa do OCR e preserva a borda e a arte externa.
-- Blocos detectados no mesmo balão são compostos como uma única fala para evitar sobreposição.
-- Sobre, novidades e privacidade próprios do Mangalate; os créditos legais da base continuam preservados.
-- Ajuda pesquisável dentro do app, com manuais e soluções de problemas disponíveis offline. Consulte também [HELP.md](HELP.md).
-- Regiões com contorno aberto, textura ou baixa confiança usam a limpeza conservadora. A limpeza total não é aplicada indiscriminadamente à arte.
+- Letras muito estilizadas, japonês vertical, balões abertos e texto sobre o desenho podem sair errados ou ficar no original. Confira o resultado antes de compartilhar.
+- O servidor deixa no original o texto que está sobre a arte, em vez de apagar o desenho, e marca essas páginas para revisão.
+- Aceleração por placa de vídeo no servidor: NVIDIA (CUDA). AMD/ROCm é experimental e só no Linux; nos demais casos, o servidor usa a CPU.
+- Com a tradução ligada, o renderizador experimental do Mihon é trocado pelo leitor clássico.
 
 ## Compilar
 
-O GitHub Actions compila a cada push em `main` e publica o APK em Releases. Para compilar localmente: JDK 21 e Android SDK, depois:
+O GitHub Actions compila a cada push. Localmente, com JDK 21 e Android SDK:
 
 ```bash
 ./gradlew :app:assembleRelease -Pdist=local
 ```
 
-## Limitações conhecidas
-
-- OCR de japonês vertical, letras estilizadas, balões abertos e texto sobre arte podem errar em qualquer modo. Não há promessa de resultado automático impecável.
-- O servidor usa LaMa e perfis de diagramação próprios, com controles para rejeitar alterações grosseiras. Isso não substitui revisão página a página; consulte [QUALITY.md](server/QUALITY.md).
-- O perfil do servidor tenta evitar onomatopeias fora de balões por padrão; essa detecção é heurística e não uma classificação perfeita.
-- CPU atende PCs de diferentes marcas. CUDA é um perfil separado; ROCm/AMD é experimental em Linux compatível. DirectML/OpenVINO não estão implementados.
-- O renderizador WebGPU experimental do Mihon é trocado pelo leitor clássico enquanto a tradução está ligada.
-- O app não inclui fontes de conteúdo; extensões são instaladas por você, como no Mihon.
+Os testes do servidor estão em `server/tests` (`python -m unittest discover server/tests`).
 
 ## Créditos e licença
 
-- Baseado no [Mihon](https://github.com/mihonapp/mihon) (Apache 2.0).
-- OCR e tradução no celular: Google ML Kit. Fonte Comic Neue (SIL OFL 1.1).
-- Modo servidor: [manga-image-translator](https://github.com/zyddnys/manga-image-translator) (GPL-3.0), executado como serviço separado.
-- Ícones: Material Symbols (Apache 2.0).
-- Padrões de divisão silábica: [DivSilab/LibreOffice](https://github.com/LibreOffice/dictionaries/tree/master/pt_BR), Raimundo Santos Moura. Arquivo original sem modificações, sob MPL; créditos e licença distribuídos em `app/src/main/assets/lettering/`.
+- Base: [Mihon](https://github.com/mihonapp/mihon) (Apache 2.0).
+- Tradução no celular: Google ML Kit. Fonte Comic Neue (SIL OFL 1.1). Ícones Material Symbols (Apache 2.0).
+- Servidor: [manga-image-translator](https://github.com/zyddnys/manga-image-translator) (GPL-3.0), rodando como serviço separado.
+- Divisão silábica: [DivSilab/LibreOffice](https://github.com/LibreOffice/dictionaries/tree/master/pt_BR), de Raimundo Santos Moura (MPL), sem modificações, em `app/src/main/assets/lettering/`.
 
-O aplicativo e os arquivos próprios mantêm a licença Apache 2.0, ver [LICENSE](LICENSE), exceto a adaptação `server/engine_compat.py`, identificada como GPL-3.0. O motor separado inclui manga-image-translator sob GPL-3.0 e conserva seu código e licença em `/app` nas imagens Docker. Modelos baixados têm licenças próprias; o NLLB Básico exige atenção ao uso não comercial, como explicado no manual do servidor.
+O aplicativo usa a licença Apache 2.0 ([LICENSE](LICENSE)). A adaptação `server/engine_compat.py` é GPL-3.0, como o motor que ela adapta; a licença do motor fica em [server/LICENSE.engine](server/LICENSE.engine) e dentro das imagens Docker. Os modelos baixados têm licenças próprias.
