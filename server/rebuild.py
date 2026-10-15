@@ -35,7 +35,7 @@ def commands(hardware):
     return [
         ["docker", "build", "-f", "Dockerfile.worker", "--target", target, "-t", image, "."],
         ["docker", "build", "-f", "Dockerfile.gateway", "-t", "mangalate-gateway:local", "."],
-        ["docker", "compose", "--profile", hardware, "up", "-d", "--force-recreate"],
+        ["docker", "compose", "--profile", hardware, "up", "-d", "--no-build", "--force-recreate"],
     ], service
 
 
