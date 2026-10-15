@@ -2,6 +2,13 @@
 
 As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://github.com/mihonapp/mihon/blob/main/CHANGELOG.md).
 
+## Em teste (próxima versão)
+
+### Modo no celular
+- Créditos e marcas d'água de scan (sites, Discord, Patreon) e onomatopeias em japonês que sobraram em scans em inglês ficam no original, sem tradução.
+- Em páginas longas de webtoon, uma linha cortada entre duas faixas de leitura agora é lida inteira.
+- Tradução com espaços e pontuação arrumados (sem espaço antes de "?" nem vírgula antes de ponto).
+
 ## 0.5.4
 
 ### Tradução e limpeza
