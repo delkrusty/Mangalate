@@ -5,6 +5,7 @@ import csv
 import json
 import re
 import sys
+import time
 import traceback
 import zipfile
 from pathlib import Path
@@ -128,7 +129,7 @@ async def run(args):
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     pages = unpack_pages(args.input, output / "input")
-    config = profile_config(args.profile, {"translator": {"target_lang": args.target}})
+    config = profile_config(args.profile, {"translator": {"target_lang": args.target}}, args.speed)
     # Whole-word wrapping avoids inappropriate English syllabification in PT-BR.
     config["render"]["no_hyphenation"] = True
     glossary = []
@@ -169,11 +170,13 @@ async def run(args):
                 prompt_path.parent.mkdir(exist_ok=True)
                 prompt_path.write_text(yaml.safe_dump(prompt, allow_unicode=True), encoding="utf-8")
                 config["translator"]["gpt_config"] = str(prompt_path)
+            started = time.monotonic()
             strip = Strip(original, neighbour(index - 1), neighbour(index + 1))
             ctx = await translate_with_patience(translator, strip.image, Config(**config))
             result = finish(strip, ctx.result, getattr(ctx, "text_regions", None) if strip.stitched else None,
                             seam_cache, salt)
             entry["seams"] = {"above": strip.above is not None, "below": strip.below is not None}
+            entry["seconds"] = round(time.monotonic() - started, 1)
             entry.update(inspect_result(original, result))
             pairs = [
                 {"original": str(getattr(r, "text_raw", r.text)), "translation": str(r.translation)}
@@ -242,6 +245,8 @@ if __name__ == "__main__":
     parser.add_argument("--pages", help="Só estas páginas, ex.: 2,22-26,114")
     parser.add_argument("--diagnostics", action="store_true",
                         help="Salva máscaras, regiões, OCR e tradução de cada página em diagnostico/")
+    parser.add_argument("--speed", choices=("quality", "fast"),
+                        help="quality: limpeza mais fina; fast: mais rápido em CPU (padrão: o do servidor)")
     parser.add_argument("--no-seams", action="store_true",
                         help="Traduz cada página sozinha, sem emendar balões cortados entre páginas")
     parser.add_argument("--legacy", action="store_true",

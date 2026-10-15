@@ -30,10 +30,24 @@ def load_key():
     return key
 
 
-def profile_config(profile, requested):
+SPEEDS = {"quality", "fast"}
+
+
+def apply_speed(config, speed):
+    """'fast': lighter cleaner and smaller working size, for CPUs; 'quality' keeps the profile."""
+    if speed not in SPEEDS:
+        raise ValueError("Velocidade deve ser quality ou fast.")
+    if speed == "fast":
+        config["inpainter"].update({"inpainter": "lama_mpe", "inpainting_size": 1024})
+        config["detector"]["detection_size"] = min(config["detector"].get("detection_size", 1536), 1536)
+    return config
+
+
+def profile_config(profile, requested, speed=None):
     if profile not in {"basic", "byok"}:
         raise ValueError("Perfil deve ser basic ou byok.")
     config = json.loads((ROOT / "profiles" / f"{profile}.json").read_text())
+    apply_speed(config, speed or os.environ.get("MANGALATE_SPEED", "quality"))
     target = requested.get("translator", {}).get("target_lang", "PTB")
     if target not in TARGETS:
         raise ValueError("Idioma de destino não suportado.")

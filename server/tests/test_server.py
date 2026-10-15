@@ -18,7 +18,7 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from gateway import create_app, profile_config, inspect_result
+from gateway import create_app, profile_config, inspect_result, apply_speed
 from setup import configure
 from hardware import detect
 from core import create_core
@@ -34,6 +34,18 @@ def png(color="white", size=(100, 100)):
     output = io.BytesIO()
     Image.new("RGB", size, color).save(output, "PNG")
     return output.getvalue()
+
+
+class SpeedTest(unittest.TestCase):
+    def test_fast_mode_uses_lighter_cleaning_and_quality_keeps_profile(self):
+        quality = profile_config("byok", {}, "quality")
+        fast = profile_config("byok", {}, "fast")
+        self.assertEqual(quality["inpainter"]["inpainter"], "lama_large")
+        self.assertEqual((fast["inpainter"]["inpainter"], fast["inpainter"]["inpainting_size"]), ("lama_mpe", 1024))
+        self.assertLessEqual(fast["detector"]["detection_size"], 1536)
+        self.assertEqual(fast["detector"]["detector"], quality["detector"]["detector"])
+        with self.assertRaises(ValueError):
+            apply_speed(dict(quality), "turbo")
 
 
 class ServerTest(unittest.TestCase):

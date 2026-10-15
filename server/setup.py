@@ -18,11 +18,14 @@ def save_secret(path, value):
     os.chmod(path, 0o600)
 
 
-def configure(profile, hardware, bind, api_base="", model="", provider_key="", root=ROOT, providers=None):
+def configure(profile, hardware, bind, api_base="", model="", provider_key="", root=ROOT, providers=None,
+              speed="quality"):
     # "basic" (NLLB) is no longer offered by the menu; it stays accepted for the
     # keyless CI pipeline check and for installations made before 0.5.3.
     if profile not in {"basic", "byok"} or hardware not in {"cpu", "gpu", "amd-rocm"}:
         raise ValueError("Perfil/hardware inválidos.")
+    if speed not in {"quality", "fast"}:
+        raise ValueError("Velocidade inválida.")
     if profile == "byok" and providers:
         for item in providers:
             if not validate_base(item["base"]) or not item["model"]:
@@ -45,7 +48,7 @@ def configure(profile, hardware, bind, api_base="", model="", provider_key="", r
         f"MANGALATE_PROFILE={profile}", f"MANGALATE_BIND={bind}",
         "MANGALATE_KEY_FILE=./secrets/mangalate_key.txt",
         "MANGALATE_API_KEY_FILE=./secrets/provider_key.txt",
-        "MANGALATE_ALLOW_ART_TEXT=false",
+        "MANGALATE_ALLOW_ART_TEXT=false", f"MANGALATE_SPEED={speed}",
         f"CUSTOM_OPENAI_API_BASE={api_base}", f"CUSTOM_OPENAI_MODEL={model}",
     ]
     if any("\n" in value or "\r" in value for value in (api_base, model, bind)):
@@ -194,8 +197,10 @@ def main():
     if (ROOT / ".env").exists() and not yes_no("Já existe configuração. Substituir pela nova? [s/n]: "):
         print("Nada foi alterado.")
         return
+    print("\nVelocidade: Qualidade limpa a arte com mais detalhe; Rápido é bem mais leve em CPU.")
+    speed = "fast" if input("Velocidade [1 Qualidade / 2 Rápido] (1): ").strip() == "2" else "quality"
     providers = choose_providers() if profile == "byok" else None
-    path, hardware = configure(profile, hardware, bind, root=ROOT, providers=providers)
+    path, hardware = configure(profile, hardware, bind, root=ROOT, providers=providers, speed=speed)
     print("\nArquivo da chave Mangalate:", path)
     print("No app cole o conteúdo desse arquivo em Chave Mangalate, NÃO a chave da API.")
     print("Essa senha é privada. Não compartilhe prints dela.")
