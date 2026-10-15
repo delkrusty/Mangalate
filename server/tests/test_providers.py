@@ -268,19 +268,31 @@ class RebuildTest(unittest.TestCase):
 
         def run(cmd, **kwargs):
             calls.append(cmd)
-            return subprocess.CompletedProcess(cmd, 0, stdout="2\n" if "grep" in cmd else "")
+            return subprocess.CompletedProcess(cmd, 0, stdout=self.running(cmd) if "sha256sum" in cmd else "")
         rebuild("cpu", run=run)
         self.assertEqual(calls[0][:2], ["docker", "build"])
         self.assertIn("mangalate-translator-cpu:local", calls[0])
-        self.assertNotIn("--build", calls[2])
-        self.assertIn("grep", calls[3])
+        self.assertIn("--no-build", calls[2])
+        self.assertIn("sha256sum", calls[3])
+
+    @staticmethod
+    def running(cmd, stale=None):
+        import hashlib
+        from rebuild import CHECKED, ROOT
+        lines = []
+        for path, inside in CHECKED.items():
+            digest = "0" * 64 if inside == stale else hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+            lines.append(f"{digest}  {inside}")
+        return "\n".join(lines)
 
     def test_old_image_still_running_is_reported(self):
         import subprocess
         from rebuild import rebuild
-        run = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, stdout="0\n" if "grep" in cmd else "")
-        with self.assertRaises(SystemExit):
+        run = lambda cmd, **kw: subprocess.CompletedProcess(
+            cmd, 0, stdout=self.running(cmd, stale="/mangalate/batch.py") if "sha256sum" in cmd else "")
+        with self.assertRaises(SystemExit) as raised:
             rebuild("cpu", run=run)
+        self.assertIn("batch.py", str(raised.exception))
 
     def test_hardware_is_read_from_env(self):
         import tempfile

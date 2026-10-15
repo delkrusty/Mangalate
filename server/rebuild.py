@@ -6,6 +6,7 @@ Builds the images with plain `docker build` instead of `docker compose
 Compose then keeps running the OLD images, so updates silently do nothing.
 Keys, settings (.env), volumes and downloaded models are kept.
 """
+import hashlib
 import subprocess
 import sys
 from pathlib import Path
@@ -16,7 +17,10 @@ IMAGES = {
     "gpu": ("gpu", "mangalate-translator-gpu:local", "translator-gpu"),
     "amd-rocm": ("rocm", "mangalate-translator-amd:local", "translator-amd"),
 }
-MARKER = "translate_with_patience"  # present in batch.py since 0.5.3
+# Files whose copy inside the running server must equal the one in this folder.
+CHECKED = {"colab/batch.py": "/mangalate/batch.py", "engine_compat.py": "/mangalate/engine_compat.py",
+           "providers.py": "/mangalate/providers.py", "seams.py": "/mangalate/seams.py",
+           "quality.py": "/mangalate/quality.py"}
 
 
 def hardware_from_env(root=ROOT):
@@ -44,11 +48,18 @@ def rebuild(hardware, run=subprocess.run):
     for step in steps:
         print("→", " ".join(step), flush=True)
         run(step, cwd=ROOT, check=True)
-    check = run(["docker", "compose", "--profile", hardware, "exec", "-T", service,
-                 "grep", "-c", MARKER, "/mangalate/batch.py"],
+    local = {inside: hashlib.sha256((ROOT / path).read_bytes()).hexdigest() for path, inside in CHECKED.items()}
+    check = run(["docker", "compose", "--profile", hardware, "exec", "-T", service, "sha256sum", *local],
                 cwd=ROOT, capture_output=True, text=True)
-    if check.returncode != 0 or not check.stdout.strip().isdigit() or int(check.stdout.strip()) == 0:
-        raise SystemExit("O servidor reiniciou, mas não está rodando a versão nova. Mande este texto no chat.")
+    running = {}
+    for line in (check.stdout or "").splitlines():
+        parts = line.split()
+        if len(parts) == 2:
+            running[parts[1]] = parts[0]
+    stale = [inside for inside, digest in local.items() if running.get(inside) != digest]
+    if check.returncode != 0 or stale:
+        raise SystemExit("O servidor reiniciou, mas NÃO está com a versão desta pasta (" + ", ".join(stale or ["sem resposta"])
+                         + "). Rode git pull e py rebuild.py de novo; se repetir, mande este texto no chat.")
     print("Servidor atualizado e rodando a versão nova.")
 
 
