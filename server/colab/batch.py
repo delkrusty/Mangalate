@@ -111,6 +111,20 @@ async def translate_with_patience(translator, image, config, waits=3):
             await asyncio.sleep(seconds)
 
 
+def save_raw_answers(folder):
+    """What each AI answered on a page that failed validation (local file, no keys)."""
+    from engine_compat import provider_pool
+    pool = provider_pool()
+    raw = getattr(pool, "raw", None) if pool else None
+    if not raw:
+        return
+    folder.mkdir(parents=True, exist_ok=True)
+    parts = []
+    for name, count, prompt, content in raw:
+        parts += [f"===== {name}: esperava {count} falas", "--- pedido ---", prompt, "--- resposta ---", str(content), ""]
+    (folder / "respostas-invalidas.txt").write_text("\n".join(parts), encoding="utf-8")
+
+
 def provider_events():
     """Which AI failed on the last page and why (no text, keys or provider bodies)."""
     from engine_compat import provider_pool
@@ -200,6 +214,8 @@ async def run(args):
             # A page the AIs could not translate is content, not a broken server: keep going.
             if not unusable:
                 consecutive_failures += 1
+            if unusable and args.diagnostics:
+                save_raw_answers(output / "diagnostico" / f"{index:04d}")
             entry.update(status="translation_unusable_original_preserved" if unusable else "blocked_original_preserved",
                          provider_events=provider_events(), error=type(exc).__name__,
                          # File/line/function only: no page text, keys or provider bodies.

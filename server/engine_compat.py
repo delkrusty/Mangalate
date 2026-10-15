@@ -153,8 +153,10 @@ async def request_byok_translation(self, to_lang, prompt, client=None, model=Non
         raise ValueError("BYOK returned no choices")
     choice = response.choices[0]
     content = choice.message.content
-    if not isinstance(content, str) or not content.strip() or choice.finish_reason == "length":
-        raise ValueError("BYOK returned incomplete content")
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("BYOK returned empty content")
+    if choice.finish_reason == "length":
+        raise ValueError("BYOK answer cut by max_tokens")
     usage = response.usage
     self.token_count_last = (getattr(usage, "total_tokens", 0) or 0) if usage else 0
     self.token_count += self.token_count_last
@@ -173,7 +175,13 @@ async def translate_byok(self, from_lang, to_lang, queries):
                 content = await asyncio.wait_for(
                     self._request_translation(to_lang, prompt, provider_client(pool, provider), provider["model"]),
                     timeout=180)
-                return parse_marked(self.extract_capture_groups(content, rf"{self.rgx_capture}").strip(), count)
+                extracted = (self.extract_capture_groups(content, rf"{self.rgx_capture}") or "").strip()
+                try:
+                    return parse_marked(extracted, count)
+                except ValueError:
+                    # Kept in memory for the local --diagnostics report only; never logged.
+                    pool.__dict__.setdefault("raw", []).append((provider["name"], count, prompt, content))
+                    raise
             translations += await pool.run(attempt)
             continue
         content = await asyncio.wait_for(self._request_translation(to_lang, prompt), timeout=180)

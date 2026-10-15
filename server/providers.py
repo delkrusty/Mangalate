@@ -138,7 +138,10 @@ class ProviderPool:
         self.events.append((name, kind if kind != "retry" else type(exc).__name__))
         if kind == "content":
             # A malformed answer says nothing about the provider's health: no pause.
-            self.log(f"BYOK: {name} devolveu uma resposta inválida para esta página; tentando o próximo.")
+            # Our own validation messages only (never the provider's body).
+            reason = str(exc)[:120] if type(exc).__module__ in {"engine_compat", "providers", "builtins"} else ""
+            self.events[-1] = (name, f"content: {reason}" if reason else "content")
+            self.log(f"BYOK: {name} devolveu uma resposta inválida para esta página ({reason}); tentando o próximo.")
         elif kind == "limit":
             self.strikes[name] = self.strikes.get(name, 0) + 1
             seconds = LONG_REST if self.strikes[name] >= 3 else (retry_after(exc) or SHORT_REST)
@@ -151,6 +154,7 @@ class ProviderPool:
     async def run(self, attempt):
         """Call attempt(provider) on each available provider until one succeeds."""
         self.events = []
+        self.__dict__["raw"] = []
         for provider in self.available():
             try:
                 result = await attempt(provider)
@@ -159,7 +163,9 @@ class ProviderPool:
                 continue
             self.strikes[provider["name"]] = 0
             return result
-        if self.events and all(kind == "content" for _, kind in self.events):
+        # If any provider that is still available answered (badly), the problem is this
+        # page, not the providers' limits: never make the caller wait for a pause.
+        if any(kind.startswith("content") for _, kind in self.events):
             raise UnusableAnswer("Nenhuma IA devolveu uma tradução válida para esta página.")
         now = self.clock()
         wait = min((t - now for t in self.resting.values() if t > now), default=SHORT_REST)

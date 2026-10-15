@@ -114,8 +114,18 @@ class RotationTest(unittest.TestCase):
         with self.assertRaises(UnusableAnswer):
             self.run_pool(p, lambda n: ValueError("markers"))
         self.assertEqual(p.available(), p.providers)
-        self.assertEqual(p.events, [("groq", "content"), ("gemini", "content")])
+        self.assertEqual(p.events, [("groq", "content: markers"), ("gemini", "content: markers")])
         self.assertEqual(self.run_pool(p, lambda n: ["ok"])[1], ["groq"])
+
+    def test_bad_answers_with_one_provider_paused_is_a_page_problem_not_a_wait(self):
+        # Grand Blue 87 page 2: ollama paused (bad model), groq and gemini answered badly;
+        # the pool said "everyone resting, wait 60 min" and the batch waited 15 minutes.
+        ollama = {"name": "ollama", "base": PRESETS["ollama"]["base"], "model": "x", "key": "ollama"}
+        p, _, _ = pool(ollama, GROQ, GEMINI)
+        with self.assertRaises(UnusableAnswer):
+            self.run_pool(p, lambda n: ProviderError(400 if n == "ollama" else 404) if n == "ollama"
+                          else ValueError("markers"))
+        self.assertEqual([x["name"] for x in p.available()], ["groq", "gemini"])
 
     def test_everyone_resting_is_reported_with_wait(self):
         p, _, _ = pool()
