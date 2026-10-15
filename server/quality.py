@@ -129,6 +129,7 @@ def normalize_spacing(text):
     if not text or has_cjk(text):
         return text
     text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"(?<!-)--(?!-)", "—", text)  # "Eu--" -> "Eu—" (TBATE 199 p22)
     text = re.sub(r"[,;:]\s*(?=[.!?…—])", "", text)  # "da muralha,." (TBATE new p108)
     text = re.sub(r" +([,;:!?…])", r"\1", text)
     text = re.sub(r"(?<!\.) +\.(?!\.)", ".", text)
@@ -136,6 +137,48 @@ def normalize_spacing(text):
     text = re.sub(rf"([!?…]+)(?={_LETTER})", r"\1 ", text)
     text = re.sub(rf"(?<={_LETTER}{{2}})\.(?=[A-ZÀ-Ý])", ". ", text)
     return text.strip()
+
+
+def _median_line(region):
+    lines = np.asarray(region.lines, dtype=float)
+    heights = [np.linalg.norm(q[3] - q[0]) for q in lines]
+    return float(np.median(heights)) if heights else 0.0
+
+
+def same_block(a, b, inside=None):
+    """True when ``b`` is the next line(s) of ``a``'s speech, split off by the detector.
+
+    The two pieces must be stacked (b right below a, at most about one line
+    apart), overlap horizontally, have lettering of the same size, and, when
+    ``inside`` is given, sit in the same bubble: ``inside(a, b)`` checks that
+    on the page (OF 237 p62: "ALRIGHT, LET'S START THE REAL" / "TRAINING.").
+    """
+    ax0, ay0, ax1, ay1 = (float(v) for v in a.xyxy)
+    bx0, by0, bx1, by1 = (float(v) for v in b.xyxy)
+    ha, hb = _median_line(a), _median_line(b)
+    if min(ha, hb) <= 0 or max(ha, hb) / min(ha, hb) > 1.6:
+        return False
+    line = min(ha, hb)
+    if not (-0.5 * line <= by0 - ay1 <= 0.9 * line):
+        return False
+    overlap = min(ax1, bx1) - max(ax0, bx0)
+    if overlap < 0.5 * min(ax1 - ax0, bx1 - bx0):
+        return False
+    return inside is None or bool(inside(a, b))
+
+
+def join_blocks(regions, make, inside=None):
+    """Merge stacked pieces of the same speech; ``make(a, b)`` builds the merged region."""
+    regions = sorted(regions, key=lambda r: float(r.xyxy[1]))
+    out = []
+    for region in regions:
+        for i, previous in enumerate(out):
+            if same_block(previous, region, inside):
+                out[i] = make(previous, region)
+                break
+        else:
+            out.append(region)
+    return out
 
 
 def sentence_case(text, names=()):

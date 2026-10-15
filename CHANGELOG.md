@@ -4,6 +4,11 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 
 ## Em teste (próxima versão)
 
+### Tradução e balões
+- Uma fala que o detector partia em dois pedaços no mesmo balão (a última linha separada) volta a ser uma fala só: traduzida inteira e escrita uma vez, sem um texto por cima do outro.
+- Linhas de créditos como "Original Art by:", "TL:" e "Editor:" ficam no original, como as marcas d'água.
+- "--" na tradução vira travessão (—), no servidor e no modo no celular.
+
 ### Servidor
 - A instalação para placa NVIDIA voltou a compilar (a imagem base do PyTorch passou a recusar o pip) e agora é conferida a cada mudança.
 

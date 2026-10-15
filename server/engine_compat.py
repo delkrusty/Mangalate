@@ -313,15 +313,54 @@ def is_credit(text):
     """Title, credit and scan-group lettering stays as drawn.
 
     TBATE new p84 "THE BEGINNING AFTER™END"; TBATE 236 p27 the "thunderscans"
-    watermark was translated.
+    watermark was translated; TBATE 240 p68 "Original Art by: YOYO" became "Arte original por: YOY".
     """
     import re
     global CREDIT
     if CREDIT is None:
         CREDIT = re.compile(r"[™©®]|\b\w{3,}scans?\b|discord|patreon|ko-?fi|www\.|\.(?:com|net|org|gg)\b"
+                            r"|\b(?:by|tl|pr|ts|qc|raws?|editor|proofreader|typesetter|translator|cleaner|redrawer)\s*:"
                             r"|read (?:the |this |more |latest )?chapters? (?:at|on)|support us|our (?:web)?site",
                             re.I)
     return bool(CREDIT.search(str(text or "")))
+
+
+def join_split_blocks(regions, image):
+    """One speech the detector split in two stacked regions becomes one region again.
+
+    Otherwise each piece is translated alone ("o de verdade" / "Treino") and
+    both translations are fitted to the same bubble, one over the other.
+    """
+    import numpy as np
+    import lettering
+    from quality import join_blocks
+
+    def inside(a, b):
+        found = lettering.bubble_mask(image, tuple(int(v) for v in a.xyxy))
+        if found is None:
+            return False
+        mask, wx0, wy0 = found
+        bx0, by0, bx1, by1 = (int(v) for v in b.xyxy)
+        cx, cy = (bx0 + bx1) // 2 - wx0, (by0 + by1) // 2 - wy0
+        return 0 <= cy < mask.shape[0] and 0 <= cx < mask.shape[1] and bool(mask[cy, cx])
+
+    def make(a, b):
+        return type(a)(np.concatenate([np.asarray(a.lines), np.asarray(b.lines)]), list(a.texts) + list(b.texts),
+                       font_size=max(a.font_size, b.font_size), angle=a.angle, prob=min(a.prob, b.prob),
+                       fg_color=a.fg_colors, bg_color=a.bg_colors)
+
+    if image is None or not all(hasattr(r, "xyxy") and hasattr(r, "lines") for r in regions):
+        return regions
+    horizontal = [r for r in regions if getattr(r, "horizontal", True)]
+    others = [r for r in regions if not getattr(r, "horizontal", True)]
+    try:
+        joined = join_blocks(horizontal, make, inside)
+    except Exception as exc:  # never lose a page over this
+        print(f"Region join skipped: {type(exc).__name__}", flush=True)
+        return regions
+    if len(joined) < len(horizontal):
+        print(f"Region join: {len(horizontal) - len(joined)} split speech(es) joined", flush=True)
+    return joined + others
 
 
 def classify_regions(original_merge):
@@ -340,6 +379,7 @@ def classify_regions(original_merge):
             regions, context_only = on_page(regions, PAGE_ROWS)
             if context_only:
                 print(f"Region check: {len(context_only)} only in the neighbouring pages, skipped", flush=True)
+            regions = join_split_blocks(regions, ctx.img_rgb)
         if not regions or not protect_art(config):
             return regions
         image, raw = ctx.img_rgb, ctx.mask_raw
