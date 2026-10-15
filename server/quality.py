@@ -129,6 +129,7 @@ def normalize_spacing(text):
     if not text or has_cjk(text):
         return text
     text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"[,;:]\s*(?=[.!?…—])", "", text)  # "da muralha,." (TBATE new p108)
     text = re.sub(r" +([,;:!?…])", r"\1", text)
     text = re.sub(r"(?<!\.) +\.(?!\.)", ".", text)
     text = re.sub(rf"(?<={_LETTER})([,;:])(?={_LETTER})", r"\1 ", text)

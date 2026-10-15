@@ -29,7 +29,7 @@ from pathlib import Path
 # The tag may also come at the end of the last bubble's line; only the tag onwards is removed.
 TERMS_LINE = re.compile(r"(?:^[ \t]*term(?:o|os|s)?[ \t]*:|<\|?[ \t]*term(?:o|os|s)?[ \t]*\|?>)[ \t]*(.*)$", re.I | re.M)
 MAX_TERMS = 200          # learned + pinned, per work
-MAX_TERMS_PER_PAGE = 10
+MAX_TERMS_PER_PAGE = 16
 CONFIRM_PAGES = 2        # pages that must list a term before it is used
 MAX_CANDIDATES = 300
 MAX_TERM_LEN = 60
@@ -254,12 +254,39 @@ def page_pairs(regions):
             for r in (regions or [])]
 
 
+# Capitalized words a Portuguese translation may keep from English without being names.
+NOT_NAMES = {"ok", "okay", "hey", "ei", "oh", "ah", "uh", "hm", "hmm", "ha", "haha", "tch", "wow",
+             "mr", "mrs", "ms", "sir", "lady", "lord", "san", "kun", "chan", "sama", "senpai", "sensei"}
+
+
+def kept_names(pairs):
+    """Names the translation kept as written: "CHISA, WAIT!" -> "Chisa, espera!".
+
+    Gemini Flash Lite never writes the <|termos|> line (Grand Blue 20-43 ended
+    with an empty glossary), but every model keeps a character's name.  A word of
+    the source that reappears capitalized in the translation is taken as a name;
+    like any term it is used only after a second page has it.
+    """
+    found = {}
+    for pair in pairs:
+        source, translation = pair.get("original", ""), pair.get("translation", "")
+        for word in set(re.findall(r"[A-Za-zÀ-ÿ]{3,}", source)):
+            if word.lower() in NOT_NAMES:
+                continue
+            name = word[:1].upper() + word[1:].lower()
+            if re.search(rf"(?<![\wÀ-ÿ]){re.escape(name)}(?![\wÀ-ÿ])", translation):
+                found.setdefault(word.upper(), name)
+    return list(found.items())
+
+
 def remember(memory, work, regions, terms):
     """Record a translated page; returns the new glossary terms (for logs and reports)."""
     if not work:
         return []
     pairs = page_pairs(regions)
     text = " ".join(p["original"] for p in pairs)
+    listed = {normalize(source) for source, _ in terms}
+    terms = list(terms) + [t for t in kept_names(pairs) if normalize(t[0]) not in listed]
     added = memory.record(work["obra"], work["capitulo"], work["pagina"], pairs, terms, text)
     if added:
         print("Memória da obra: termos novos " + "; ".join(f"{s}={t}" for s, t in added), flush=True)

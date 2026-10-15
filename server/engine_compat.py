@@ -306,9 +306,20 @@ def is_sound_effect(text):
     return len(re.findall(r"[A-Za-z]", text)) < 12
 
 
+CREDIT = None
+
+
 def is_credit(text):
-    """Title and credit lettering ("THE BEGINNING AFTER™END") stays as drawn."""
-    return any(mark in str(text or "") for mark in "™©®")
+    """Title, credit and scan-group lettering stays as drawn.
+
+    TBATE new p84 "THE BEGINNING AFTER™END"; TBATE 236 p27 the "thunderscans"
+    watermark was translated.
+    """
+    import re
+    global CREDIT
+    if CREDIT is None:
+        CREDIT = re.compile(r"[™©®]|\b\w{3,}scans?\b|discord|patreon|ko-?fi|www\.|\.(?:com|net|org|gg)\b", re.I)
+    return bool(CREDIT.search(str(text or "")))
 
 
 def classify_regions(original_merge):

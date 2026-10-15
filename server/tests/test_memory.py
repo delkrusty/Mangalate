@@ -129,6 +129,32 @@ class SoundEffectTest(unittest.TestCase):
         self.assertFalse(engine_compat.is_sound_effect("I SAID IT'S FINE, OKAY? ふ"))
 
 
+class KeptNamesTest(unittest.TestCase):
+    def test_names_kept_by_the_translation_become_terms(self):
+        from memory import kept_names
+        pairs = [{"original": "CHISA, HANG ON A SEC", "translation": "Chisa, espera aí."},
+                 {"original": "OKAY KOHEI, LET'S GO", "translation": "Ok, Kohei, vamos."},
+                 {"original": "THE WALL", "translation": "A muralha."}]
+        self.assertEqual(sorted(kept_names(pairs)), [("CHISA", "Chisa"), ("KOHEI", "Kohei")])
+
+    def test_names_need_two_pages_even_without_the_terms_line(self):
+        memory = WorkMemory()
+        page = [region("CHISA, WAIT!", "Chisa, espera!")]
+        self.assertEqual(remember(memory, {"obra": "GB", "capitulo": "87", "pagina": 1}, page, []), [])
+        self.assertEqual(remember(memory, {"obra": "GB", "capitulo": "87", "pagina": 2}, page, []),
+                         [("CHISA", "Chisa")])
+
+    def test_scan_watermarks_stay_as_drawn(self):
+        self.assertTrue(engine_compat.is_credit("thunderscans"))
+        self.assertTrue(engine_compat.is_credit("READ AT ASURASCANS.COM"))
+        self.assertFalse(engine_compat.is_credit("IT SCANS THE AREA"))
+
+    def test_comma_before_final_mark_is_dropped(self):
+        from quality import normalize_spacing
+        self.assertEqual(normalize_spacing("...da muralha,."), "...da muralha.")
+        self.assertEqual(normalize_spacing("3,5 metros."), "3,5 metros.")
+
+
 class CapitalsTest(unittest.TestCase):
     def test_an_answer_in_capitals_goes_back_to_sentence_case(self):
         from quality import page_names, sentence_case
