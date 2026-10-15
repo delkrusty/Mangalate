@@ -240,3 +240,21 @@ class InstallerTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NumberedAnswerTest(unittest.TestCase):
+    """Some models number lines '1.' instead of '<|1|>' (Groq qwen, live check 14/10)."""
+
+    def test_strictly_ordered_numbering_is_accepted(self):
+        from engine_compat import parse_marked
+        self.assertEqual(parse_marked("1. Entendido, Kaiser.\n2. Hoje de manhã?", 2),
+                         ["Entendido, Kaiser.", "Hoje de manhã?"])
+        self.assertEqual(parse_marked("[1] Olá\n[2] Mundo\ncontinua aqui", 2), ["Olá", "Mundo continua aqui"])
+        self.assertEqual(parse_marked("1) Sim\n2) Não", 2), ["Sim", "Não"])
+
+    def test_anything_that_could_swap_or_lose_a_bubble_is_rejected(self):
+        from engine_compat import parse_marked
+        for bad in ("1. a\n3. b\n2. c", "1. a\n2. b", "Aqui está:\n1. a\n2. b\n3. c", "1. a\n2. b\n3. c\n4. d",
+                    "1. a\n2.\n3. c"):
+            with self.assertRaises(ValueError, msg=bad):
+                parse_marked(bad, 3)

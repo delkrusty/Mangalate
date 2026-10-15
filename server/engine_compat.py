@@ -85,11 +85,38 @@ def provider_client(pool, provider):
     return clients[provider["name"]]
 
 
+def parse_numbered_lines(content, count):
+    """Fallback for models that number lines as '1.', '1)', '[1]' or '<1>' instead of '<|1|>'.
+
+    Accepted only when the numbers are exactly 1..count, in order, one per line,
+    so a merged, missing or reordered bubble is still rejected.
+    """
+    import re
+    pattern = re.compile(r"^\s*(?:<\|?(\d+)\|?>|\[(\d+)\]|(\d+)[.):])\s*(.*)$")
+    numbers, texts = [], []
+    for line in content.strip().splitlines():
+        match = pattern.match(line)
+        if match:
+            numbers.append(int(next(g for g in match.groups()[:3] if g)))
+            texts.append(match.group(4).strip())
+        elif line.strip() and texts:
+            texts[-1] = (texts[-1] + " " + line.strip()).strip()
+        elif line.strip():
+            return None
+    if numbers != list(range(1, count + 1)) or any(not text for text in texts):
+        return None
+    return texts
+
+
 def parse_marked(content, count):
     import re
     markers = list(re.finditer(r"<\|(\d+)\|>", content))
     if not markers and count == 1 and content:
         return [content]
+    if not markers:
+        fallback = parse_numbered_lines(content, count)
+        if fallback is not None:
+            return fallback
     if [int(marker.group(1)) for marker in markers] != list(range(1, count + 1)):
         raise ValueError("BYOK returned missing, duplicate or reordered markers")
     if content[:markers[0].start()].strip():
