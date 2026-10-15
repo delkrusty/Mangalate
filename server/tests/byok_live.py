@@ -26,6 +26,7 @@ LINES = [
     "I need you as my partner...",
     "...at the ball tomorrow night.",
     "NO WAY! ABSOLUTELY NOT!",
+    "IN YOVEMBER?! IF I COULD JUST AC7 LIKE NORMAL...",
 ]
 PROVIDERS = [
     ("Groq", "GROQ_API_KEY", "https://api.groq.com/openai/v1",
@@ -55,6 +56,8 @@ def checks(output):
     european = sorted({m.group(0).lower() for text in output for m in EUROPEAN.finditer(text)})
     if european:
         found.append("formas de Portugal: " + ", ".join(european))
+    if any(re.search(r"yovember|ac7", text, re.I) for text in output):
+        found.append("erro de OCR copiado")
     if any(len(re.findall(r"[^\W\d_]", text)) > 6 and text == text.upper() for text in output):
         found.append("tradução toda em maiúsculas")
     if any(re.search(r"[,;:!?](?=[^\W\d_])", text) for text in output):

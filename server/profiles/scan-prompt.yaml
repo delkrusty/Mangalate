@@ -18,4 +18,8 @@ chat_system_template: >
   Manga lettering is usually ALL CAPS: ignore that and write the translation in normal
   sentence case, capitalizing only sentence starts, names and titles (the app can show
   capitals if the reader wants).
+  The source text comes from OCR and may contain recognition mistakes: digits for letters
+  (AC7 for ACT), a wrong first letter (YOVEMBER for NOVEMBER), missing apostrophes or
+  merged words. Translate the intended words when the context makes them clear; keep
+  names you are unsure about exactly as written.
 chat_sample: {}
