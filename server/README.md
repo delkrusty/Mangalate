@@ -30,17 +30,13 @@ Se `py` não funcionar, tente `python setup.py`. O assistente pergunta:
 3. **Celular na mesma rede Wi-Fi:** escolha S para leitura ao vivo na rede local. Não exponha a porta 5003 no roteador.
 4. **Iniciar agora:** escolha S. Ele verifica Docker Compose e executa a instalação.
 
-Se preferir iniciar depois:
+Se preferir iniciar depois, ou para **atualizar depois de um `git pull`**:
 
 ```powershell
-docker compose --profile cpu up --build -d
+py rebuild.py
 ```
 
-Ou, apenas com NVIDIA configurada:
-
-```powershell
-docker compose --profile gpu up --build -d
-```
+Ele constrói as imagens com `docker build`, reinicia o servidor mantendo chaves, configuração e modelos, e confere se a versão nova está rodando. Evite `docker compose up --build`: nas versões recentes do Docker Desktop ele pode falhar com "failed to execute bake" e continuar rodando a versão antiga sem avisar.
 
 Use **somente um** perfil de hardware por vez. Não ative CPU, NVIDIA e AMD juntos.
 

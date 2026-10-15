@@ -45,7 +45,7 @@ def configure(profile, hardware, bind, api_base="", model="", provider_key="", r
     provider_path = root / "secrets/provider_key.txt"
     save_secret(provider_path, provider_key if profile == "byok" else "")
     lines = [
-        f"MANGALATE_PROFILE={profile}", f"MANGALATE_BIND={bind}",
+        f"MANGALATE_PROFILE={profile}", f"MANGALATE_BIND={bind}", f"MANGALATE_HARDWARE={hardware}",
         "MANGALATE_KEY_FILE=./secrets/mangalate_key.txt",
         "MANGALATE_API_KEY_FILE=./secrets/provider_key.txt",
         "MANGALATE_ALLOW_ART_TEXT=false", f"MANGALATE_SPEED={speed}",
@@ -206,11 +206,13 @@ def main():
     print("Essa senha é privada. Não compartilhe prints dela.")
     print("Chave Mangalate:", path.read_text().strip())
     print("Endereço no app: http://IP-DO-COMPUTADOR:5003 (use ipconfig no Windows / hostname -I no Linux)")
-    print("Para iniciar: docker compose --profile", hardware, "up --build -d")
+    print("Para iniciar ou atualizar depois de um git pull: py rebuild.py")
     print("Prepare modelos e teste UMA página antes de abrir um capítulo: python check.py --warmup")
     if yes_no("Verificar Docker e iniciar agora? [s/n]: "):
         subprocess.run(["docker", "compose", "version"], cwd=ROOT, check=True)
-        subprocess.run(["docker", "compose", "--profile", hardware, "up", "--build", "-d", "--force-recreate"], cwd=ROOT, check=True)
+        # Plain docker build: "compose --build" can fail through bake and keep old images.
+        from rebuild import rebuild
+        rebuild(hardware)
 
 
 if __name__ == "__main__":

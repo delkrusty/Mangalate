@@ -258,3 +258,33 @@ class NumberedAnswerTest(unittest.TestCase):
                     "1. a\n2.\n3. c"):
             with self.assertRaises(ValueError, msg=bad):
                 parse_marked(bad, 3)
+
+
+class RebuildTest(unittest.TestCase):
+    def test_plain_docker_build_then_restart_and_version_check(self):
+        import subprocess
+        from rebuild import rebuild
+        calls = []
+
+        def run(cmd, **kwargs):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout="2\n" if "grep" in cmd else "")
+        rebuild("cpu", run=run)
+        self.assertEqual(calls[0][:2], ["docker", "build"])
+        self.assertIn("mangalate-translator-cpu:local", calls[0])
+        self.assertNotIn("--build", calls[2])
+        self.assertIn("grep", calls[3])
+
+    def test_old_image_still_running_is_reported(self):
+        import subprocess
+        from rebuild import rebuild
+        run = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, stdout="0\n" if "grep" in cmd else "")
+        with self.assertRaises(SystemExit):
+            rebuild("cpu", run=run)
+
+    def test_hardware_is_read_from_env(self):
+        import tempfile
+        from rebuild import hardware_from_env
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / ".env").write_text("MANGALATE_PROFILE=byok\nMANGALATE_HARDWARE=gpu\n")
+            self.assertEqual(hardware_from_env(Path(folder)), "gpu")

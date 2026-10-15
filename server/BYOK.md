@@ -53,7 +53,7 @@ py setup.py
 8. Inicie e teste uma página antes de abrir um capítulo:
 
 ```powershell
-docker compose --profile cpu up --build -d
+py rebuild.py
 python check.py --warmup
 ```
 
