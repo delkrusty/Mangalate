@@ -560,12 +560,26 @@ async def refine_mask_consistently(self, config, ctx):
                           config.mask_dilation_offset, 0, self.verbose, self.kernel_size)
     # Pieces of letters the detector mask missed (italic overhangs) would stay
     # on the page as stray marks: add every letter inside the bubble interior.
-    extra = np.zeros(mask.shape[:2], bool)
+    # Grown like the detector's own mask (about a quarter of the line height): with a
+    # thin margin the cleaner left a grey ghost of the anti-aliased letter edges
+    # (TBATE new episode p12, "OF US.").  The growth stays near the text box, never
+    # reaching the bubble outline.
+    h, w = mask.shape[:2]
+    grown = np.zeros((h, w), bool)
     for region in ctx.text_regions or []:
         heights = [float(np.linalg.norm(np.asarray(l[3]) - np.asarray(l[0]))) for l in region.lines]
-        extra |= bubble_glyphs(ctx.img_rgb, region.xyxy, float(np.median(heights)) if heights else region.font_size)
-    if extra.any():
-        grown = cv2.dilate(extra.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+        line = float(np.median(heights)) if heights else float(region.font_size)
+        glyphs = bubble_glyphs(ctx.img_rgb, region.xyxy, line)
+        if not glyphs.any():
+            continue
+        size = max(5, int(round(line * 0.25)) | 1)
+        near = cv2.dilate(glyphs.astype(np.uint8), np.ones((size, size), np.uint8)) > 0
+        x0, y0, x1, y1 = (int(v) for v in region.xyxy)
+        pad = size
+        limit = np.zeros((h, w), bool)
+        limit[max(0, y0 - pad):min(h, y1 + pad), max(0, x0 - pad):min(w, x1 + pad)] = True
+        grown |= near & limit
+    if grown.any():
         mask = mask.copy()
         mask[grown] = 255
     return mask
