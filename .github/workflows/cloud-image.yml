@@ -1,7 +1,7 @@
 name: Cloud GPU image
 on:
   push:
-    branches: [main]
+    branches: [main, 'melhoria/**']
     paths: ['server/**', '.github/workflows/cloud-image.yml']
   workflow_dispatch:
 permissions:
@@ -29,11 +29,13 @@ jobs:
         run: |
           docker run --rm --entrypoint python -e GROQ_API_KEY=gsk_test mangalate-cloud -c "import sys; sys.path.insert(0,'/mangalate'); import cloud, gateway; env=cloud.prepare({'GROQ_API_KEY':'gsk_test'}); assert env['MANGALATE_UPSTREAM']=='http://127.0.0.1:8001'; print('ok')"
       - name: Publish
-        if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
-          for tag in latest "${GITHUB_SHA::7}"; do
+          # main is "latest"; a test branch gets its own tag (melhoria/nuvem -> melhoria-nuvem).
+          tags="${GITHUB_SHA::7} $(echo "$GITHUB_REF_NAME" | tr '/' '-')"
+          [ "$GITHUB_REF_NAME" = main ] && tags="$tags latest"
+          for tag in $tags; do
             docker tag mangalate-cloud "ghcr.io/$owner/mangalate-cloud:$tag"
             docker push "ghcr.io/$owner/mangalate-cloud:$tag"
           done
