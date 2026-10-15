@@ -88,8 +88,20 @@ Para ler o CBZ no app, coloque-o na pasta de armazenamento do Mangalate, em `man
 ## Outros sistemas e placas
 
 - **Linux/macOS:** use os mesmos comandos, trocando `py` por `python3`. A aceleração por placa de vídeo é só NVIDIA; Mac usa CPU.
-- **AMD:** no Windows, use CPU. No Linux com ROCm há um perfil experimental, ainda não testado em placa real: no `py setup.py`, escolha `3`. Rode `python hardware.py` para ver o que foi detectado.
+- **AMD:** Radeon RX 7000 ou mais nova acelera no Windows pelo WSL2 (veja abaixo). Placas mais antigas (RX 6000 para trás) usam CPU. No Linux com ROCm, no `python3 setup.py` escolha `3`. As duas opções AMD são experimentais, ainda não testadas em placa real. Rode `python hardware.py` para ver o que foi detectado.
 - **Intel, DirectML e OpenVINO:** não implementados; use CPU.
+
+### AMD no Windows (Radeon RX 7000 ou mais nova, experimental)
+
+O servidor roda no Ubuntu do WSL2, e a placa chega até ele pelo ROCm da AMD. Funciona com Radeon RX 7000 e RX 9000 (e Ryzen AI recentes); RX 6000 e mais antigas não são suportadas pela AMD. A placa deixa a página umas 4 a 5 vezes mais rápida que o processador (estimativa, ainda sem medição em placa real).
+
+1. Atualize o driver AMD Adrenalin para a versão 26.2.2 ou mais nova.
+2. No PowerShell: `wsl --install -d Ubuntu-24.04` e reinicie o PC. Abra o "Ubuntu 24.04" no menu Iniciar.
+3. No Ubuntu, instale o ROCm 7.2 para WSL com a librocdxg, seguindo o [guia da AMD para Radeon no WSL](https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/docs/install/installrad/wsl/howto_wsl.html). No fim deve existir o arquivo `/opt/rocm/lib/librocdxg.so`.
+4. Instale o Docker dentro do Ubuntu: `curl -fsSL https://get.docker.com | sudo sh` e depois `sudo usermod -aG docker $USER` (feche e abra o Ubuntu). Use este Docker, não o Docker Desktop.
+5. Ainda no Ubuntu: `git clone https://github.com/delkrusty/Mangalate.git`, `cd Mangalate/server` e `python3 setup.py`. Em Hardware, escolha `4`.
+
+Ao iniciar, o servidor escreve no log `Placa de vídeo em uso: ...` (veja com `docker compose --profile amd-wsl logs translator-amd-wsl`). Se aparecer `usando o processador`, o ROCm não chegou ao container: confira o passo 3. O celular conecta no IP do Windows, porta 5003, como no modo normal; na primeira vez o Windows pode pedir para liberar o acesso do WSL na rede.
 
 ## Servidor na internet (HTTPS)
 

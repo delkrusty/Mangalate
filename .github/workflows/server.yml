@@ -24,6 +24,7 @@ jobs:
         run: |
           python -c "from setup import configure;configure('basic','cpu','127.0.0.1')"
           docker compose --profile cpu config --quiet
+          docker compose --profile amd-wsl config --quiet
           MANGALATE_DOMAIN=manga.example.com docker compose -f docker-compose.yml -f docker-compose.public.yml --profile cpu config --quiet
           docker compose --profile cpu build
       - name: Verify upstream imports, start and warm up real CPU pipeline

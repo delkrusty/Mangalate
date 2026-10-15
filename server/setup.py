@@ -34,7 +34,7 @@ def configure(profile, hardware, bind, api_base="", model="", provider_key="", r
               speed="quality"):
     # "basic" (NLLB) is no longer offered by the menu; it stays accepted for the
     # keyless CI pipeline check and for installations made before 0.5.3.
-    if profile not in {"basic", "byok"} or hardware not in {"cpu", "gpu", "amd-rocm"}:
+    if profile not in {"basic", "byok"} or hardware not in {"cpu", "gpu", "amd-rocm", "amd-wsl"}:
         raise ValueError("Perfil/hardware inválidos.")
     if speed not in {"quality", "fast"}:
         raise ValueError("Velocidade inválida.")
@@ -198,6 +198,25 @@ def configure_one(index, names, providers, ask, secret):
     return {"name": name, "base": base, "model": model, "key": key}
 
 
+AMD_WSL_GUIDE = "Veja o passo a passo em server/README.md, seção \"AMD no Windows\"."
+
+
+def check_amd(hardware, system, exists=lambda path: Path(path).exists()):
+    """Stop with the next step to take when the chosen AMD path cannot work here."""
+    if hardware == "amd-rocm":
+        if system != "Linux":
+            raise SystemExit("A opção 3 é para Linux. No Windows com RX 7000 ou mais nova, escolha 4.")
+        if not exists("/dev/kfd"):
+            raise SystemExit("/dev/kfd ausente: prepare ROCm compatível no host ou escolha CPU.")
+    if hardware == "amd-wsl":
+        if system != "Linux":
+            raise SystemExit("A opção 4 roda dentro do Ubuntu do WSL2, não no PowerShell. " + AMD_WSL_GUIDE)
+        if not exists("/dev/dxg"):
+            raise SystemExit("/dev/dxg ausente: isto não parece o WSL2. " + AMD_WSL_GUIDE)
+        if not exists("/opt/rocm/lib/librocdxg.so"):
+            raise SystemExit("ROCm 7.2 com librocdxg não está instalado neste Ubuntu. " + AMD_WSL_GUIDE)
+
+
 def main():
     print("MANGALATE | instalação guiada")
     print("Servidor + IA: este computador lê, apaga e escreve; só o texto das falas vai para a IA que")
@@ -205,14 +224,11 @@ def main():
     profile = "byok"
     found = detect()
     print("Sistema:", found["os"], "| arquitetura:", found["architecture"])
-    print("CPU atende qualquer fabricante. AMD/Intel no Windows usam CPU neste pacote.")
-    print("A aceleração AMD/ROCm é experimental; DirectML/OpenVINO ainda não estão implementados.")
-    choice = input("Hardware [1 CPU / 2 NVIDIA-CUDA / 3 AMD-ROCm Linux] (1): ").strip()
-    hardware = {"2": "gpu", "3": "amd-rocm"}.get(choice, "cpu")
-    if hardware == "amd-rocm" and found["os"] != "Linux":
-        raise SystemExit("ROCm Docker neste pacote exige Linux. Escolha CPU; não é suporte DirectML no Windows.")
-    if hardware == "amd-rocm" and not Path("/dev/kfd").exists():
-        raise SystemExit("/dev/kfd ausente: prepare ROCm compatível no host ou escolha CPU.")
+    print("CPU atende qualquer fabricante. AMD Radeon RX 7000 ou mais nova acelera no Windows pelo WSL2;")
+    print("AMD mais antiga (RX 6000 para trás) e Intel usam CPU. A aceleração AMD é experimental.")
+    choice = input("Hardware [1 CPU / 2 NVIDIA / 3 AMD no Linux / 4 AMD RX 7000+ no Windows (WSL2)] (1): ").strip()
+    hardware = {"2": "gpu", "3": "amd-rocm", "4": "amd-wsl"}.get(choice, "cpu")
+    check_amd(hardware, found["os"])
     bind = "0.0.0.0" if input("Celular na mesma rede Wi-Fi? Liberar rede local [s/N]: ").lower() == "s" else "127.0.0.1"
     if bind == "0.0.0.0":
         print("Use somente rede confiável; NÃO abra a porta 5003 no roteador/internet.")
