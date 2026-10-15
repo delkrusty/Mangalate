@@ -18,6 +18,18 @@ def save_secret(path, value):
     os.chmod(path, 0o600)
 
 
+def default_speed(hardware):
+    """Rápido on CPU (about 3x faster, same cleaning in the short tests); Qualidade on a graphics card."""
+    return "fast" if hardware == "cpu" else "quality"
+
+
+def ask_speed(hardware, read=input):
+    default = default_speed(hardware)
+    print("\nVelocidade: Qualidade limpa a arte com mais detalhe; Rápido é bem mais leve em CPU.")
+    answer = read(f"Velocidade [1 Qualidade / 2 Rápido] ({'2' if default == 'fast' else '1'}): ").strip()
+    return {"1": "quality", "2": "fast"}.get(answer, default)
+
+
 def configure(profile, hardware, bind, api_base="", model="", provider_key="", root=ROOT, providers=None,
               speed="quality"):
     # "basic" (NLLB) is no longer offered by the menu; it stays accepted for the
@@ -207,8 +219,7 @@ def main():
     if (ROOT / ".env").exists() and not yes_no("Já existe configuração. Substituir pela nova? [s/n]: "):
         print("Nada foi alterado.")
         return
-    print("\nVelocidade: Qualidade limpa a arte com mais detalhe; Rápido é bem mais leve em CPU.")
-    speed = "fast" if input("Velocidade [1 Qualidade / 2 Rápido] (1): ").strip() == "2" else "quality"
+    speed = ask_speed(hardware)
     providers = choose_providers() if profile == "byok" else None
     path, hardware = configure(profile, hardware, bind, root=ROOT, providers=providers, speed=speed)
     print("\nArquivo da chave Mangalate:", path)

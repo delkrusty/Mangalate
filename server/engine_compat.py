@@ -279,6 +279,44 @@ def detection_fallback(original_detect):
     return detect
 
 
+def repair_textlines(original_detect):
+    """Give every lettered line of the detector mask its own box before OCR.
+
+    Short tests (Grand Blue 87 pp. 3/7/9, TBATE 236 pp. 1/6): the pixel mask
+    covered the line, but no line box did, so the line stayed in English.
+    """
+    async def detect(self, config, ctx):
+        result = await original_detect(self, config, ctx)
+        if not result or not result[0] or result[1] is None:
+            return result
+        textlines, mask_raw, mask = result[0], result[1], result[2]
+        import numpy as np
+        from quality import repair_lines, _box
+        from manga_translator.utils import Quadrilateral
+        image = getattr(ctx, "img_rgb", None)
+        if image is not None and np.asarray(mask_raw).shape[:2] != np.asarray(image).shape[:2]:
+            return result
+        horizontal = [i for i, line in enumerate(textlines) if getattr(line, "direction", "h") == "h"]
+        boxes = [_box(textlines[i].pts) for i in horizontal]
+        repaired, changes = repair_lines(mask_raw, boxes)
+        ctx.mangalate_line_repairs = [{"tipo": kind, "antes": before, "depois": after} for kind, before, after in changes]
+        if not changes:
+            return result
+        lines = [line for i, line in enumerate(textlines) if i not in set(horizontal)]
+        for box, source in repaired:
+            original = textlines[horizontal[source]] if source is not None else None
+            if original is not None and box == boxes[source]:
+                lines.append(original)
+                continue
+            x0, y0, x1, y1 = box
+            pts = np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=np.int64)
+            lines.append(Quadrilateral(pts, "", original.prob if original is not None else 1.0))
+        split = sum(1 for kind, _, _ in changes if kind == "split")
+        print(f"Line repair: split={split} added={len(changes) - split}", flush=True)
+        return (lines, mask_raw, mask) + tuple(result[3:])
+    return detect
+
+
 async def refine_mask_consistently(self, config, ctx):
     """Mask every kept region; the art decision was already taken in classify_regions.
 
@@ -385,7 +423,7 @@ def apply_compatibility():
         if not legacy_quality():
             MangaTranslator._run_textline_merge = classify_regions(MangaTranslator._run_textline_merge)
             MangaTranslator._run_mask_refinement = refine_mask_consistently
-            MangaTranslator._run_detection = detection_fallback(MangaTranslator._run_detection)
+            MangaTranslator._run_detection = repair_textlines(detection_fallback(MangaTranslator._run_detection))
             from manga_translator.rendering import text_render
             from quality import compact_symbols, whole_word_breaker
             text_render.compact_special_symbols = compact_symbols(text_render.compact_special_symbols)

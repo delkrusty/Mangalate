@@ -50,7 +50,8 @@ py setup.py
 5. **Modelo:** aperte **Enter** para usar o recomendado.
 6. **Chave:** no site, copie a chave (botão **Copiar** ou Ctrl+C), volte ao PowerShell e **só aperte Enter** — no Windows o instalador lê a chave copiada, sem precisar colar. Deve aparecer "Chave recebida: … caracteres". Ela fica só em `server/secrets/provider_key.txt`.
 7. **Tem chave de outra IA para usar como reserva?** `s`, escolha `2` (Gemini) e repita os passos 5 e 6. Quando não tiver mais, responda `n`.
-8. Inicie e teste uma página antes de abrir um capítulo:
+8. **Velocidade:** aperte **Enter**. Em CPU o padrão é **Rápido** (cerca de 3 vezes mais rápido; nos testes a limpeza ficou praticamente igual). Com placa de vídeo NVIDIA o padrão é **Qualidade**.
+9. Inicie e teste uma página antes de abrir um capítulo:
 
 ```powershell
 py rebuild.py

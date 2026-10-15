@@ -13,6 +13,12 @@ Two defects observed on real pages motivate this module:
 2. ``compact_special_symbols`` removes the space after every punctuation mark,
    a rule meant for CJK text.  In Portuguese it glues words ("Sim,eu"), and the
    line breaker then cuts the oversized word at an arbitrary letter.
+
+3. The detector's pixel mask finds every lettered line, but its line boxes
+   sometimes miss one (TBATE 236 p6: "MUST'VE MAL-" in bold italic) or cover
+   two lines with one box (Grand Blue 87 p3: "PITS AND / DIE.").  A line
+   without its own box is never read, cleaned or translated.  ``repair_lines``
+   rebuilds those boxes from the pixel mask before OCR.
 """
 import re
 
@@ -159,3 +165,116 @@ def whole_word_breaker(original, string_width):
 def broken_words(text, lines):
     """True when the laid-out lines do not keep every word of ``text`` whole."""
     return " ".join(lines).split() != text.split()
+
+
+# Line boxes from the detector mask -----------------------------------------
+
+INK = 127
+ROW_GAP = 2           # blank rows tolerated inside one line of lettering
+SPLIT_FACTOR = 1.6    # a box this many times the usual line height may hold two lines
+MIN_PART = 0.45       # a split part shorter than this share of a line is noise
+ORPHAN_COVERED = 0.2  # mask pixels already under a box above this share are not orphans
+NEAR_LINES = 1.6      # an orphan line must sit this many line heights from a known one
+
+
+def _box(points):
+    pts = np.asarray(points, np.float32).reshape(-1, 2)
+    x0, y0 = pts.min(axis=0)
+    x1, y1 = pts.max(axis=0)
+    return int(round(x0)), int(round(y0)), int(round(x1)), int(round(y1))
+
+
+def _runs(flags, gap=ROW_GAP):
+    runs, start, blank = [], None, 0
+    for i, on in enumerate(flags):
+        if on:
+            if start is None:
+                start = i
+            blank = 0
+        elif start is not None:
+            blank += 1
+            if blank > gap:
+                runs.append((start, i - blank + 1))
+                start, blank = None, 0
+    if start is not None:
+        runs.append((start, len(flags) - blank))
+    return runs
+
+
+def _line_height(boxes):
+    heights = [y1 - y0 for x0, y0, x1, y1 in boxes if (x1 - x0) >= 1.5 * (y1 - y0) > 0]
+    return float(np.median(heights)) if heights else None
+
+
+def _covered(box, others):
+    """Share of the box rows already covered by another box overlapping it horizontally."""
+    x0, y0, x1, y1 = box
+    rows = np.zeros(max(1, y1 - y0), bool)
+    for ox0, oy0, ox1, oy1 in others:
+        if min(x1, ox1) - max(x0, ox0) > 0.3 * (x1 - x0):
+            rows[max(0, oy0 - y0):max(0, min(y1, oy1) - y0)] = True
+    return float(rows.mean())
+
+
+def repair_lines(mask, boxes):
+    """Return (boxes, changes) with multi-line boxes split and missed lines added.
+
+    ``boxes`` are axis-aligned (x0, y0, x1, y1) horizontal text lines and
+    ``mask`` is the detector pixel mask of the same page.  Each entry of the
+    result is (box, source) where source is the index of the original box, or
+    None for a line found only in the mask.
+    """
+    if mask is None or not boxes:
+        return [(b, i) for i, b in enumerate(boxes)], []
+    ink = np.asarray(mask)
+    if ink.ndim == 3:
+        ink = ink.max(axis=2)
+    ink = ink > INK
+    height = _line_height(boxes)
+    if not height:
+        return [(b, i) for i, b in enumerate(boxes)], []
+    h, w = ink.shape
+    result, changes = [], []
+    for index, (x0, y0, x1, y1) in enumerate(boxes):
+        x0, x1, y0, y1 = max(0, x0), min(w, x1), max(0, y0), min(h, y1)
+        others = [b for j, b in enumerate(boxes) if j != index]
+        # Vertical lettering (Japanese SFX, stacked letters) is never split into rows.
+        if y1 - y0 < SPLIT_FACTOR * height or x1 - x0 <= y1 - y0:
+            result.append(((x0, y0, x1, y1), index))
+            continue
+        parts = []
+        for r0, r1 in _runs(ink[y0:y1, x0:x1].any(axis=1)):
+            if r1 - r0 < MIN_PART * height:
+                continue
+            cols = np.flatnonzero(ink[y0 + r0:y0 + r1, x0:x1].any(axis=0))
+            part = (x0 + int(cols[0]), y0 + r0, x0 + int(cols[-1]) + 1, y0 + r1)
+            if _covered(part, others) < 0.5:
+                parts.append(part)
+        if len(parts) >= 2:
+            result.extend((part, index) for part in parts)
+            changes.append(("split", (x0, y0, x1, y1), parts))
+        else:
+            result.append(((x0, y0, x1, y1), index))
+    # Lines of the mask that no box covers.
+    known = np.zeros_like(ink)
+    for (x0, y0, x1, y1), _ in result:
+        known[max(0, y0):y1, max(0, x0):x1] = True
+    join = max(3, int(round(height * 0.6))) | 1
+    lines = cv2.dilate(ink.astype(np.uint8), np.ones((1, join), np.uint8))
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(lines, connectivity=8)
+    current = [b for b, _ in result]
+    for label in range(1, count):
+        x, y, bw, bh = (int(v) for v in stats[label, :4])
+        if not (0.5 * height <= bh <= SPLIT_FACTOR * height and bw >= height):
+            continue
+        pixels = (labels[y:y + bh, x:x + bw] == label) & ink[y:y + bh, x:x + bw]
+        if not pixels.any() or known[y:y + bh, x:x + bw][pixels].mean() > ORPHAN_COVERED:
+            continue
+        cols = np.flatnonzero(pixels.any(axis=0))
+        box = (x + int(cols[0]), y, x + int(cols[-1]) + 1, y + bh)
+        near = any(min(box[2], b[2]) - max(box[0], b[0]) > 0.3 * min(box[2] - box[0], b[2] - b[0])
+                   and max(b[1] - box[3], box[1] - b[3]) <= NEAR_LINES * height for b in current)
+        if near:
+            result.append((box, None))
+            changes.append(("added", None, [box]))
+    return result, changes

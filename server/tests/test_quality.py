@@ -11,7 +11,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from quality import (broken_words, classify_region, compact_symbols, normalize_spacing,
-                     whole_word_breaker)
+                     repair_lines, whole_word_breaker)
 
 RNG = np.random.default_rng(65)
 
@@ -245,6 +245,89 @@ class SimpleNamespaceCopy:
     def model_copy(self, deep=False):
         import copy
         return copy.deepcopy(self)
+
+
+class LineRepairTest(unittest.TestCase):
+    """Lines the detector mask covers but no line box does (TBATE 236 p6, Grand Blue 87 p3)."""
+
+    LINES = ["THE KI", "RESTRAINER", "MUST'VE MAL-", "FUNCTIONED."]
+
+    def bubble_mask(self):
+        image = page((0, 0, 0), (420, 320))
+        boxes = []
+        for i, text in enumerate(self.LINES):
+            (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
+            x, y = 210 - w // 2, 60 + i * 34
+            cv2.putText(image, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
+            boxes.append((x - 2, y - h - 3, x + w + 2, y + 6))
+        return np.ascontiguousarray(image[:, :, 0]), boxes
+
+    def test_missing_line_is_added(self):
+        mask, boxes = self.bubble_mask()
+        repaired, changes = repair_lines(mask, boxes[:2] + boxes[3:])
+        self.assertEqual([kind for kind, _, _ in changes], ["added"])
+        added = [box for box, source in repaired if source is None]
+        self.assertEqual(len(added), 1)
+        self.assertTrue(boxes[2][1] <= added[0][1] < added[0][3] <= boxes[2][3])
+
+    def test_box_holding_two_lines_is_split(self):
+        mask, boxes = self.bubble_mask()
+        both = (min(boxes[2][0], boxes[3][0]), boxes[2][1], max(boxes[2][2], boxes[3][2]), boxes[3][3])
+        repaired, changes = repair_lines(mask, boxes[:2] + [both])
+        self.assertEqual([kind for kind, _, _ in changes], ["split"])
+        self.assertEqual(len(repaired), 4)
+
+    def test_complete_page_is_untouched(self):
+        mask, boxes = self.bubble_mask()
+        repaired, changes = repair_lines(mask, boxes)
+        self.assertEqual(changes, [])
+        self.assertEqual([box for box, _ in repaired], boxes)
+
+    def test_vertical_lettering_is_not_split(self):
+        mask = np.zeros((300, 200), np.uint8)
+        for i, letter in enumerate("BOOM"):
+            cv2.putText(mask, letter, (90, 50 + i * 50), cv2.FONT_HERSHEY_SIMPLEX, 1.4, 255, 3)
+        lines = [(20, 20, 160, 40), (20, 250, 160, 270)]
+        repaired, changes = repair_lines(mask, lines + [(85, 15, 125, 215)])
+        self.assertEqual([c for c in changes if c[0] == "split"], [])
+
+    def test_far_away_blob_is_not_a_line(self):
+        mask, boxes = self.bubble_mask()
+        cv2.rectangle(mask, (20, 290), (90, 310), 255, -1)  # art far below the bubble
+        _, changes = repair_lines(mask, boxes)
+        self.assertEqual(changes, [])
+
+    def test_hook_replaces_textlines_before_ocr(self):
+        import asyncio
+        import types
+        from types import SimpleNamespace
+        from engine_compat import repair_textlines
+
+        class Quad:
+            def __init__(self, pts, text, prob):
+                self.pts, self.text, self.prob, self.direction = np.asarray(pts), text, prob, "h"
+        fake = types.ModuleType("manga_translator.utils")
+        fake.Quadrilateral = Quad
+        package = types.ModuleType("manga_translator")
+        package.utils = fake
+        mask, boxes = self.bubble_mask()
+        lines = [Quad(quad(*b), "", 0.9) for i, b in enumerate(boxes) if i != 2]
+        async def detect(self, config, ctx):
+            return lines, mask, mask
+        ctx = SimpleNamespace(img_rgb=np.zeros(mask.shape + (3,), np.uint8))
+        saved = {k: sys.modules.get(k) for k in ("manga_translator", "manga_translator.utils")}
+        sys.modules.update({"manga_translator": package, "manga_translator.utils": fake})
+        try:
+            result = asyncio.run(repair_textlines(detect)(None, None, ctx))
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    sys.modules.pop(key, None)
+                else:
+                    sys.modules[key] = value
+        self.assertEqual(len(result[0]), 4)
+        self.assertEqual(len(ctx.mangalate_line_repairs), 1)
+        self.assertIs(result[1], mask)
 
 
 if __name__ == "__main__":

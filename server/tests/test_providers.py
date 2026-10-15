@@ -248,6 +248,22 @@ class InstallerTest(unittest.TestCase):
                 configure("byok", "cpu", "127.0.0.1", root=root, providers=[dict(GROQ, key="")])
 
 
+
+class SpeedDefaultTest(unittest.TestCase):
+    def test_cpu_defaults_to_fast_and_gpu_to_quality(self):
+        from setup import ask_speed
+        self.assertEqual(ask_speed("cpu", read=lambda _: ""), "fast")
+        self.assertEqual(ask_speed("gpu", read=lambda _: ""), "quality")
+        self.assertEqual(ask_speed("cpu", read=lambda _: "1"), "quality")
+        self.assertEqual(ask_speed("gpu", read=lambda _: "2"), "fast")
+
+    def test_prompt_shows_the_hardware_default(self):
+        from setup import ask_speed
+        prompts = []
+        ask_speed("cpu", read=lambda text: prompts.append(text) or "")
+        self.assertTrue(prompts[0].endswith("(2): "))
+
+
 if __name__ == "__main__":
     unittest.main()
 

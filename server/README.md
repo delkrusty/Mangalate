@@ -75,10 +75,11 @@ Copie o conteúdo do arquivo, não esse caminho. Essa é uma senha privada; não
 Quando sair uma versão nova, dentro da pasta `server`:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\atualizar.ps1
+git pull
+py rebuild.py
 ```
 
-Ele baixa o código, constrói as imagens sem depender do "bake" do Docker Compose (que falha em algumas instalações do Docker Desktop), reinicia o servidor e confere a versão. Chaves, configuração e modelos baixados são mantidos. Com placa NVIDIA, acrescente `-Perfil gpu`.
+O `rebuild.py` constrói as imagens sem depender do "bake" do Docker Compose (que falha em algumas instalações do Docker Desktop), reinicia o servidor e confere se ele está rodando os arquivos desta pasta. Chaves, configuração e modelos baixados são mantidos. O hardware (CPU ou NVIDIA) vem da configuração feita no `py setup.py`.
 
 ### Teste de verdade antes de usar no celular
 

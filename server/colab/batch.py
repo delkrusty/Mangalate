@@ -92,6 +92,11 @@ def save_diagnostics(folder, ctx, original):
                          "fundo": getattr(region, "mangalate_background", None),
                          "ocr": str(getattr(region, "text_raw", region.text)),
                          "traducao": str(getattr(region, "translation", "") or "")})
+    for repair in getattr(ctx, "mangalate_line_repairs", None) or []:
+        for x0, y0, x1, y1 in repair["depois"]:
+            draw.rectangle((x0 - 2, y0 - 2, x1 + 2, y1 + 2), outline=(255, 140, 0), width=2)
+    if getattr(ctx, "mangalate_line_repairs", None):
+        (folder / "linhas-reparadas.json").write_text(json.dumps(ctx.mangalate_line_repairs), encoding="utf-8")
     overlay.save(folder / "3-regioes.png")
     (folder / "regioes.json").write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
     return rows
@@ -198,6 +203,9 @@ async def run(args):
                 for r in (getattr(ctx, "text_regions", None) or [])
             ]
             entry["regions"] = pairs
+            repairs = getattr(ctx, "mangalate_line_repairs", None)
+            if repairs:
+                entry["line_repairs"] = len(repairs)
             if args.diagnostics:
                 # Diagnostic images use the strip, whose coordinates match the regions.
                 rows = save_diagnostics(output / "diagnostico" / f"{index:04d}", ctx, strip.image)
