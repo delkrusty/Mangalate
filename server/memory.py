@@ -12,8 +12,9 @@ system prompt:
 
 The glossary is learned from the AI itself: after the bubbles it may add one
 line "<|termos|>SOURCE=alvo; ..." with the names and fixed terms of the page.
-A term is kept only if its source really is on the page, and the first
-rendering wins, so a later page cannot rename a character.  A glossary the
+A term is kept only if its source really is on the page and a second page
+lists it too (OCR misreadings rarely repeat); the first rendering wins, so a
+later page cannot rename a character.  A glossary the
 reader wrote (batch.py --glossary) always wins over learned terms.
 
 Stored as one small JSON file per work, without keys or images.
@@ -29,6 +30,8 @@ from pathlib import Path
 TERMS_LINE = re.compile(r"(?:^[ \t]*term(?:o|os|s)?[ \t]*:|<\|?[ \t]*term(?:o|os|s)?[ \t]*\|?>)[ \t]*(.*)$", re.I | re.M)
 MAX_TERMS = 200          # learned + pinned, per work
 MAX_TERMS_PER_PAGE = 10
+CONFIRM_PAGES = 2        # pages that must list a term before it is used
+MAX_CANDIDATES = 300
 MAX_TERM_LEN = 60
 MAX_CHAPTERS = 3         # chapters whose dialogue is kept
 MAX_PAGES = 400          # pages per chapter
@@ -72,6 +75,7 @@ def accept_terms(terms, page_text, pinned=()):
     for source, target in terms[:MAX_TERMS_PER_PAGE]:
         key = normalize(source)
         if (not key or not target.strip() or len(source) > MAX_TERM_LEN or len(target) > MAX_TERM_LEN
+                or re.search(r"-\s|-$", source.strip())  # word cut by the lettering: "WET- SUIT"
                 or "<|" in target or key in pinned or f" {key} " not in page):
             continue
         kept.append((source.strip(), target.strip()))
@@ -130,7 +134,7 @@ class WorkMemory:
     def load(self, work):
         if work in self.cache:
             return self.cache[work]
-        data = {"work": work, "glossary": [], "chapters": {}}
+        data = {"work": work, "glossary": [], "candidates": {}, "chapters": {}}
         if self.folder:
             try:
                 stored = json.loads(self.path(work).read_text(encoding="utf-8"))
@@ -138,6 +142,8 @@ class WorkMemory:
                     data["glossary"] = [g for g in stored.get("glossary", []) if isinstance(g, dict)
                                         and isinstance(g.get("source"), str) and isinstance(g.get("target"), str)]
                     data["chapters"] = stored.get("chapters", {}) if isinstance(stored.get("chapters"), dict) else {}
+                    data["candidates"] = {k: v for k, v in (stored.get("candidates") or {}).items()
+                                          if isinstance(v, dict) and isinstance(v.get("pages"), list)}
             except (OSError, ValueError):
                 pass
         self.cache[work] = data
@@ -181,12 +187,27 @@ class WorkMemory:
             data = self.load(work)
             accepted = accept_terms(terms, page_text, [p["source"] for p in self.pinned])
             known = {normalize(g["source"]) for g in data["glossary"]}
+            candidates = data["candidates"]
+            here = f"{chapter}#{page}"
             added = []
             for source, target in accepted:
-                if normalize(source) not in known and len(data["glossary"]) < MAX_TERMS:
-                    data["glossary"].append({"source": source, "target": target})
-                    known.add(normalize(source))
-                    added.append((source, target))
+                key = normalize(source)
+                if key in known or len(data["glossary"]) >= MAX_TERMS:
+                    continue
+                # A term enters the glossary only when a second page also has it: OCR
+                # misreadings ("DURE MANA" for PURE MANA, "WET- SUIT") rarely repeat,
+                # and a wrong entry would spread to every later chapter.
+                seen = candidates.pop(key, {"source": source, "target": target, "pages": []})
+                if here not in seen["pages"]:
+                    seen["pages"].append(here)
+                if len(seen["pages"]) >= CONFIRM_PAGES:
+                    data["glossary"].append({"source": seen["source"], "target": seen["target"]})
+                    known.add(key)
+                    added.append((seen["source"], seen["target"]))
+                else:
+                    candidates[key] = seen
+            for old in list(candidates)[:-MAX_CANDIDATES]:
+                del candidates[old]
             if chapter and page is not None:
                 chapters = data["chapters"]
                 entry = chapters.pop(chapter, {"pages": {}})

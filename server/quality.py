@@ -137,6 +137,36 @@ def normalize_spacing(text):
     return text.strip()
 
 
+def sentence_case(text, names=()):
+    """Undo an answer written all in capitals, as the prompt asks for sentence case.
+
+    TBATE new episode p74/p79: one bubble per page came back in capitals
+    ("...SUA SUPPOSTA DIETA.") while the rest of the page was in sentence case.
+    Sentence starts are capitalized again, and so are the ``names`` (glossary
+    and names written with a capital elsewhere on the page).  Short shouts
+    ("NÃO!") and text with no letters are left alone.
+    """
+    letters = [c for c in text or "" if c.isalpha()]
+    if len(letters) < 8 or has_cjk(text) or any(c.islower() for c in letters):
+        return text
+    out = text.lower()
+    out = re.sub(r"(^|[.!?…]\s+|^[\W_]+)(\w)", lambda m: m.group(1) + m.group(2).upper(), out)
+    for name in sorted({n for n in names if n and n[:1].isupper()}, key=len, reverse=True):
+        out = re.sub(rf"(?<!\w){re.escape(name.lower())}(?!\w)", name, out)
+    return out
+
+
+def page_names(translations):
+    """Words written with a capital in the middle of a sentence elsewhere on the page."""
+    names = set()
+    for text in translations:
+        if not text or text == text.upper():
+            continue
+        for match in re.finditer(r"(?<=[\w,;:] )([A-ZÀ-Ý][\wà-ÿ'-]+)", text):
+            names.add(match.group(1))
+    return names
+
+
 def compact_symbols(original):
     """Wrap the engine's compact_special_symbols, keeping it for CJK only."""
     def compact(text):

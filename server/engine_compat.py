@@ -306,6 +306,11 @@ def is_sound_effect(text):
     return len(re.findall(r"[A-Za-z]", text)) < 12
 
 
+def is_credit(text):
+    """Title and credit lettering ("THE BEGINNING AFTER™END") stays as drawn."""
+    return any(mark in str(text or "") for mark in "™©®")
+
+
 def classify_regions(original_merge):
     """Decide once, before translation, which blocks are cleaned and translated.
 
@@ -329,8 +334,9 @@ def classify_regions(original_merge):
             raw = cv2.resize(raw, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
         kept = []
         for region in regions:
-            if is_sound_effect(getattr(region, "text", "")):
-                region.mangalate_background = {"kind": "efeito_sonoro"}
+            text = getattr(region, "text", "")
+            if is_sound_effect(text) or is_credit(text):
+                region.mangalate_background = {"kind": "efeito_sonoro" if is_sound_effect(text) else "creditos"}
                 ctx.mangalate_preserved.append(region)
                 continue
             region.mangalate_background = classify_region(image, raw, region.lines)
@@ -590,10 +596,13 @@ def validate_page_translations(original_translate):
         regions = list(ctx.text_regions or [])
         result = await original_translate(self, config, ctx)
         if not legacy_quality() and isinstance(result, list):
-            from quality import normalize_spacing
+            from quality import normalize_spacing, page_names, sentence_case
+            texts = [getattr(region, "translation", None) for region in result]
+            names = page_names([t for t in texts if isinstance(t, str)])
+            names |= {g["target"] for g in (PAGE_CONTEXT or {}).get("glossary", [])}
             for region in result:
                 if isinstance(getattr(region, "translation", None), str):
-                    region.translation = normalize_spacing(region.translation)
+                    region.translation = normalize_spacing(sentence_case(region.translation, names))
         blank = sum(not getattr(region, "translation", "").strip() for region in regions)
         unchanged = sum(getattr(region, "translation", "").strip().lower() == region.text.strip().lower()
                         for region in regions)

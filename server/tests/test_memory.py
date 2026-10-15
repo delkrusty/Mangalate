@@ -56,7 +56,11 @@ class MemoryTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             memory = WorkMemory(folder)
             memory.record("TBATE", "Cap 236", 6, [], [("RESTRAINER", "restritor")], "THE RESTRAINER K")
+            self.assertEqual(memory.glossary("TBATE"), [])  # one page is not enough
+            memory.record("TBATE", "Cap 236", 6, [], [("RESTRAINER", "restritor")], "THE RESTRAINER K")
+            self.assertEqual(memory.glossary("TBATE"), [])  # the same page again neither
             memory.record("TBATE", "Cap 236", 7, [], [("RESTRAINER", "restrainer")], "RESTRAINER KI")
+            memory.record("TBATE", "Cap 236", 8, [], [("RESTRAINER", "outro")], "RESTRAINER")
             again = WorkMemory(folder)
             self.assertEqual(again.glossary("TBATE"), [{"source": "RESTRAINER", "target": "restritor"}])
             self.assertEqual(len(list(Path(folder).glob("*.json"))), 1)
@@ -91,8 +95,14 @@ class MemoryTest(unittest.TestCase):
         memory = WorkMemory()
         work = {"obra": "TBATE", "capitulo": "236", "pagina": 6}
         added = remember(memory, work, [region("THE RESTRAINER K", "O restritor K")], [("RESTRAINER", "restritor")])
+        self.assertEqual(added, [])
+        added = remember(memory, dict(work, pagina=7), [region("RESTRAINER", "Restritor")], [("RESTRAINER", "x")])
         self.assertEqual(added, [("RESTRAINER", "restritor")])
         self.assertEqual(memory.context("TBATE", "236", 7)["previous"][0][0]["translation"], "O restritor K")
+
+    def test_word_cut_by_lettering_is_not_a_term(self):
+        self.assertEqual(accept_terms([("WET- SUIT", "roupa de mergulho"), ("AZUSA-", "Azusa")],
+                                      "WET- SUIT AZUSA- SAN"), [])
 
 
 class WorkFieldTest(unittest.TestCase):
@@ -117,6 +127,20 @@ class SoundEffectTest(unittest.TestCase):
         self.assertTrue(engine_compat.is_sound_effect("ドドド"))
         self.assertFalse(engine_compat.is_sound_effect("BOB"))
         self.assertFalse(engine_compat.is_sound_effect("I SAID IT'S FINE, OKAY? ふ"))
+
+
+class CapitalsTest(unittest.TestCase):
+    def test_an_answer_in_capitals_goes_back_to_sentence_case(self):
+        from quality import page_names, sentence_case
+        names = page_names(["Pegamos o Virion ontem."]) | {"Tri-Union"}
+        self.assertEqual(sentence_case("A TRI-UNION VENCEU. O VIRION, NÃO!", names),
+                         "A Tri-Union venceu. O Virion, não!")
+        self.assertEqual(sentence_case("NÃO!", names), "NÃO!")
+        self.assertEqual(sentence_case("Já está certo.", names), "Já está certo.")
+
+    def test_credits_stay_as_drawn(self):
+        self.assertTrue(engine_compat.is_credit("THE BEGINNING AFTER™END"))
+        self.assertFalse(engine_compat.is_credit("THE END"))
 
 
 class PromptTest(unittest.TestCase):
