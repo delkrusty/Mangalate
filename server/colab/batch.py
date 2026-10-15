@@ -95,6 +95,11 @@ def save_diagnostics(folder, ctx, original):
     for repair in getattr(ctx, "mangalate_line_repairs", None) or []:
         for x0, y0, x1, y1 in repair["depois"]:
             draw.rectangle((x0 - 2, y0 - 2, x1 + 2, y1 + 2), outline=(255, 140, 0), width=2)
+    for line in getattr(ctx, "mangalate_ocr_rescued", None) or []:
+        x0, y0, x1, y1 = line["caixa"]
+        draw.rectangle((x0 - 2, y0 - 2, x1 + 2, y1 + 2), outline=(160, 0, 200), width=2)
+    if getattr(ctx, "mangalate_ocr_rescued", None):
+        (folder / "ocr-resgatado.json").write_text(json.dumps(ctx.mangalate_ocr_rescued), encoding="utf-8")
     if getattr(ctx, "mangalate_line_repairs", None):
         (folder / "linhas-reparadas.json").write_text(json.dumps(ctx.mangalate_line_repairs), encoding="utf-8")
     overlay.save(folder / "3-regioes.png")
@@ -206,6 +211,9 @@ async def run(args):
             repairs = getattr(ctx, "mangalate_line_repairs", None)
             if repairs:
                 entry["line_repairs"] = len(repairs)
+            rescued = getattr(ctx, "mangalate_ocr_rescued", None)
+            if rescued:
+                entry["ocr_rescued"] = len(rescued)
             if args.diagnostics:
                 # Diagnostic images use the strip, whose coordinates match the regions.
                 rows = save_diagnostics(output / "diagnostico" / f"{index:04d}", ctx, strip.image)

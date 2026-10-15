@@ -18,7 +18,10 @@ Two defects observed on real pages motivate this module:
    sometimes miss one (TBATE 236 p6: "MUST'VE MAL-" in bold italic) or cover
    two lines with one box (Grand Blue 87 p3: "PITS AND / DIE.").  A line
    without its own box is never read, cleaned or translated.  ``repair_lines``
-   rebuilds those boxes from the pixel mask before OCR.
+   rebuilds those boxes from the pixel mask before OCR.  A line can also lose
+   its box at OCR, which drops lines read with confidence below 0.2 (TBATE 236
+   p6 again, bold italic): ``near_lines`` picks the dropped lines that sit in
+   a paragraph of kept lines, so they are read again with a lower threshold.
 """
 import re
 
@@ -216,6 +219,21 @@ def _covered(box, others):
     return float(rows.mean())
 
 
+def _near(box, others, height):
+    return any(min(box[2], b[2]) - max(box[0], b[0]) > 0.3 * min(box[2] - box[0], b[2] - b[0])
+               and max(b[1] - box[3], box[1] - b[3]) <= NEAR_LINES * height for b in others)
+
+
+def near_lines(lost, kept):
+    """Indexes of dropped horizontal lines lying next to a kept line of similar height."""
+    height = _line_height(kept) or _line_height(lost)
+    if not height or not kept:
+        return []
+    return [i for i, (x0, y0, x1, y1) in enumerate(lost)
+            if 0.5 * height <= y1 - y0 <= SPLIT_FACTOR * height and x1 - x0 > y1 - y0
+            and _near((x0, y0, x1, y1), kept, height)]
+
+
 def repair_lines(mask, boxes):
     """Return (boxes, changes) with multi-line boxes split and missed lines added.
 
@@ -272,9 +290,7 @@ def repair_lines(mask, boxes):
             continue
         cols = np.flatnonzero(pixels.any(axis=0))
         box = (x + int(cols[0]), y, x + int(cols[-1]) + 1, y + bh)
-        near = any(min(box[2], b[2]) - max(box[0], b[0]) > 0.3 * min(box[2] - box[0], b[2] - b[0])
-                   and max(b[1] - box[3], box[1] - b[3]) <= NEAR_LINES * height for b in current)
-        if near:
+        if _near(box, current, height):
             result.append((box, None))
             changes.append(("added", None, [box]))
     return result, changes

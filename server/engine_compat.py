@@ -317,6 +317,47 @@ def repair_textlines(original_detect):
     return detect
 
 
+RESCUE_PROB = 0.02
+
+
+def rescue_ocr(original_ocr):
+    """Read again, with a lower threshold, lines the OCR dropped inside a paragraph.
+
+    The 48px OCR drops lines read with confidence below 0.2.  TBATE 236 p6: the
+    bold italic "MUST'VE MAL-" had a box and was covered by the mask, but was
+    dropped here and stayed in English between two translated lines.  The AI
+    fixes small OCR mistakes, so a doubtful reading beats an untouched line.
+    """
+    async def ocr(self, config, ctx):
+        before = list(ctx.textlines or [])
+        result = await original_ocr(self, config, ctx)
+        kept = {id(line) for line in result}
+        lost = [line for line in before if id(line) not in kept and getattr(line, "direction", "h") == "h"]
+        if not lost:
+            return result
+        from quality import near_lines, _box
+        candidates = [lost[i] for i in near_lines([_box(l.pts) for l in lost],
+                                                   [_box(l.pts) for l in result if getattr(l, "direction", "h") == "h"])]
+        if not candidates:
+            return result
+        from manga_translator.ocr import dispatch as dispatch_ocr
+        retry = config.ocr.model_copy(deep=True) if hasattr(config.ocr, "model_copy") else config.ocr
+        retry.prob = RESCUE_PROB
+        read = await dispatch_ocr(config.ocr.ocr, ctx.img_rgb, candidates, retry, self.device, self.verbose)
+        rescued = [line for line in read if sum(ch.isalpha() for ch in str(line.text)) >= 2]
+        render = getattr(config, "render", None)
+        for line in rescued:
+            if getattr(render, "font_color_fg", None):
+                line.fg_r, line.fg_g, line.fg_b = render.font_color_fg
+            if getattr(render, "font_color_bg", None):
+                line.bg_r, line.bg_g, line.bg_b = render.font_color_bg
+        ctx.mangalate_ocr_rescued = [{"caixa": list(_box(l.pts)), "prob": round(float(l.prob), 3)} for l in rescued]
+        if rescued:
+            print(f"OCR rescue: {len(rescued)} of {len(lost)} dropped lines read again", flush=True)
+        return list(result) + rescued
+    return ocr
+
+
 async def refine_mask_consistently(self, config, ctx):
     """Mask every kept region; the art decision was already taken in classify_regions.
 
@@ -423,6 +464,7 @@ def apply_compatibility():
         if not legacy_quality():
             MangaTranslator._run_textline_merge = classify_regions(MangaTranslator._run_textline_merge)
             MangaTranslator._run_mask_refinement = refine_mask_consistently
+            MangaTranslator._run_ocr = rescue_ocr(MangaTranslator._run_ocr)
             MangaTranslator._run_detection = repair_textlines(detection_fallback(MangaTranslator._run_detection))
             from manga_translator.rendering import text_render
             from quality import compact_symbols, whole_word_breaker

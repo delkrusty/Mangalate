@@ -330,5 +330,59 @@ class LineRepairTest(unittest.TestCase):
         self.assertIs(result[1], mask)
 
 
+class OcrRescueTest(unittest.TestCase):
+    """A line dropped by the OCR threshold inside a paragraph is read again (TBATE 236 p6)."""
+
+    class Line:
+        def __init__(self, box, text=""):
+            self.pts, self.text, self.prob, self.direction = np.asarray(quad(*box)), text, 0.0, "h"
+
+    def run_ocr(self, lines, dropped):
+        import asyncio
+        import types
+        from types import SimpleNamespace
+        from engine_compat import rescue_ocr, RESCUE_PROB
+        seen = {}
+        async def dispatch(name, image, textlines, config, device, verbose):
+            seen["prob"], seen["count"] = config.prob, len(textlines)
+            for line in textlines:
+                line.text, line.prob = "MUSTVE MAL-", 0.08
+            return list(textlines)
+        module = types.ModuleType("manga_translator.ocr")
+        module.dispatch = dispatch
+        async def original(self, config, ctx):
+            for line in ctx.textlines:
+                line.text = "" if line in dropped else "OK TEXT"
+            return [line for line in ctx.textlines if line not in dropped]
+        ocr_config = SimpleNamespace(ocr="48px", prob=None, model_copy=lambda deep: SimpleNamespace(ocr="48px", prob=None))
+        config = SimpleNamespace(ocr=ocr_config, render=SimpleNamespace(font_color_fg=None, font_color_bg=None))
+        ctx = SimpleNamespace(textlines=lines, img_rgb=None)
+        translator = SimpleNamespace(device="cpu", verbose=False)
+        saved = sys.modules.get("manga_translator.ocr")
+        sys.modules["manga_translator.ocr"] = module
+        try:
+            result = asyncio.run(rescue_ocr(original)(translator, config, ctx))
+        finally:
+            if saved is None:
+                sys.modules.pop("manga_translator.ocr", None)
+            else:
+                sys.modules["manga_translator.ocr"] = saved
+        self.assertTrue(not seen or seen["prob"] == RESCUE_PROB)
+        return result, seen, ctx
+
+    def test_dropped_line_between_kept_lines_is_read_again(self):
+        lines = [self.Line((100, 40 + i * 34, 300, 68 + i * 34)) for i in range(4)]
+        result, seen, ctx = self.run_ocr(lines, [lines[2]])
+        self.assertEqual(seen["count"], 1)
+        self.assertEqual(len(result), 4)
+        self.assertEqual(len(ctx.mangalate_ocr_rescued), 1)
+
+    def test_lonely_dropped_line_is_left_alone(self):
+        lines = [self.Line((100, 40, 300, 68)), self.Line((100, 600, 300, 628))]
+        result, seen, _ = self.run_ocr(lines, [lines[1]])
+        self.assertEqual(seen, {})
+        self.assertEqual(len(result), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
