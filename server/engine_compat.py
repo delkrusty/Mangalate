@@ -317,6 +317,102 @@ def repair_textlines(original_detect):
     return detect
 
 
+def bubble_layout(rendering, text_render):
+    """Replace the engine's 'fit to the original text box' with 'fit to the bubble'.
+
+    See lettering.py.  Regions without a usable bubble keep the engine's own
+    sizing and drawing.
+    """
+    import numpy as np
+    import lettering
+    from quality import has_cjk
+    original_resize = rendering.resize_regions_to_font_size
+    original_render = rendering.render
+
+    def horizontal(region):
+        direction = getattr(region, "_direction", None) or region.direction
+        return direction in ("horizontal", "h") or (direction == "auto" and region.horizontal)
+
+    def line_height(region):
+        heights = [float(np.linalg.norm(np.asarray(l[3]) - np.asarray(l[0]))) for l in region.lines]
+        return float(np.median(heights)) if heights else float(region.font_size)
+
+    def resize(img, text_regions, font_size_fixed, font_size_offset, font_size_minimum):
+        points = original_resize(img, text_regions, font_size_fixed, font_size_offset, font_size_minimum)
+        if font_size_fixed is not None:
+            return points
+        minimum = font_size_minimum if font_size_minimum and font_size_minimum > 0 else round((img.shape[0] + img.shape[1]) / 200)
+        boxes = [tuple(int(v) for v in r.xyxy) for r in text_regions]
+        planned = 0
+        for i, region in enumerate(text_regions):
+            region.mangalate_plan = None
+            text = region.get_translation_for_rendering()
+            if not text or not horizontal(region) or has_cjk(text):
+                continue
+            def layout(size, width, height, text=text, lang=region.target_lang):
+                return text_render.calc_horizontal(size, text, width, height, lang, False)
+            others = boxes[:i] + boxes[i + 1:]
+            try:
+                plan = lettering.plan(img, boxes[i], others, text, layout,
+                                      line_height(region) + 0, max(8, round(minimum * 0.6)),
+                                      offset=font_size_offset or 0)
+            except Exception as exc:  # never lose a page over the nicer layout
+                print(f"Bubble layout skipped: {type(exc).__name__}", flush=True)
+                plan = None
+            if plan is None:
+                continue
+            size, (x0, y0, x1, y1) = plan
+            region.mangalate_plan = plan
+            region.font_size = size
+            points[i] = np.array([[[x0, y0], [x1, y0], [x1, y1], [x0, y1]]], dtype=np.int64)
+            planned += 1
+        print(f"Bubble layout: {planned} of {len(text_regions)} regions fitted to the bubble", flush=True)
+        return points
+
+    def render(img, region, dst_points, hyphenate, line_spacing, disable_font_border):
+        plan = getattr(region, "mangalate_plan", None)
+        if plan is None:
+            return original_render(img, region, dst_points, hyphenate, line_spacing, disable_font_border)
+        import cv2
+        size, (x0, y0, x1, y1) = plan
+        fg, bg = rendering.fg_bg_compare(*region.get_font_colors())
+        if disable_font_border:
+            bg = None
+        box = text_render.put_text_horizontal(size, region.get_translation_for_rendering(), x1 - x0, y1 - y0,
+                                              "center", False, fg, bg, region.target_lang, False,
+                                              lettering.LINE_SPACING)
+        if box is None:
+            return img
+        h, w = box.shape[:2]
+        scale = min(1.0, (x1 - x0) / w, (y1 - y0) / h)
+        if scale < 1.0:
+            box = cv2.resize(box, (max(1, int(w * scale)), max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
+            h, w = box.shape[:2]
+        left = (x0 + x1) // 2 - w // 2
+        top = (y0 + y1) // 2 - h // 2
+        H, W = img.shape[:2]
+        cx0, cy0, cx1, cy1 = max(0, left), max(0, top), min(W, left + w), min(H, top + h)
+        if cx1 <= cx0 or cy1 <= cy0:
+            return img
+        part = box[cy0 - top:cy1 - top, cx0 - left:cx1 - left]
+        alpha = part[:, :, 3:4].astype(np.float32) / 255.0
+        target = img[cy0:cy1, cx0:cx1].astype(np.float32)
+        img[cy0:cy1, cx0:cx1] = np.clip(target * (1 - alpha) + part[:, :, :3].astype(np.float32) * alpha, 0, 255).astype(np.uint8)
+        return img
+
+    rendering.resize_regions_to_font_size = resize
+    rendering.render = render
+
+
+def keep_clean_copy(original_render):
+    """The renderer draws into ctx.img_inpainted; keep the cleaned page for diagnostics."""
+    async def render(self, config, ctx):
+        image = getattr(ctx, "img_inpainted", None)
+        ctx.mangalate_clean = image.copy() if image is not None else None
+        return await original_render(self, config, ctx)
+    return render
+
+
 RESCUE_PROB = 0.02
 
 
@@ -465,10 +561,13 @@ def apply_compatibility():
             MangaTranslator._run_textline_merge = classify_regions(MangaTranslator._run_textline_merge)
             MangaTranslator._run_mask_refinement = refine_mask_consistently
             MangaTranslator._run_ocr = rescue_ocr(MangaTranslator._run_ocr)
+            MangaTranslator._run_text_rendering = keep_clean_copy(MangaTranslator._run_text_rendering)
             MangaTranslator._run_detection = repair_textlines(detection_fallback(MangaTranslator._run_detection))
             from manga_translator.rendering import text_render
             from quality import compact_symbols, whole_word_breaker
             text_render.compact_special_symbols = compact_symbols(text_render.compact_special_symbols)
             text_render.calc_horizontal = whole_word_breaker(text_render.calc_horizontal,
                                                              text_render.get_string_width)
+            import manga_translator.rendering as rendering
+            bubble_layout(rendering, text_render)
         MangaTranslator._mangalate_compat_applied = True

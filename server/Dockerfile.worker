@@ -14,6 +14,7 @@ COPY engine_compat.py /mangalate/engine_compat.py
 COPY quality.py /mangalate/quality.py
 COPY providers.py /mangalate/providers.py
 COPY seams.py /mangalate/seams.py
+COPY lettering.py /mangalate/lettering.py
 COPY profiles /mangalate/profiles
 COPY gateway.py /mangalate/gateway.py
 COPY colab/batch.py /mangalate/batch.py
@@ -35,6 +36,7 @@ COPY engine_compat.py /mangalate/engine_compat.py
 COPY quality.py /mangalate/quality.py
 COPY providers.py /mangalate/providers.py
 COPY seams.py /mangalate/seams.py
+COPY lettering.py /mangalate/lettering.py
 COPY profiles /mangalate/profiles
 COPY gateway.py /mangalate/gateway.py
 COPY colab/batch.py /mangalate/batch.py
@@ -54,6 +56,7 @@ COPY engine_compat.py /mangalate/engine_compat.py
 COPY quality.py /mangalate/quality.py
 COPY providers.py /mangalate/providers.py
 COPY seams.py /mangalate/seams.py
+COPY lettering.py /mangalate/lettering.py
 COPY profiles /mangalate/profiles
 COPY gateway.py /mangalate/gateway.py
 COPY colab/batch.py /mangalate/batch.py

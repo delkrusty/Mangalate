@@ -73,7 +73,9 @@ def save_diagnostics(folder, ctx, original):
             Image.fromarray(np.asarray(array).astype("uint8")).save(folder / name)
     save_array(getattr(ctx, "mask_raw", None), "2-mascara-detector.png")
     save_array(getattr(ctx, "mask", None), "4-mascara-final.png")
-    save_array(getattr(ctx, "img_inpainted", None), "5-limpa.png")
+    # The renderer draws into img_inpainted; the copy taken before rendering is the clean page.
+    clean = getattr(ctx, "mangalate_clean", None)
+    save_array(clean if clean is not None else getattr(ctx, "img_inpainted", None), "5-limpa.png")
     kept = list(getattr(ctx, "text_regions", None) or [])
     preserved = list(getattr(ctx, "mangalate_preserved", None) or [])
     overlay = original.copy()
