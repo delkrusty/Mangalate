@@ -2,6 +2,11 @@
 
 As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://github.com/mihonapp/mihon/blob/main/CHANGELOG.md).
 
+## Em teste (próxima versão)
+
+### Servidor
+- A instalação para placa NVIDIA voltou a compilar (a imagem base do PyTorch passou a recusar o pip) e agora é conferida a cada mudança.
+
 ## 0.5.5
 
 ### Modo no celular
