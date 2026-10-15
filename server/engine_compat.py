@@ -292,6 +292,20 @@ def on_page(regions, rows):
     return inside, outside
 
 
+def is_sound_effect(text):
+    """Japanese lettering in an English scan is a sound effect drawn on the art.
+
+    Grand Blue 87 p6: the line repair joined "BOB" to the kana "ぷか" below it;
+    the OCR read "BOBふ。か", the AI answered "Bob?" and the effect was erased.
+    Kana or kanji with only a few Latin letters around them is left as drawn.
+    """
+    import re
+    text = str(text or "")
+    if not re.search(r"[\u3040-\u30ff\u3400-\u9fff\uff66-\uff9f]", text):
+        return False
+    return len(re.findall(r"[A-Za-z]", text)) < 12
+
+
 def classify_regions(original_merge):
     """Decide once, before translation, which blocks are cleaned and translated.
 
@@ -315,6 +329,10 @@ def classify_regions(original_merge):
             raw = cv2.resize(raw, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
         kept = []
         for region in regions:
+            if is_sound_effect(getattr(region, "text", "")):
+                region.mangalate_background = {"kind": "efeito_sonoro"}
+                ctx.mangalate_preserved.append(region)
+                continue
             region.mangalate_background = classify_region(image, raw, region.lines)
             if region.mangalate_background["kind"] == "interior":
                 kept.append(region)

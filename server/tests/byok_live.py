@@ -32,6 +32,9 @@ LINES = [
     "AWW, GIVE ME A BREAK. YOU'RE NO FUN.",
     "A RACE? YOU'RE ON!",
     "NICE ONE! NOW SPILL IT, WHAT HAPPENED?",
+    # OCR mistakes not among the prompt's examples: a wrong letter must not become a name.
+    "DON'T BE SO HARO ON YOURSELF, MIRA.",
+    "I'M BEAT, SO I'LL CALI IT A NIGHT.",
 ]
 # English left in the translation (words that are never Portuguese).
 ENGLISH = re.compile(r"\b(aww|the|heads up|spill|you're|that's|you|it's|nice one)\b", re.I)
@@ -70,7 +73,7 @@ def checks(output):
     calques = sorted({m.group(0).lower() for text in output for m in CALQUES.finditer(text)})
     if calques:
         found.append("tradução literal: " + ", ".join(calques))
-    if any(re.search(r"yovember|ac7", text, re.I) for text in output):
+    if any(re.search(r"yovember|ac7|haro|cali\b", text, re.I) for text in output):
         found.append("erro de OCR copiado")
     if any(len(re.findall(r"[^\W\d_]", text)) > 6 and text == text.upper() for text in output):
         found.append("tradução toda em maiúsculas")

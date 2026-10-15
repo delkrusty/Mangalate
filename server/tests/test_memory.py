@@ -111,6 +111,14 @@ class WorkFieldTest(unittest.TestCase):
         self.assertEqual(parse_work(json.dumps({"obra": "A", "pagina": True}))["pagina"], None)
 
 
+class SoundEffectTest(unittest.TestCase):
+    def test_kana_with_few_latin_letters_is_a_sound_effect(self):
+        self.assertTrue(engine_compat.is_sound_effect("BOBふ。か"))
+        self.assertTrue(engine_compat.is_sound_effect("ドドド"))
+        self.assertFalse(engine_compat.is_sound_effect("BOB"))
+        self.assertFalse(engine_compat.is_sound_effect("I SAID IT'S FINE, OKAY? ふ"))
+
+
 class PromptTest(unittest.TestCase):
     def tearDown(self):
         engine_compat.set_page_context(None)
