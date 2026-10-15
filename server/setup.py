@@ -142,6 +142,17 @@ def choose_providers(ask=input, secret=getpass.getpass):
             return providers
 
 
+def clean_model(text):
+    """Model name only: drops a pasted 'ollama pull/run' and rejects anything with spaces."""
+    words = text.split()
+    if len(words) == 3 and words[0].lower() == "ollama" and words[1].lower() in {"pull", "run"}:
+        print(f"  Usando só o nome do modelo: {words[2]}")
+        return words[2]
+    if len(words) != 1 or text.upper() == "NOME":
+        return ""
+    return text
+
+
 def configure_one(index, names, providers, ask, secret):
     if index == len(names):
         name = f"outro{len(providers) + 1}"
@@ -165,11 +176,10 @@ def configure_one(index, names, providers, ask, secret):
         hint = f" (Enter = {default})" if default else ""
         model = ""
         for _ in range(3):
-            model = ask(f"  Modelo{hint}: ").strip() or default
-            if model and model.upper() != "NOME":
+            model = clean_model(ask(f"  Modelo{hint}: ").strip() or default)
+            if model:
                 break
-            print("  Digite o nome exato do modelo (ex.: gpt-oss:20b).")
-            model = ""
+            print("  Digite só o nome exato do modelo, sem espaços (ex.: gpt-oss:20b).")
         if not model:
             raise ValueError(f"Modelo de {name} não informado.")
     key = "" if name == "ollama" else ask_key(name, secret, ask)

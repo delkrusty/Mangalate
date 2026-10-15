@@ -300,3 +300,13 @@ class RebuildTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             (Path(folder) / ".env").write_text("MANGALATE_PROFILE=byok\nMANGALATE_HARDWARE=gpu\n")
             self.assertEqual(hardware_from_env(Path(folder)), "gpu")
+
+
+class ModelNameTest(unittest.TestCase):
+    def test_pasted_command_or_spaces_are_not_saved_as_model(self):
+        from setup import clean_model
+        self.assertEqual(clean_model("ollama pull gemma3:4b"), "gemma3:4b")
+        self.assertEqual(clean_model("gpt-oss:20b"), "gpt-oss:20b")
+        self.assertEqual(clean_model("meu modelo"), "")
+        self.assertEqual(clean_model("NOME"), "")
+        self.assertEqual(clean_model(""), "")
