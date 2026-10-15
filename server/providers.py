@@ -91,13 +91,19 @@ class AllProvidersResting(RuntimeError):
         self.seconds = seconds
 
 
+class UnusableAnswer(ValueError):
+    """No provider produced a usable translation for this page (content, not health)."""
+
+
 def classify(exc):
-    """'limit', 'config' or 'retry' (try the next provider)."""
+    """'limit', 'config', 'content' (bad answer for this page) or 'retry'."""
     status = getattr(exc, "status_code", None)
     if status == 429:
         return "limit"
     if status in (401, 402, 403, 404):
         return "config"
+    if isinstance(exc, ValueError):
+        return "content"
     return "retry"
 
 
@@ -117,6 +123,7 @@ class ProviderPool:
         self.log = log
         self.resting = {}
         self.strikes = {}
+        self.events = []  # (provider, reason) of the last page, for review reports
 
     def available(self):
         now = self.clock()
@@ -128,7 +135,11 @@ class ProviderPool:
 
     def failed(self, provider, exc):
         name, kind = provider["name"], classify(exc)
-        if kind == "limit":
+        self.events.append((name, kind if kind != "retry" else type(exc).__name__))
+        if kind == "content":
+            # A malformed answer says nothing about the provider's health: no pause.
+            self.log(f"BYOK: {name} devolveu uma resposta inválida para esta página; tentando o próximo.")
+        elif kind == "limit":
             self.strikes[name] = self.strikes.get(name, 0) + 1
             seconds = LONG_REST if self.strikes[name] >= 3 else (retry_after(exc) or SHORT_REST)
             self.rest(name, seconds, "limite atingido")
@@ -139,6 +150,7 @@ class ProviderPool:
 
     async def run(self, attempt):
         """Call attempt(provider) on each available provider until one succeeds."""
+        self.events = []
         for provider in self.available():
             try:
                 result = await attempt(provider)
@@ -147,6 +159,8 @@ class ProviderPool:
                 continue
             self.strikes[provider["name"]] = 0
             return result
+        if self.events and all(kind == "content" for _, kind in self.events):
+            raise UnusableAnswer("Nenhuma IA devolveu uma tradução válida para esta página.")
         now = self.clock()
         wait = min((t - now for t in self.resting.values() if t > now), default=SHORT_REST)
         raise AllProvidersResting(wait)

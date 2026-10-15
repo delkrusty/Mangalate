@@ -96,6 +96,27 @@ def save_diagnostics(folder, ctx, original):
     return rows
 
 
+async def translate_with_patience(translator, image, config, waits=3):
+    """When every AI is resting, wait for the first one to come back instead of failing pages."""
+    from providers import AllProvidersResting
+    for attempt in range(waits + 1):
+        try:
+            return await translator.translate(image, config)
+        except AllProvidersResting as exc:
+            if attempt == waits:
+                raise
+            seconds = min(max(exc.seconds, 5), 900)
+            print(f"Todas as IAs em pausa; aguardando {round(seconds)} s para continuar.", flush=True)
+            await asyncio.sleep(seconds)
+
+
+def provider_events():
+    """Which AI failed on the last page and why (no text, keys or provider bodies)."""
+    from engine_compat import provider_pool
+    pool = provider_pool()
+    return [f"{name}:{reason}" for name, reason in pool.events] if pool else []
+
+
 async def run(args):
     import os
     if args.legacy:
@@ -149,7 +170,7 @@ async def run(args):
                 prompt_path.write_text(yaml.safe_dump(prompt, allow_unicode=True), encoding="utf-8")
                 config["translator"]["gpt_config"] = str(prompt_path)
             strip = Strip(original, neighbour(index - 1), neighbour(index + 1))
-            ctx = await translator.translate(strip.image, Config(**config))
+            ctx = await translate_with_patience(translator, strip.image, Config(**config))
             result = finish(strip, ctx.result, getattr(ctx, "text_regions", None) if strip.stitched else None,
                             seam_cache, salt)
             entry["seams"] = {"above": strip.above is not None, "below": strip.below is not None}
@@ -165,13 +186,19 @@ async def run(args):
                 rows = save_diagnostics(output / "diagnostico" / f"{index:04d}", ctx, strip.image)
                 entry["preserved_regions"] = sum(row["estado"] == "original_preservada" for row in rows)
             entry["status"] = "review" if pairs else "no_text_review"
+            if provider_events():
+                entry["provider_events"] = provider_events()
             history.append(pairs)
             consecutive_failures = 0
         except Exception as exc:
             # Keep the original, clearly flagging failures; never export a blank page.
             result = original
-            consecutive_failures += 1
-            entry.update(status="blocked_original_preserved", error=type(exc).__name__,
+            unusable = type(exc).__name__ == "UnusableAnswer"
+            # A page the AIs could not translate is content, not a broken server: keep going.
+            if not unusable:
+                consecutive_failures += 1
+            entry.update(status="translation_unusable_original_preserved" if unusable else "blocked_original_preserved",
+                         provider_events=provider_events(), error=type(exc).__name__,
                          # File/line/function only: no page text, keys or provider bodies.
                          trace=[f"{Path(f.filename).name}:{f.lineno}:{f.name}"
                                 for f in traceback.extract_tb(exc.__traceback__)[-8:]])

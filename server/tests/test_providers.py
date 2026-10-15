@@ -9,8 +9,8 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import engine_compat
-from providers import (AllProvidersResting, LONG_REST, PRESETS, ProviderPool, SHORT_REST, dump_secret,
-                       parse_secret, validate_base)
+from providers import (AllProvidersResting, LONG_REST, PRESETS, ProviderPool, SHORT_REST, UnusableAnswer,
+                       dump_secret, parse_secret, validate_base)
 from setup import choose_providers, configure
 
 GROQ = {"name": "groq", "base": PRESETS["groq"]["base"], "model": "openai/gpt-oss-120b", "key": "gsk_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
@@ -106,6 +106,16 @@ class RotationTest(unittest.TestCase):
         p, _, _ = pool()
         result, calls = self.run_pool(p, lambda n: ValueError("markers") if n == "groq" else ["ok"])
         self.assertEqual((result, calls), (["ok"], ["groq", "gemini"]))
+
+    def test_malformed_answers_never_pause_providers(self):
+        # Grand Blue 87 page 7: both AIs answered with broken markers and the
+        # old rule paused both, so the next pages failed with everyone resting.
+        p, _, _ = pool()
+        with self.assertRaises(UnusableAnswer):
+            self.run_pool(p, lambda n: ValueError("markers"))
+        self.assertEqual(p.available(), p.providers)
+        self.assertEqual(p.events, [("groq", "content"), ("gemini", "content")])
+        self.assertEqual(self.run_pool(p, lambda n: ["ok"])[1], ["groq"])
 
     def test_everyone_resting_is_reported_with_wait(self):
         p, _, _ = pool()
