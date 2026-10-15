@@ -16,6 +16,7 @@ IMAGES = {
     "cpu": ("cpu", "mangalate-translator-cpu:local", "translator-cpu"),
     "gpu": ("gpu", "mangalate-translator-gpu:local", "translator-gpu"),
     "amd-rocm": ("rocm", "mangalate-translator-amd:local", "translator-amd"),
+    "amd-wsl": ("rocm", "mangalate-translator-amd:local", "translator-amd-wsl"),
 }
 # Files whose copy inside the running server must equal the one in this folder.
 CHECKED = {"colab/batch.py": "/mangalate/batch.py", "engine_compat.py": "/mangalate/engine_compat.py",

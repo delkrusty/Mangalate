@@ -2,6 +2,12 @@
 
 As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://github.com/mihonapp/mihon/blob/main/CHANGELOG.md).
 
+## Em teste (próxima versão)
+
+### Servidor
+- Nova opção experimental na instalação guiada para quem tem Radeon RX 7000 ou mais nova no Windows: o servidor roda no WSL2 e usa a placa pelo ROCm da AMD. Placas AMD mais antigas continuam no processador.
+- Ao iniciar, o servidor diz qual placa de vídeo está usando, ou avisa que caiu para o processador.
+
 ## 0.5.4
 
 ### Tradução e limpeza

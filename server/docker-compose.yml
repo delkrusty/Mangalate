@@ -39,7 +39,7 @@ services:
               count: all
               capabilities: [gpu]
   gateway:
-    profiles: [cpu, gpu, amd-rocm]
+    profiles: [cpu, gpu, amd-rocm, amd-wsl]
     image: mangalate-gateway:local
     build: {context: ., dockerfile: Dockerfile.gateway}
     restart: unless-stopped
@@ -67,6 +67,28 @@ services:
     group_add: ["video"]
     security_opt: ["seccomp:unconfined"]
     shm_size: 4g
+  # Windows + Radeon RX 7000/9000: Docker inside the Ubuntu of WSL2, with ROCm 7.2
+  # and librocdxg installed there (README, "AMD no Windows").
+  translator-amd-wsl:
+    <<: *worker
+    profiles: [amd-wsl]
+    image: mangalate-translator-amd:local
+    build: {context: ., dockerfile: Dockerfile.worker, target: rocm}
+    environment:
+      MANGALATE_API_KEY_FILE: /run/secrets/provider_key
+      MANGALATE_USE_GPU: "true"
+      MANGALATE_ACCELERATOR: amd-rocm
+      HSA_ENABLE_DXG_DETECTION: "1"
+    devices: ["/dev/dxg:/dev/dxg"]
+    volumes:
+      - models:/app/models
+      - huggingface:/root/.cache/huggingface
+      - memoria:/data/memoria
+      - /usr/lib/wsl/lib/libdxcore.so:/usr/lib/libdxcore.so:ro
+      - /opt/rocm/lib/librocdxg.so:/usr/lib/librocdxg.so:ro
+    security_opt: ["seccomp:unconfined"]
+    ipc: host
+    shm_size: 8g
 
 secrets:
   mangalate_key:
