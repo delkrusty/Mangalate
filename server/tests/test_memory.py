@@ -148,6 +148,9 @@ class KeptNamesTest(unittest.TestCase):
         self.assertTrue(engine_compat.is_credit("thunderscans"))
         self.assertTrue(engine_compat.is_credit("READ AT ASURASCANS.COM"))
         self.assertFalse(engine_compat.is_credit("IT SCANS THE AREA"))
+        self.assertTrue(engine_compat.is_credit("YOU CAN READ THE CHAPTER AT"))
+        self.assertTrue(engine_compat.is_credit("SUPPORT US BY READING ON OUR WEBSITE"))
+        self.assertFalse(engine_compat.is_credit("I READ THE LETTER AT HOME"))
 
     def test_comma_before_final_mark_is_dropped(self):
         from quality import normalize_spacing
@@ -162,6 +165,7 @@ class CapitalsTest(unittest.TestCase):
         self.assertEqual(sentence_case("A TRI-UNION VENCEU. O VIRION, NÃO!", names),
                          "A Tri-Union venceu. O Virion, não!")
         self.assertEqual(sentence_case("NÃO!", names), "NÃO!")
+        self.assertEqual(sentence_case("ISSO FOI...", names), "Isso foi...")
         self.assertEqual(sentence_case("Já está certo.", names), "Já está certo.")
 
     def test_credits_stay_as_drawn(self):

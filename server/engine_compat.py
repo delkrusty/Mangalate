@@ -318,7 +318,9 @@ def is_credit(text):
     import re
     global CREDIT
     if CREDIT is None:
-        CREDIT = re.compile(r"[™©®]|\b\w{3,}scans?\b|discord|patreon|ko-?fi|www\.|\.(?:com|net|org|gg)\b", re.I)
+        CREDIT = re.compile(r"[™©®]|\b\w{3,}scans?\b|discord|patreon|ko-?fi|www\.|\.(?:com|net|org|gg)\b"
+                            r"|read (?:the |this |more |latest )?chapters? (?:at|on)|support us|our (?:web)?site",
+                            re.I)
     return bool(CREDIT.search(str(text or "")))
 
 

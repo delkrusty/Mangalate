@@ -145,10 +145,10 @@ def sentence_case(text, names=()):
     ("...SUA SUPPOSTA DIETA.") while the rest of the page was in sentence case.
     Sentence starts are capitalized again, and so are the ``names`` (glossary
     and names written with a capital elsewhere on the page).  Short shouts
-    ("NÃO!") and text with no letters are left alone.
+    ("NÃO!", "PARE!") and text with no letters are left alone; "ISSO FOI..." is fixed.
     """
     letters = [c for c in text or "" if c.isalpha()]
-    if len(letters) < 8 or has_cjk(text) or any(c.islower() for c in letters):
+    if len(letters) < 6 or has_cjk(text) or any(c.islower() for c in letters):
         return text
     out = text.lower()
     out = re.sub(r"(^|[.!?…]\s+|^[\W_]+)(\w)", lambda m: m.group(1) + m.group(2).upper(), out)
