@@ -72,6 +72,36 @@ class SplitSpeechTest(unittest.TestCase):
         self.assertEqual(len(join_split_blocks([top, bottom], page2)), 2)
 
 
+class Round2Test(unittest.TestCase):
+    def test_last_word_beside_the_last_line_joins(self):
+        # OF 237 p62, coordinates from the diagnostics of round 2.
+        top = SimpleNamespace(xyxy=np.array([281, 443, 660, 584]), texts=["ALRIGHT LETS START THE REAL"],
+                              lines=np.array([[[379, 443], [551, 450], [550, 485], [377, 478]],
+                                              [[282, 489], [660, 494], [659, 541], [281, 536]],
+                                              [[304, 541], [431, 541], [431, 584], [304, 584]]]))
+        word = SimpleNamespace(xyxy=np.array([422, 542, 626, 584]), texts=["TRAINING"],
+                               lines=np.array([[[422, 542], [626, 545], [625, 584], [422, 581]]]))
+        self.assertTrue(same_block(top, word))
+        # A word on the same row but far away is another speech.
+        far = SimpleNamespace(xyxy=np.array([700, 542, 800, 584]), texts=["NO"],
+                              lines=np.array([[[700, 542], [800, 542], [800, 584], [700, 584]]]))
+        self.assertFalse(same_block(top, far))
+
+    def test_caps_answer_keeps_the_names_it_kept(self):
+        from quality import sentence_case, source_names
+        names = source_names("QUEEN MERIAL!", "RAINHA MERIAL!")
+        self.assertEqual(sentence_case("RAINHA MERIAL CHEGOU AQUI!", names), "Rainha Merial chegou aqui!")
+        self.assertEqual(source_names("THE REAL TRAINING", "O TREINO REAL"), set())
+
+    def test_line_below_a_credit_stays(self):
+        from engine_compat import credit_followers
+        credit = region(100, 100, 500, 130, "Original Art by: YOYO,")
+        below = region(100, 135, 400, 165, "EternalUwU, chacha")
+        speech = region(100, 400, 400, 430, "Where are you?")
+        follow = credit_followers([credit, below, speech])
+        self.assertEqual(follow, {id(below)})
+
+
 class RoundFixesTest(unittest.TestCase):
     def test_credit_lines_stay_as_drawn(self):
         self.assertTrue(is_credit("Original Art by: YOYO,"))

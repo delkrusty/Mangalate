@@ -8,6 +8,10 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 - Uma fala que o detector partia em dois pedaços no mesmo balão (a última linha separada) volta a ser uma fala só: traduzida inteira e escrita uma vez, sem um texto por cima do outro.
 - Linhas de créditos como "Original Art by:", "TL:" e "Editor:" ficam no original, como as marcas d'água.
 - "--" na tradução vira travessão (—), no servidor e no modo no celular.
+- A última palavra de uma fala lida ao lado da última linha ("THE REAL" | "TRAINING") também volta para a fala.
+- Nome que a IA manteve numa resposta em maiúsculas continua com inicial maiúscula ("Rainha Merial", não "Rainha merial").
+- A linha logo abaixo de um crédito ("Original Art by:" / nomes) também fica no original.
+- Instruções da IA: todo nome do original aparece na tradução, sem troca nem sobrenome inventado; "Obrigada" quando quem fala é mulher.
 
 ### Servidor
 - A instalação para placa NVIDIA voltou a compilar (a imagem base do PyTorch passou a recusar o pip) e agora é conferida a cada mudança.

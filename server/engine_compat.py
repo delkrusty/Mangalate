@@ -325,12 +325,29 @@ def is_credit(text):
     return bool(CREDIT.search(str(text or "")))
 
 
+def credit_followers(regions):
+    """Ids of the lines right below a credit: "Original Art by:" / "EternalUwU, chacha" (TBATE 240 p68)."""
+    from quality import same_block
+    credits = [r for r in regions if is_credit(getattr(r, "text", ""))]
+    follow = set()
+    for region in regions:
+        if any(c is region for c in credits):
+            continue
+        try:
+            if any(same_block(c, region) for c in credits):
+                follow.add(id(region))
+        except (AttributeError, TypeError, ValueError):
+            pass
+    return follow
+
+
 def join_split_blocks(regions, image):
     """One speech the detector split in two stacked regions becomes one region again.
 
     Otherwise each piece is translated alone ("o de verdade" / "Treino") and
     both translations are fitted to the same bubble, one over the other.
     """
+    import cv2
     import numpy as np
     import lettering
     from quality import join_blocks
@@ -340,6 +357,9 @@ def join_split_blocks(regions, image):
         if found is None:
             return False
         mask, wx0, wy0 = found
+        # The letters are holes in the flat interior; fill them so a point on a glyph counts.
+        contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        mask = cv2.drawContours(np.zeros(mask.shape, np.uint8), contours, -1, 1, -1) > 0
         bx0, by0, bx1, by1 = (int(v) for v in b.xyxy)
         cx, cy = (bx0 + bx1) // 2 - wx0, (by0 + by1) // 2 - wy0
         return 0 <= cy < mask.shape[0] and 0 <= cx < mask.shape[1] and bool(mask[cy, cx])
@@ -385,10 +405,11 @@ def classify_regions(original_merge):
         image, raw = ctx.img_rgb, ctx.mask_raw
         if raw is not None and raw.shape[:2] != image.shape[:2]:
             raw = cv2.resize(raw, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
+        follow = credit_followers(regions)
         kept = []
         for region in regions:
             text = getattr(region, "text", "")
-            if is_sound_effect(text) or is_credit(text):
+            if is_sound_effect(text) or is_credit(text) or id(region) in follow:
                 region.mangalate_background = {"kind": "efeito_sonoro" if is_sound_effect(text) else "creditos"}
                 ctx.mangalate_preserved.append(region)
                 continue
@@ -649,13 +670,14 @@ def validate_page_translations(original_translate):
         regions = list(ctx.text_regions or [])
         result = await original_translate(self, config, ctx)
         if not legacy_quality() and isinstance(result, list):
-            from quality import normalize_spacing, page_names, sentence_case
+            from quality import normalize_spacing, page_names, sentence_case, source_names
             texts = [getattr(region, "translation", None) for region in result]
             names = page_names([t for t in texts if isinstance(t, str)])
             names |= {g["target"] for g in (PAGE_CONTEXT or {}).get("glossary", [])}
             for region in result:
                 if isinstance(getattr(region, "translation", None), str):
-                    region.translation = normalize_spacing(sentence_case(region.translation, names))
+                    own = names | source_names(getattr(region, "text", ""), region.translation)
+                    region.translation = normalize_spacing(sentence_case(region.translation, own))
         blank = sum(not getattr(region, "translation", "").strip() for region in regions)
         unchanged = sum(getattr(region, "translation", "").strip().lower() == region.text.strip().lower()
                         for region in regions)

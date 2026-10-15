@@ -159,12 +159,21 @@ def same_block(a, b, inside=None):
     if min(ha, hb) <= 0 or max(ha, hb) / min(ha, hb) > 1.6:
         return False
     line = min(ha, hb)
-    if not (-0.5 * line <= by0 - ay1 <= 0.9 * line):
-        return False
-    overlap = min(ax1, bx1) - max(ax0, bx0)
-    if overlap < 0.5 * min(ax1 - ax0, bx1 - bx0):
+    stacked = -0.5 * line <= by0 - ay1 <= 0.9 * line and \
+        min(ax1, bx1) - max(ax0, bx0) >= 0.5 * min(ax1 - ax0, bx1 - bx0)
+    if not (stacked or same_row(a, b, line)):
         return False
     return inside is None or bool(inside(a, b))
+
+
+def same_row(a, b, line):
+    """``b`` continues ``a``'s last line to the right: "THE REAL" | "TRAINING" (OF 237 p62)."""
+    bx0, by0, bx1, by1 = (float(v) for v in b.xyxy)
+    last = max(np.asarray(a.lines, dtype=float), key=lambda q: q[:, 1].mean())
+    lx0, ly0, lx1, ly1 = last[:, 0].min(), last[:, 1].min(), last[:, 0].max(), last[:, 1].max()
+    shared = min(ly1, by1) - max(ly0, by0)
+    gap = bx0 - lx1
+    return shared >= 0.6 * line and -0.5 * line <= gap <= 1.2 * line
 
 
 def join_blocks(regions, make, inside=None):
@@ -198,6 +207,24 @@ def sentence_case(text, names=()):
     for name in sorted({n for n in names if n and n[:1].isupper()}, key=len, reverse=True):
         out = re.sub(rf"(?<!\w){re.escape(name.lower())}(?!\w)", name, out)
     return out
+
+
+# Words English and Portuguese share that are not names (kept lowercase when a caps answer is fixed).
+COGNATES = {"real", "normal", "total", "final", "animal", "hotel", "mental", "natural", "legal",
+            "general", "capital", "plan", "drama", "mana", "area", "idea", "radio", "virus", "zero",
+            "super", "hobby", "show", "status", "chef", "bacon", "game", "online", "sexy", "sofa"}
+
+
+def source_names(original, translation):
+    """Words of the source the translation kept as they are: names ("QUEEN MERIAL!" -> "RAINHA MERIAL!").
+
+    Used only to fix an answer written in capitals, where a name cannot be told
+    from the other words by its capital letter (OF 238 p63 became "Rainha merial!").
+    """
+    words = set(re.findall(r"[A-Za-zÀ-ÿ]{4,}", original or ""))
+    kept = (translation or "").lower()
+    return {w[:1].upper() + w[1:].lower() for w in words
+            if w.lower() not in COGNATES and re.search(rf"(?<![\wÀ-ÿ]){re.escape(w.lower())}(?![\wÀ-ÿ])", kept)}
 
 
 def page_names(translations):
