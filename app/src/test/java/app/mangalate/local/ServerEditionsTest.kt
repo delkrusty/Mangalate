@@ -29,6 +29,6 @@ class ServerEditionsTest {
     fun freshServerDefaultsNeverSelectAPaidTranslationProvider() {
         assertEquals(TranslatorEngine.OFFLINE, MangalateSettings().engine)
         assertEquals(TranslatorEngine.OFFLINE, TranslatorEngine.fromId(null))
-        assertTrue(MangalateSettings(mode = TranslateMode.SERVER).cacheSignature().startsWith("server-scan-v1|"))
+        assertTrue(MangalateSettings(mode = TranslateMode.SERVER).cacheSignature().startsWith("server-scan-v2|"))
     }
 }

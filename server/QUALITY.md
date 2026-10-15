@@ -1,45 +1,37 @@
-# Mangalate: protocolo para buscar acabamento de scan
+# Qualidade do servidor
 
-Este é um protocolo de aceitação e evolução, não um certificado de qualidade já atingido. GPU mais forte e API paga não tornam automaticamente o resultado impecável; cada etapa e um conjunto real de páginas precisam ser avaliados.
+O resultado automático é uma versão para revisar, não um scan final. Compare o original e a tradução antes de compartilhar.
 
-## Produto e responsabilidades
+## Como cada página é feita
 
-- **Básico:** tradução no celular ou servidor pessoal com modelos locais. Sem cobrança Mangalate. Respeitar a licença não comercial e as limitações do NLLB ([model card](https://huggingface.co/facebook/nllb-200-distilled-600M)).
-- **BYOK avançado:** servidor e API do próprio usuário, custos diretos aos fornecedores, sem comissão Mangalate. Não é uma assinatura gerenciada ou infraestrutura fornecida por nós.
-- **Edição final:** só após revisão visual e linguística. O pacote automático é uma versão para revisar; não deve ser anunciado como scan humano final.
+1. **Detecção:** o detector CTD marca as linhas de texto. Se não achar nada, o detector padrão tenta de novo, para balões com letra serifada ou de explosão.
+2. **Reparo de linhas (0.5.3):** linhas que a máscara do detector cobre, mas que ficaram sem caixa ou dividindo uma caixa com outra, ganham caixa própria. Linhas que o OCR descartou por baixa confiança no meio de um parágrafo são lidas de novo. Sem isso, essas linhas ficavam em inglês.
+3. **OCR:** leitura das linhas (modelo 48px).
+4. **Balão ou arte:** cada fala é classificada pelo fundo ao redor das linhas. Fundo liso ou em degradê é balão: a fala é limpa e traduzida. Fundo com desenho é arte: a fala fica no original e a página é marcada para revisão. Assim, a arte nunca é apagada para receber texto.
+5. **Tradução:** pela IA escolhida. No capítulo inteiro (`batch.py`), as duas páginas anteriores e o glossário opcional entram como contexto; na leitura pelo app, cada página é traduzida sozinha. Uma resposta incompleta ou fora do formato não é aceita como tradução.
+6. **Limpeza:** LaMa, Large no modo Qualidade e MPE no Rápido. As dimensões da página são preservadas.
+7. **Escrita:** fonte horizontal, sem cortar palavras e com espaço após a pontuação.
+8. **Emendas (webtoon):** um balão cortado entre duas páginas é traduzido inteiro, usando os pedaços das páginas vizinhas, e as duas metades combinam.
 
-## O que está implementado
+O `batch.py` gera um relatório de cada página (`review.json` e `revisao.md`). Com `--diagnostics`, salva também as máscaras, as regiões e as linhas reparadas ou relidas.
 
-- **Detecção/OCR:** perfil Básico default + 48px; BYOK CTD + 48px. Texto sobre arte filtrado por heurística, desligado por padrão. Não há garantia de identificar toda onomatopeia ou legenda.
-- **Tradução:** NLLB local ou Chat Completions compatível. Lote BYOK injeta contexto das duas páginas anteriores e glossário opcional; leitura ao vivo usa contexto da página.
-- **Limpeza:** LaMa MPE ou LaMa Large, sem colorização/super-resolução. A imagem deve manter dimensões. Alteração global excessiva bloqueia o resultado; isso não substitui uma máscara supervisionada por balão.
-- **Composição:** fonte e direção horizontais para PT-BR, sem hifenização inglesa no servidor, margens/encaixe do renderer upstream. No celular permanece o renderer/hifenizador aprovados da 0.5.0.
-- **Revisão:** originais, resultados, inventário de texto, CBZ ordenado e relatório Markdown/JSON. Falhas preservam originais. Depois de três falhas seguidas, o lote evita continuar chamando a API.
-- **Segurança/custo:** servidor fechado por chave própria, API paga só no worker, execução serial, corpo e imagens limitados. Limites financeiros reais devem ser configurados pelo usuário no provedor.
+## O que ainda falha
 
-## Conjunto de testes antes de recomendar um perfil como scan
+- Onomatopeias e letras muito estilizadas podem ser lidas errado ou ignoradas.
+- Fala sobre o desenho fica no original, de propósito.
+- A IA às vezes erra gírias ou deixa um termo em inglês. Use o glossário para nomes e termos fixos.
+- O tamanho do texto nem sempre aproveita bem o balão.
 
-Monte pelo menos 20 páginas próprias/autorizadas, sem escolhê-las só por serem fáceis. Inclua japonês vertical, inglês, letras pequenas, balões escuros/coloridos, textura, diálogo sem balão, texto perto de rostos, quadros múltiplos, nomes recorrentes, capítulo longo e onomatopeias grandes. Inclua os bugs já observados: máscara enorme, metade da tela apagada, arte embranquecida, texto sobre desenho e palavras cortadas.
+## Como testar uma mudança
 
-Compare original e resultado lado a lado. Para cada página, registre:
+Use páginas próprias ou autorizadas, de mangá (preto e branco) e de webtoon (colorido). 10 a 15 páginas de cada bastam para um teste rápido. Rode com `--pages` e `--diagnostics` e compare, página a página:
 
-| Critério | Alvo de aceitação, não medição já realizada |
+| Critério | O que conferir |
 |---|---|
-| Enquadramento | Mesmas dimensões e nenhum recorte/estiramento |
-| Arte | Zero dano visível fora das regiões autorizadas |
-| Balões | Contorno preservado, limpeza uniforme, sem invasão do painel |
-| Texto | Sem omissões, duplicatas, fala trocada ou invenção |
-| Português | Sentido, registro, pontuação e voz dos personagens naturais |
-| Glossário | Nomes e termos aprovados consistentes em todo capítulo |
-| Composição | Nada fora do balão; tamanho legível, sem cortes indevidos |
-| Ordem | Painéis e falas na ordem correta |
-| Efeitos | Onomatopeias preservadas quando a opção não está habilitada |
-| Revisão | Todas as páginas sinalizadas realmente conferidas |
+| Arte | Nada apagado fora dos balões |
+| Balões | Texto original todo limpo, contorno intacto |
+| Texto | Nenhuma fala faltando, duplicada ou trocada |
+| Português | Sentido, tom e nomes corretos |
+| Escrita | Texto dentro do balão, legível, sem palavra cortada |
 
-Se um modelo ganha em fluência mas perde nomes/falas, ele não é “melhor” para esse perfil. Compare com o mesmo capítulo e mesma máscara, registrando latência, custos no painel do provedor e taxa de retrabalho. Não estimar qualidade pelo preço da GPU.
-
-## Próximas etapas de engenharia
-
-O nível scan consistente ainda exige segmentação supervisionada dos balões, máscaras e overlays auditáveis por região, editor para correção de OCR/tradução, estilos por personagem, memória de capítulo mais ampla e tipografia em português calibrada com casos reais. DirectML/OpenVINO exigem exportação e validação dos modelos por etapa; ROCm é experimental neste pacote e precisa de hardware real.
-
-Colab é um caminho interativo de lote, não uma promessa de servidor gratuito estável. Respeite as políticas e limites do runtime ([FAQ Colab](https://research.google.com/colaboratory/intl/pt-BR/faq.html)).
+Uma mudança só está pronta quando melhora as páginas que motivaram a mudança sem piorar as outras. Compilar, passar nos testes ou receber HTTP 200 não basta.

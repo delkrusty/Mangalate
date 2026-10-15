@@ -20,17 +20,17 @@ internal object MangalateGuides {
         GuideArticle(
             "Instalar Docker e encontrar a chave Mangalate",
             "Abra o manual do servidor pelo botão Como montar. Instale Docker e Python e rode python setup.py dentro " +
-                "da pasta server do projeto. O assistente pergunta Básico ou BYOK, CPU ou GPU e gera sua senha. " +
+                "da pasta server do projeto. O assistente pergunta qual IA vai traduzir, CPU ou GPU e gera sua senha. " +
                 "A chave Mangalate fica em server/secrets/mangalate_key.txt. Copie o conteúdo, não o nome do arquivo, " +
                 "para a Chave Mangalate no app. Ela não é a chave da API de IA.",
         ),
         GuideArticle(
-            "Servidor Básico e BYOK",
-            "Básico usa NLLB no seu servidor sem API paga, para uso pessoal não comercial conforme licença do modelo. " +
-                "BYOK usa um modelo Chat Completions compatível escolhido por você, em servidor que você administra. " +
-                "Servidor e API são pagos diretamente aos fornecedores. Mangalate não cobra nem recebe comissão. " +
-                "A chave da API fica só em server/secrets/provider_key.txt; nunca cole essa chave no celular. " +
-                "A qualidade e o motor são definidos no servidor pelo instalador.",
+            "Servidor + IA",
+            "O servidor no seu computador lê o texto, apaga o original e escreve a tradução. Só o texto das falas " +
+                "vai para a IA escolhida no instalador, com a sua própria chave (BYOK). Groq e Gemini têm cota grátis e, se você configurar os dois, " +
+                "um assume sozinho quando o outro atinge o limite. O Ollama roda a IA no próprio computador, sem internet. " +
+                "Mangalate não cobra nem recebe comissão. A chave da IA fica só em server/secrets/provider_key.txt; " +
+                "nunca cole essa chave no celular.",
         ),
         GuideArticle(
             "Conectar o celular ao computador",
@@ -86,12 +86,12 @@ internal object MangalateGuides {
     )
     val privacy = listOf(
         GuideArticle("No celular", "OCR, tradução e limpeza são locais; o download inicial dos modelos precisa de internet. As páginas não são enviadas ao servidor de tradução nesse modo."),
-        GuideArticle("Servidor Básico", "Páginas são enviadas somente ao servidor configurado por você. OCR e NLLB rodam nele. Use HTTPS fora da rede local. Modelos e bibliotecas têm licenças próprias."),
-        GuideArticle("Servidor BYOK", "OCR e reconstrução rodam no seu servidor. Textos, contexto e glossário podem ser enviados à API contratada por você. Custos, retenção e tratamento de dados seguem os termos desse provedor."),
+        GuideArticle("Servidor + IA", "As páginas vão só ao servidor configurado por você; leitura do texto e limpeza rodam nele. Use HTTPS fora da rede local. Apenas o texto das falas, o contexto e o glossário vão para a IA escolhida, ou ficam no computador com o Ollama. Retenção e uso dos dados seguem os termos do provedor; no plano grátis do Gemini, o Google pode usar o conteúdo enviado."),
         GuideArticle("Duas chaves diferentes", "A chave Mangalate autentica o aplicativo e fica nas configurações privadas do Android. A chave de IA fica no arquivo privado do seu servidor, fora do APK e do repositório. Não há chave compartilhada do Mangalate. Nunca publique senhas."),
         GuideArticle("Arquivos e serviços externos", "Traduções e revisões ficam no aparelho, computador ou runtime que você utiliza. Downloads acessam fontes configuradas por você. A Ajuda funciona offline; links de instalação abrem serviços externos com termos próprios."),
     )
     val changes = listOf(
+        GuideArticle("0.5.3: servidor + IA", "O perfil Básico (NLLB) saiu: o servidor agora traduz com Groq, Gemini, OpenRouter ou Ollama, escolhidos num menu, com alternância automática quando um atinge o limite grátis. O inglês não fica mais por baixo do português, palavras não são cortadas no meio e o espaço depois da vírgula foi corrigido."),
         GuideArticle("0.5.2: offline e servidor", "Dois modos principais: No celular e Servidor. Gemini e DeepL diretos saíram da seleção. Limpeza local da 0.5.0 preservada. Docker com assistente e caminhos explícitos das chaves. Perfis Básico e BYOK, sem cobrança Mangalate. Colab interativo por capítulo, sem túnel."),
         GuideArticle("Acabamento com revisão", "Servidor com limites de máscara, enquadramento preservado e texto sobre arte filtrado por padrão. BYOK em lote usa contexto das páginas anteriores e glossário opcional. Exporta original, resultado e relatório para revisar, sem prometer perfeição humana automática."),
         GuideArticle("0.5.1: ML Kit corrigido", "Preservação dos componentes ML Kit no APK minificado, acesso serializado aos clientes e remoção de falhas locais ocultadas como texto original. Não adicionar inicialização duplicada do SDK."),

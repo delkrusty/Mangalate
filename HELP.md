@@ -1,64 +1,45 @@
 # Ajuda do Mangalate
 
-O manual completo está dentro do aplicativo em **Mais › Ajuda do Mangalate**, com busca por dúvidas e problemas. Ele funciona offline e não encaminha para o suporte de outro aplicativo.
+A ajuda completa também está no app, em **Mais › Ajuda do Mangalate**, com busca e funcionando offline.
 
-## Começar
+## Usar
 
-- **Ler:** adicione um título à biblioteca pelas fontes configuradas por você ou use arquivos locais compatíveis. Abra um capítulo.
-- **Traduzir:** toque no centro da página para mostrar os controles e no botão 文A. Selecione os idiomas e toque em Traduzir.
-- **Ver o original:** toque novamente em 文A.
-- **Mudar ajustes:** abra Mais › Tradução (Mangalate).
+- **Traduzir:** abra um capítulo, toque no centro da página e depois em **文A**. Escolha os idiomas e toque em Traduzir.
+- **Ver o original:** toque em 文A de novo.
+- **Ajustes:** Mais › Tradução (Mangalate).
+- **Modo No celular:** na primeira vez, toque em Preparar idiomas com internet. Depois funciona offline.
+- **Modo Servidor:** precisa do servidor rodando no seu PC. Veja o [manual do servidor](server/README.md).
 
-## Modos de tradução
+## Conectar o app ao servidor
 
-- **No celular:** OCR, limpeza e tradução no dispositivo. Os modelos dos idiomas são baixados na primeira utilização; depois podem ser usados offline.
-- **Servidor:** envie as páginas para seu Docker no PC ou servidor contratado. Ele pode ser Básico, com modelos locais, ou BYOK, com a API que você paga diretamente. Consulte o [manual do servidor](server/README.md).
+1. No PC, rode `py setup.py` dentro da pasta `server`. Ele mostra a **Chave Mangalate** e o endereço.
+2. No app: Mais › Tradução (Mangalate) › **Servidor**.
+3. Endereço: `http://IP-DO-PC:5003`. Para ver o IP, rode `ipconfig` no Windows e procure o IPv4, por exemplo `192.168.0.15`.
+4. Chave Mangalate: o conteúdo de `server/secrets/mangalate_key.txt`.
+5. Toque em **Testar conexão**.
 
-Gemini e DeepL diretos saíram da seleção. Configurações antigas desses modos passam para No celular. A limpeza local da 0.5.0 foi mantida.
-
-## Onde encontro a chave Mangalate?
-
-Dentro da pasta `server`, execute `python setup.py`. O assistente gera a chave e mostra o caminho completo de `server/secrets/mangalate_key.txt`; copie o conteúdo para o campo Chave Mangalate no app. Ela é a senha de acesso ao seu servidor, não uma chave que você compra ou pega de outra empresa.
-
-No BYOK, sua chave de API é outra credencial e fica em `server/secrets/provider_key.txt`, somente no servidor. Não cole essa chave no celular ou em relatos de problemas.
+São duas chaves diferentes. A **Chave Mangalate** é a senha entre o celular e o seu PC e vai no app. A **chave da IA** (Groq, Gemini…) fica só no PC e nunca vai no celular.
 
 ## Ler offline
 
-Ligue **Traduzir capítulos ao baixar** antes de baixar os capítulos e espere o progresso da tradução terminar. A tradução precisa estar ligada no leitor para exibir as imagens traduzidas guardadas.
-
-Mudar o idioma, o modo, o modelo ou ajustes de fonte pode exigir nova tradução. Atualizações do motor também podem invalidar imagens antigas. Prepare os capítulos com internet antes de sair.
-
-O notebook Colab também prepara ZIP/CBZ para leitura offline e exporta um pacote de revisão com originais e resultados. Ele não exige chave Mangalate e não oferece um endereço permanente para conectar o app.
-
-## Limpeza dos balões
-
-Balões de fundo uniforme e contorno fechado têm o interior segmentado e limpo antes de aplicar a tradução. Caracteres perdidos pelo OCR também podem ser removidos.
-
-Se o balão não for identificado com segurança, o app usa limpeza local para preservar a arte. Contornos abertos, sombras, retículas e textos sobre personagens podem precisar de reconstrução mais avançada.
+Ligue **Traduzir capítulos ao baixar** antes de baixar e espere a tradução terminar. Para ver as páginas traduzidas, a tradução precisa estar ligada no leitor. Se você mudar o idioma, o modo ou o servidor, os capítulos precisam ser traduzidos de novo.
 
 ## Problemas comuns
 
-- **Chave inválida / HTTP 401:** copie o conteúdo inteiro de `server/secrets/mangalate_key.txt`, sem espaços extras. Não use a chave paga de IA.
-- **Motor iniciando / HTTP 503:** aguarde e confira no computador `docker compose logs --tail=80`; a primeira página ainda pode precisar baixar modelos.
-- **Servidor ocupado / HTTP 429:** espere a página atual terminar e tente novamente.
-- **Falha de motor / HTTP 502:** veja os logs no servidor e, no BYOK, confira modelo, chave, cota e saldo com o próprio provedor. A chave Mangalate é independente dessas configurações.
-- **Celular não conecta:** use o IP do computador, não localhost; confira se ambos estão no mesmo Wi-Fi e se o firewall permite a porta. Para internet pública, use o guia HTTPS, sem expor portas internas.
-- **Página não traduzida offline:** confira se o capítulo e a tradução terminaram de baixar e se está usando os mesmos ajustes.
-- **Letras restantes:** compare original e tradução; informe o idioma, o modo e a página ao relatar o problema.
-- **Downloads interrompidos:** confira a fila, conexão, armazenamento e restrições de bateria. Mantenha o app aberto durante a preparação offline.
-- **Fonte de conteúdo não abre:** confira se o site está disponível e se a extensão é confiável e atualizada. O Mangalate não fornece conteúdo ou repositórios de fontes.
-- **Texto pequeno:** falas longas em balões pequenos exigem redução da fonte. Volte o ajuste de fonte para zero e use zoom para conferir.
+- **Chave inválida (HTTP 401):** cole o conteúdo inteiro de `mangalate_key.txt`, sem espaços. Não use a chave da IA.
+- **Servidor iniciando (HTTP 503):** espere. Na primeira página o servidor ainda pode estar baixando modelos. No PC, veja `docker compose logs --tail=80`.
+- **Servidor ocupado (HTTP 429):** espere a página atual terminar.
+- **Erro do servidor (HTTP 502):** se a mensagem disser que o limite grátis de todas as IAs acabou, espere ou acrescente outra IA rodando `py setup.py`. Nos outros casos, veja os logs no PC.
+- **Celular não conecta:** use o IP do PC, não `localhost`. Os dois precisam estar no mesmo Wi-Fi. Permita o Docker no firewall só em redes privadas.
+- **Sobrou texto em inglês:** pode ser texto sobre o desenho, que o servidor deixa no original de propósito. Se for dentro de um balão, mande um print do original e do resultado.
+- **Texto pequeno:** falas longas em balões pequenos precisam de letra menor. Deixe o ajuste de fonte em zero e use zoom.
+- **Página não aparece traduzida offline:** confira se a tradução terminou e se você está com os mesmos ajustes usados ao baixar.
 
-## Armazenamento e backup
+## Atualizar
 
-Cache de traduções, páginas traduzidas offline e capítulos originais são armazenados separadamente. Limpar traduções pode exigir novo processamento e, no BYOK, novos pedidos pagos à sua API. Faça um backup da biblioteca antes de trocar de celular ou reinstalar; ele não substitui uma cópia de todas as imagens traduzidas.
+- **App:** baixe a versão nova em [Releases](https://github.com/delkrusty/Mangalate/releases/latest) e instale por cima, sem desinstalar.
+- **Servidor:** na pasta `server`, rode `git pull` e depois `py rebuild.py`.
 
-## Rastreamento
+## Relatar um problema
 
-Conecte um serviço em Configurações › Rastreamento e vincule cada mangá ao registro correto. A tradução não altera a numeração dos capítulos. Confira o progresso antes de sincronizar.
-
-## Atualizar e pedir ajuda
-
-Use **Mais › Sobre o Mangalate › Atualizações e APKs**, baixe a versão em [Releases](https://github.com/delkrusty/Mangalate/releases/latest) e instale por cima da atual. Não é necessário desinstalar.
-
-Relate problemas em [Issues do Mangalate](https://github.com/delkrusty/Mangalate/issues), incluindo versão, modo de tradução, idiomas e passos para reproduzir. Prints do original e da tradução ajudam, mas devem estar livres de chaves de API e dados pessoais.
+Abra uma [issue](https://github.com/delkrusty/Mangalate/issues) e informe a versão, o modo, os idiomas e os passos para reproduzir. Prints do original e do resultado ajudam muito. **Nunca** mande chaves (Mangalate ou de IA) em prints, logs ou mensagens.

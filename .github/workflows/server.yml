@@ -1,7 +1,7 @@
 name: Verify Mangalate server
 on:
   push:
-    branches: [server-first]
+    branches: [server-first, 'candidate/**']
   workflow_dispatch:
   workflow_call:
 jobs:
@@ -17,7 +17,7 @@ jobs:
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
       - name: Gateway, wizard and notebook contract tests
         run: |
-          pip install -r server/requirements-gateway.txt numpy==2.5.4
+          pip install -r server/requirements-gateway.txt numpy==2.5.4 opencv-python-headless
           python -m unittest discover -s server/tests -v
       - name: Validate Compose and CPU build
         working-directory: server
@@ -42,9 +42,44 @@ jobs:
           python -c "import zipfile; z=zipfile.ZipFile('review/chapter.zip','w'); z.write('review/teste-original.png','001.png'); z.close()"
           worker=$(docker compose --profile cpu ps -q translator-cpu)
           docker cp review/chapter.zip "$worker":/tmp/chapter.zip
-          docker compose --profile cpu exec -T translator-cpu python /mangalate/batch.py --input /tmp/chapter.zip --output /tmp/batch-review --profile basic
+          docker compose --profile cpu exec -T translator-cpu python /mangalate/batch.py --input /tmp/chapter.zip --output /tmp/batch-review --profile basic --diagnostics
+          docker compose --profile cpu exec -T translator-cpu python -c "import json; from pathlib import Path; d=Path('/tmp/batch-review/diagnostico/0001'); assert all((d/n).exists() for n in ('1-original.png','3-regioes.png','regioes.json')), list(d.iterdir()); print(json.load(open(d/'regioes.json')))"
           docker cp "$worker":/tmp/batch-review/review.json review/batch-review.json
           python -c "import json; r=json.load(open('review/batch-review.json')); assert r and r[0]['status']=='review',r; assert any(x['translation'].strip() and x['translation'].lower()!=x['original'].lower() for x in r[0]['regions']),r"
+      - name: Verify bubbles cut between webtoon slices are read whole
+        working-directory: server
+        run: |
+          python - <<'PY'
+          import zipfile
+          from PIL import Image, ImageDraw, ImageFont
+          page = Image.new("RGB", (900, 1600), (170, 200, 230))
+          draw = ImageDraw.Draw(page)
+          for x in range(0, 900, 14):
+              draw.line((x, 0, x, 1600), fill=(110, 140, 185), width=4)
+          draw.ellipse((60, 560, 840, 1060), fill="white", outline="black", width=6)
+          font = ImageFont.load_default(size=72)
+          draw.text((190, 650), "Hello world!", font=font, fill="black")
+          draw.text((150, 760), "Good morning!", font=font, fill="black")  # cut by the seam at y=800
+          draw.text((210, 880), "See you soon.", font=font, fill="black")
+          with zipfile.ZipFile("review/seam.zip", "w") as book:
+              for name, box in (("001.png", (0, 0, 900, 800)), ("002.png", (0, 800, 900, 1600))):
+                  page.crop(box).save("review/" + name)
+                  book.write("review/" + name, name)
+          PY
+          worker=$(docker compose --profile cpu ps -q translator-cpu)
+          docker cp review/seam.zip "$worker":/tmp/seam.zip
+          docker compose --profile cpu exec -T translator-cpu python /mangalate/batch.py --input /tmp/seam.zip --output /tmp/seam-review --profile basic
+          docker cp "$worker":/tmp/seam-review/review.json review/seam-review.json
+          python - <<'PY'
+          import json
+          pages = json.load(open("review/seam-review.json"))
+          print(json.dumps(pages, ensure_ascii=False, indent=1))
+          assert all(p["status"] == "review" for p in pages), pages
+          assert pages[0]["seams"]["below"] and pages[1]["seams"]["above"], pages
+          for p in pages:
+              text = " ".join(r["original"].lower() for r in p["regions"])
+              assert "morning" in text, ("cut line not read whole", p["page"], text)
+          PY
       - name: Diagnostics
         if: always()
         working-directory: server

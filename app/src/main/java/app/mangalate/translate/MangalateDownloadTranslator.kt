@@ -42,11 +42,18 @@ object MangalateDownloadTranslator {
         progress(context, mangaTitle, chapterName, 0, total)
         try {
             coroutineScope {
-                files.map { file ->
+                // Leitores das páginas em ordem: as vizinhas permitem traduzir balões cortados entre fatias.
+                val readers = files.map { f -> { f.openInputStream().use { it.readBytes() } } }
+                files.mapIndexed { index, file ->
                     async(Dispatchers.IO) {
                         try {
                             val bytes = file.openInputStream().use { it.readBytes() }
-                            MangalateTranslator.translate(context, bytes, keepOffline = true)
+                            MangalateTranslator.translate(
+                                context,
+                                bytes,
+                                keepOffline = true,
+                                neighbors = { MangalateNeighbors.ofList(readers, index) },
+                            )
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Throwable) {

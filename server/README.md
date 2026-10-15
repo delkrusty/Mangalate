@@ -1,21 +1,14 @@
-# Mangalate: Docker, Colab e BYOK sem complicação
+# Servidor Mangalate
 
-Há dois perfis de servidor, não uma assinatura vendida pelo Mangalate. No celular, o aplicativo oferece **No celular** ou **Servidor**; o servidor instalado determina se a tradução é Básica ou BYOK. A chave Mangalate e a chave da IA são coisas diferentes.
+O servidor roda no seu PC com Docker. Ele lê o texto das páginas, apaga o original e escreve a tradução feita por uma IA escolhida por você. Só o texto das falas vai para a IA. O celular conversa apenas com o seu PC.
 
-## Qual caminho escolher
+- **Qual IA usar e como pegar as chaves grátis:** [guia de IAs](BYOK.md).
+- **O que o servidor garante e o que ainda precisa de revisão:** [QUALITY.md](QUALITY.md).
 
-- **No celular:** prepare os idiomas uma vez no aplicativo; depois traduza offline. A limpeza local continua baseada na 0.5.0.
-- **Docker Básico:** seu PC ou servidor executa OCR, tradução NLLB e reconstrução. Não exige API paga; processamento, energia, hardware e eventual hospedagem são seus. O NLLB tem licença não comercial e ressalvas de uso, portanto este perfil é destinado a uso pessoal não comercial, não a um serviço de tradução vendido ([modelo NLLB](https://huggingface.co/facebook/nllb-200-distilled-600M)).
-- **Docker BYOK:** você contrata a máquina, escolhe uma API Chat Completions compatível e usa sua própria chave. Mangalate não recebe pagamento nem comissão. A chave paga fica no seu servidor.
-- **Colab:** envie um capítulo, acompanhe a tradução no notebook e baixe o resultado para ler offline. Não é oferecido como servidor permanente para o celular. As restrições e a disponibilidade de recursos são do Google ([regras oficiais](https://research.google.com/colaboratory/intl/pt-BR/faq.html)).
+## Instalar (Windows)
 
-## Docker: primeiro uso no Windows
-
-### Instale os programas
-
-Instale [Docker Desktop](https://docs.docker.com/desktop/setup/install/windows-install/), [Python](https://www.python.org/downloads/) e [Git](https://git-scm.com/downloads). Abra o Docker Desktop e espere ele indicar que está rodando. Docker Desktop pode exigir licença paga em determinados usos empresariais; confira os termos, sem presumir que é gratuito para toda empresa ([termos do Docker Desktop](https://docs.docker.com/subscription/desktop-license/)).
-
-Abra o PowerShell. Cole um comando por vez:
+1. Instale o [Docker Desktop](https://docs.docker.com/desktop/setup/install/windows-install/), o [Python](https://www.python.org/downloads/) e o [Git](https://git-scm.com/downloads). Abra o Docker Desktop e espere ele indicar que está rodando.
+2. No PowerShell, um comando por vez:
 
 ```powershell
 git clone https://github.com/delkrusty/Mangalate.git
@@ -23,185 +16,106 @@ cd Mangalate/server
 py setup.py
 ```
 
-Se `py` não funcionar, tente `python setup.py`. O assistente pergunta:
+Se `py` não funcionar, use `python`. O instalador pergunta, nesta ordem:
 
-1. **Básico ou BYOK:** escolha 1 para começar sem API paga.
-2. **Hardware:** escolha CPU se não souber. NVIDIA-CUDA exige driver compatível e Container Toolkit ([instalação NVIDIA](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)). AMD-ROCm é experimental e exige Linux compatível; não é um perfil para Windows.
-3. **Celular na mesma rede Wi-Fi:** escolha S para leitura ao vivo na rede local. Não exponha a porta 5003 no roteador.
-4. **Iniciar agora:** escolha S. Ele verifica Docker Compose e executa a instalação.
+| Pergunta | O que responder |
+|---|---|
+| Hardware | `1` (CPU) se não souber; `2` se tiver placa NVIDIA |
+| Celular na mesma rede Wi-Fi | `s` |
+| Velocidade | Enter. O padrão é Rápido em CPU e Qualidade com placa NVIDIA |
+| Qual IA | Groq e depois Gemini como reserva. Passo a passo no [guia de IAs](BYOK.md) |
+| Iniciar agora | `s` |
 
-Se preferir iniciar depois:
+No fim, o instalador mostra a **Chave Mangalate**, que vai no app. Ela fica salva em `server/secrets/mangalate_key.txt`.
 
-```powershell
-docker compose --profile cpu up --build -d
-```
-
-Ou, apenas com NVIDIA configurada:
-
-```powershell
-docker compose --profile gpu up --build -d
-```
-
-Use **somente um** perfil de hardware por vez. Não ative CPU, NVIDIA e AMD juntos.
-
-### AMD, Radeon e Intel não ficam excluídas
-
-O caminho CPU está disponível independentemente do fabricante. Rode `python hardware.py` para ver os candidatos e o estado real de cada backend. Não confunda detecção de placa com compatibilidade dos modelos.
-
-No Linux com ROCm e uma Radeon/Instinct suportada, há um perfil **experimental**:
-
-```bash
-docker compose --profile amd-rocm up --build -d
-```
-
-Ele expõe `/dev/kfd` e `/dev/dri` somente ao worker, mantém as rodas AMD de PyTorch e deixa a tradução offline na CPU para não exigir CUDA no CTranslate2. A imagem base corresponde a uma tag publicada pela AMD; isso não valida automaticamente nosso pipeline inteiro ([PyTorch Radeon/ROCm](https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/docs/install/installrad/native_linux/install-pytorch.html)). Confirme a matriz de hardware/SO e as permissões dos dispositivos; este pacote não foi validado numa GPU AMD ([Docker com ROCm](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/how-to/docker.html)).
-
-No Windows com AMD/Intel, use CPU neste pacote. **DirectML e OpenVINO estão previstos na camada de hardware, não implementados nem anunciados como aceleração funcional.** O motor atual usa etapas PyTorch; adicionar um provider ONNX sem exportar/testar os modelos não resolve isso. Uma falha de aceleração pode ser resolvida parando o perfil experimental e iniciando CPU; não há fallback automático de contêiner já validado.
-
-### Onde está a chave Mangalate
-
-O assistente gera e mostra o caminho completo. Por padrão:
-
-```text
-Mangalate/server/secrets/mangalate_key.txt
-```
-
-No PowerShell, dentro da pasta `server`:
-
-```powershell
-Get-Content .\secrets\mangalate_key.txt
-```
-
-Copie o conteúdo do arquivo, não esse caminho. Essa é uma senha privada; não envie prints dela. Para usar outro local, altere `MANGALATE_KEY_FILE` em `.env` para o caminho do arquivo no computador. O Docker o monta em `/run/secrets/mangalate_key`; isso **não** significa que você deva criar uma pasta `/run` no Windows.
-
-### Teste de verdade antes de usar no celular
-
-Ainda dentro da pasta `server`:
+3. Teste uma página antes de usar no celular:
 
 ```powershell
 py -m pip install Pillow
 py check.py --warmup
 ```
 
-Esse comando traduz uma página sintética, preparando os modelos. A primeira execução pode baixar arquivos grandes e demorar. **Abra `server/review/teste-traduzido.png` e confira se Hello world! virou português.** Uma conexão funcionando ou HTTP 200 não prova a qualidade da tradução. No BYOK, o comando pede confirmação porque o teste pode consumir saldo.
+A primeira vez baixa os modelos e demora. Abra `server/review/teste-traduzido.png` e confira se o texto virou português: conectar não basta, o que importa é o resultado.
 
-Se `DejaVuSans.ttf` não existir no Windows, o diagnóstico usa Arial do sistema. Não feche o terminal enquanto prepara os modelos.
+## Ligar o app
 
-### Ligue o aplicativo
-
-Execute `ipconfig` no PC e procure o endereço IPv4 da placa conectada ao seu Wi-Fi, por exemplo `192.168.0.15`. No aplicativo:
-
-1. Mais → Tradução (Mangalate) → **Servidor**.
-2. Endereço: `http://192.168.0.15:5003`, trocando pelo IPv4 real do seu PC.
-3. Chave Mangalate: conteúdo de `mangalate_key.txt`.
+1. Rode `ipconfig` no PC e anote o IPv4 da rede Wi-Fi, por exemplo `192.168.0.15`.
+2. No app: Mais › Tradução (Mangalate) › **Servidor**.
+3. Endereço `http://192.168.0.15:5003` (troque pelo seu IP) e a Chave Mangalate.
 4. Toque em **Testar conexão**.
-5. Abra um capítulo e toque em 文A.
 
-`localhost` no celular é o próprio celular, não o computador. Se o Windows perguntar sobre firewall, permita somente redes privadas confiáveis. Não desligue o firewall inteiro.
+`localhost` no celular é o próprio celular. Se o Windows perguntar sobre o firewall, permita só em redes privadas. Não abra a porta 5003 no roteador.
 
-## Linux ou macOS
+## Atualizar
 
-Instale Docker Engine + plugin Compose no Linux ou Docker Desktop no macOS, além de Python e Git. Use os mesmos comandos, substituindo `py` por `python3` e `Get-Content` por `cat`. O perfil GPU deste pacote é NVIDIA; não prometa aceleração CUDA em Mac Apple Silicon. O pacote CPU também depende da disponibilidade das rodas de todas as bibliotecas para sua arquitetura.
-
-## BYOK: servidor mais forte, sua chave, seus gastos
-
-Rode `setup.py` e escolha 2. Informe endpoint HTTPS, nome exato do modelo e sua chave oculta. O cliente upstream exige compatibilidade com **Chat Completions**, `max_tokens`, `temperature` e `top_p`; uma API somente Responses ou um modelo que rejeite esses campos não é automaticamente compatível ([cliente upstream fixado](https://raw.githubusercontent.com/zyddnys/manga-image-translator/d6de6ab62a7be6afc0d07a3184149cdefbcd32f2/manga_translator/translators/custom_openai.py)).
-
-Os caminhos padrão são:
-
-```text
-server/secrets/mangalate_key.txt   senha do app para seu servidor
-server/secrets/provider_key.txt    chave da API, somente no servidor
-server/.env                       perfil, endpoint, modelo e caminhos; sem chave API
+```powershell
+git pull
+py rebuild.py
 ```
 
-Configure limite de gastos e alertas na conta do provedor. Validações e novas tentativas podem consumir mais API. GPU maior melhora capacidade, não garante uma tradução melhor: a qualidade também depende do OCR, modelo, contexto, glossário e revisão.
+O `rebuild.py` reconstrói o servidor, mantém chaves, configuração e modelos e confere se a versão nova está rodando. Ele termina com "Servidor atualizado e rodando a versão nova.". Não use `docker compose up --build`: em versões recentes do Docker Desktop ele pode falhar ("failed to execute bake") e continuar rodando a versão antiga sem avisar.
 
-Se trocar a chave da API, recrie ou reinicie os containers para o worker carregá-la. O assistente faz isso quando você escolhe iniciar; alterar o arquivo sozinho não troca a chave já carregada em um processo rodando.
+Para trocar ou acrescentar uma IA, rode `py setup.py` de novo. Para parar o servidor: `docker compose --profile cpu stop` (ou `gpu`).
 
-### Servidor público com HTTPS
+## Traduzir um capítulo inteiro no PC
 
-Contrate a máquina e configure NVIDIA/Docker por conta própria. Não há provisionamento, revenda ou afiliado Mangalate. Configure um domínio DNS para o IP da máquina e acrescente `MANGALATE_DOMAIN=seu-dominio.example` ao `.env`.
+Gera um CBZ traduzido e um pacote de revisão com os originais lado a lado. Coloque o capítulo na pasta `server` e rode:
+
+```powershell
+docker compose --profile cpu run --rm -v "${PWD}:/work" translator-cpu /mangalate/batch.py --input /work/capitulo.cbz --output /work/revisao --profile byok
+```
+
+Opções úteis:
+
+| Opção | Para quê |
+|---|---|
+| `--pages 1-10` | Só algumas páginas, bom para testar |
+| `--glossary /work/glossario.csv` | Nomes e termos fixos (colunas `source,target`) |
+| `--speed fast` / `--speed quality` | Força uma velocidade |
+| `--diagnostics` | Salva máscaras e regiões de cada página em `diagnostico/` |
+
+Com placa NVIDIA, use `--profile gpu run ... translator-gpu` e acrescente `--gpu`. No Linux/macOS, troque `${PWD}` por `$PWD`.
+
+Na saída, `capitulo-para-revisar.cbz` traz as páginas em ordem; quando uma página falha, fica o original, nunca uma página em branco. Em `revisao-completa.zip` estão os originais, os resultados e um `revisao.md` com o texto lido e o traduzido de cada página. Se três páginas seguidas falharem, o lote para de chamar a IA.
+
+Para ler o CBZ no app, coloque-o na pasta de armazenamento do Mangalate, em `manga/Nome do mangá/`, e atualize a fonte Local.
+
+## Outros sistemas e placas
+
+- **Linux/macOS:** use os mesmos comandos, trocando `py` por `python3`. A aceleração por placa de vídeo é só NVIDIA; Mac usa CPU.
+- **AMD:** no Windows, use CPU. No Linux com ROCm há um perfil experimental, ainda não testado em placa real: no `py setup.py`, escolha `3`. Rode `python hardware.py` para ver o que foi detectado.
+- **Intel, DirectML e OpenVINO:** não implementados; use CPU.
+
+## Servidor na internet (HTTPS)
+
+Para uma VPS sua, com domínio apontando para ela: instale como acima (com `py rebuild.py`), acrescente `MANGALATE_DOMAIN=seu-dominio.exemplo` ao `.env` e rode
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.public.yml --profile gpu up --build -d
+docker compose -f docker-compose.yml -f docker-compose.public.yml --profile gpu up -d
 ```
 
-Na VPS, libere no firewall somente HTTPS/HTTP para o Caddy e o acesso administrativo restrito que você utiliza. As portas dos motores não são publicadas. A porta 5003 deixa de ser publicada na configuração pública. No app, use `https://seu-dominio.example` e a chave Mangalate. HTTPS automático requer DNS correto e portas acessíveis ([documentação do Caddy](https://caddyserver.com/docs/automatic-https)).
+O Caddy cuida do HTTPS e a porta 5003 deixa de ficar exposta. No firewall, libere só as portas 80 e 443. No app, use `https://seu-dominio.exemplo` ([HTTPS automático do Caddy](https://caddyserver.com/docs/automatic-https)).
 
-## Preparar um capítulo com mais consistência e revisão
+## Colab
 
-O processamento em lote BYOK é o caminho recomendado para buscar acabamento de scan. Ele usa dados das duas páginas anteriores e um glossário opcional como contexto, além de traduzir sequencialmente. A leitura ao vivo usa contexto da página, **não garante contexto de capítulo**.
+O [notebook Colab](https://colab.research.google.com/github/delkrusty/Mangalate/blob/main/server/colab/Mangalate_Colab.ipynb) traduz um ZIP/CBZ sem instalar Docker e exporta o CBZ e o pacote de revisão. Ele não é um servidor para o app e não usa a Chave Mangalate. Se usar uma IA, coloque a chave num Secret chamado `MANGALATE_PROVIDER_KEY`, nunca numa célula. O notebook ainda está na versão 0.5.2 e será atualizado. As regras de uso são as do [Colab](https://research.google.com/colaboratory/intl/pt-BR/faq.html).
 
-No Linux/servidor, coloque `capitulo.cbz` e um glossário opcional `glossario.csv` em uma pasta `trabalho`:
+## Problemas
 
-```csv
-source,target
-Karai,Karai
-Student Council,Conselho Estudantil
-```
+- **Docker não encontrado:** abra o Docker Desktop e confira `docker compose version`.
+- **App diz chave inválida:** use a Chave Mangalate, não a chave da IA, sem espaços extras.
+- **Atualizei e nada mudou:** rode `py rebuild.py` e confira a mensagem final.
+- **Erro 502 no app:** veja `docker compose logs --tail=80`. Se for limite das IAs, espere ou acrescente outra IA.
+- **Placa NVIDIA não reconhecida:** confira `nvidia-smi`, o driver e o [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html). Na dúvida, use CPU.
 
-Execute da pasta `server`:
-
-```bash
-docker compose --profile gpu run --rm -v "$PWD/trabalho:/work" translator-gpu /mangalate/batch.py --input /work/capitulo.cbz --output /work/revisao --profile byok --gpu --glossary /work/glossario.csv
-```
-
-No PowerShell, substitua o argumento de volume por `"${PWD}/trabalho:/work"`. Sem glossário, remova os dois últimos argumentos. Para Básico, use `--profile basic`, serviço `translator-cpu`, perfil Compose `cpu` e remova `--gpu`.
-
-A saída contém:
-
-- **capitulo-para-revisar.cbz:** páginas em ordem para leitura. Páginas bloqueadas mantêm o original, não uma página branca.
-- **revisao-completa.zip:** originais, resultados, `revisao.md` legível e `review.json` com texto reconhecido/traduzido e estado de cada página. Após três falhas consecutivas, o lote para de chamar o motor e preserva as páginas restantes, evitando repetir gastos/falhas.
-
-Revise sentido, nomes, ordem dos painéis, encaixe, contornos e arte antes de chamar de edição final. Os limites automáticos detectam mudança de tamanho e edição global excessiva, **não garantem detecção de toda invasão de arte ou palavra cortada**. O filtro de texto fora de balões é heurístico; pode deixar onomatopeias passar ou ignorar legendas. Por padrão não há super-resolução nem colorização, para evitar alterar o enquadramento/traço. Palavras ficam inteiras no servidor, evitando hifenização inglesa inadequada.
-
-Se trocar o perfil/modelo do servidor mantendo o mesmo endereço, limpe o cache de tradução do aplicativo e prepare novamente os capítulos necessários. Páginas já baixadas não mudam de qualidade automaticamente.
-
-## Colab revisado
-
-Abra [Mangalate_Colab.ipynb](https://colab.research.google.com/github/delkrusty/Mangalate/blob/main/server/colab/Mangalate_Colab.ipynb). Selecione GPU se disponível e rode as células em ordem. Elas instalam o código de uma revisão fixa, param em erros, recebem um capítulo e exportam CBZ + revisão. No BYOK, use um Secret chamado `MANGALATE_PROVIDER_KEY`, ou o campo oculto solicitado; nunca escreva chave em uma célula pública.
-
-A célula de preparação instala Python 3.13.12 em um ambiente separado usando uv. Não precisa trocar manualmente o Python do runtime Google ou instalar pacotes dentro do ambiente que mantém a interface do Colab; os comandos de tradução rodam no ambiente isolado.
-
-Neste caminho você **não precisa da chave Mangalate**, porque o notebook não conecta o celular a um servidor. No Básico, não precisa de chave de IA; no BYOK, somente sua própria chave de API. A chave Mangalate é gerada pelo instalador Docker para a conexão do aplicativo.
-
-Não há Cloudflare Tunnel, servidor público nem laço para manter sessão ativa. Os limites e restrições são do Google; o funcionamento real depende de GPU, runtime, dependências e downloads disponíveis, e uma revisão sintática não equivale a uma execução GPU no Colab ([FAQ](https://research.google.com/colaboratory/intl/pt-BR/faq.html)).
-
-Para ler o CBZ, escolha a pasta de armazenamento do aplicativo e crie dentro dela:
+## Arquivos e licenças
 
 ```text
-manga/
-  Nome do mangá/
-    Capitulo 01.cbz
+secrets/mangalate_key.txt   senha do app para este servidor
+secrets/provider_key.txt    chaves das IAs (só neste PC)
+.env                        hardware, velocidade e endereços; sem chaves
 ```
 
-Atualize a fonte Local no aplicativo. O CBZ já contém as páginas processadas; não precisa ligar 文A de novo. Confira os resultados antes de apagar os originais.
+O motor é o [manga-image-translator](https://github.com/zyddnys/manga-image-translator) (GPL-3.0), numa versão fixa. Ele roda num serviço interno, e só o gateway com a Chave Mangalate fica acessível pela rede. `engine_compat.py`, `quality.py`, `providers.py` e `seams.py` trazem as correções do Mangalate; `engine_compat.py` é GPL-3.0 ([LICENSE.engine](LICENSE.engine)). Os modelos têm licenças próprias. Use apenas capítulos que você tem direito de usar.
 
-## Resolver problemas
-
-- **Docker não encontrado:** abra Docker Desktop; confira `docker compose version`.
-- **Chave recusada:** confira se colou a chave Mangalate, não a chave da IA; não copie espaços/linhas extras.
-- **Conecta mas demora:** prepare os modelos com `check.py --warmup` e verifique RAM, disco e logs.
-- **GPU não reconhecida:** veja `nvidia-smi`, driver e NVIDIA Container Toolkit. Comece em CPU se não souber.
-- **BYOK HTTP 502:** confira endpoint, compatibilidade, modelo, chave, saldo e limites nos logs do seu servidor. Mensagens upstream não são devolvidas ao telefone porque podem conter dados privados.
-- **Resultado bloqueado:** não relaxe as proteções globalmente só para aprovar uma página. Revise os originais e ajuste uma cópia do perfil com amostras reais.
-- **Ler offline:** prepare os capítulos antes e espere a tradução finalizar; ou importe o CBZ revisado.
-- **Parar:** `docker compose --profile cpu stop` ou `gpu stop`.
-- **Atualizar:** faça backup das chaves e revise mudanças antes de `git pull`; modelos usam volumes persistentes.
-
-## Estado de validação e licenças
-
-As versões do upstream e do pydensecrf estão fixadas no Docker/Colab para evitar alterações silenciosas. Testes de gateway usam backend simulado e verificam autenticação, multipart, perfis, limites, erros, segurança de ZIP e sintaxe do notebook; CI também tenta construir e exercitar o motor CPU real. Não confunda isso com validação de GPU, de conta BYOK paga ou de todo capítulo real.
-
-O motor Docker chama `MangaTranslator` diretamente em um serviço privado. Não usa o despachante HTTP/pickle experimental do upstream, nem exige que você descubra uma terceira chave interna. Somente o gateway autenticado pode ser publicado na rede; mantenha os serviços do motor sem portas públicas.
-
-O adaptador `engine_compat.py` corrige a chamada do token de idioma NLLB, o código de coreano e o uso do cache; ele não ignora traduções vazias como se fossem sucesso. Essa adaptação do motor tem identificação GPL-3.0, preservando a [licença do upstream](https://raw.githubusercontent.com/zyddnys/manga-image-translator/d6de6ab62a7be6afc0d07a3184149cdefbcd32f2/LICENSE); não altera a licença do aplicativo Android.
-
-Na detecção automática, o classificador NLLB considera os idiomas suportados pelo adaptador, evitando que diálogos curtos sejam classificados em um idioma sem mapeamento e pulados silenciosamente. O adaptador também normaliza geometrias OpenCV 4/5 na identificação de painéis e remove seus arquivos temporários, inclusive em falhas.
-
-No BYOK, o adaptador aceita respostas sem estatística de tokens e rejeita conteúdo truncado ou traduções faltantes. Uma rejeição preserva a imagem original no lote e não substitui os balões por respostas vazias no app. Isso é uma proteção de integridade, não uma garantia de qualidade linguística.
-
-As respostas BYOK têm teto de 4096 tokens por pedido e espera de até 180 segundos por trecho. O adaptador não reinicia automaticamente um pedido pago apenas porque demorou; a revisão linguística configurada no perfil ainda pode gerar novas chamadas. Consumo, preço e disponibilidade dependem do seu provedor.
-
-O backend upstream é GPL-3.0 ([licença](https://raw.githubusercontent.com/zyddnys/manga-image-translator/d6de6ab62a7be6afc0d07a3184149cdefbcd32f2/LICENSE)); modelos e fontes têm licenças próprias. Preserve os avisos e revise permissões antes de distribuir um produto comercial. Use somente capítulos próprios/autorizados. “Premium/BYOK” significa infraestrutura/modelo do próprio usuário, não direito de uso irrestrito de qualquer modelo.
+O Docker Desktop pode exigir licença paga em alguns usos empresariais ([termos](https://docs.docker.com/subscription/desktop-license/)).

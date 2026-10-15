@@ -30,10 +30,24 @@ def load_key():
     return key
 
 
-def profile_config(profile, requested):
+SPEEDS = {"quality", "fast"}
+
+
+def apply_speed(config, speed):
+    """'fast': lighter cleaner and smaller working size, for CPUs; 'quality' keeps the profile."""
+    if speed not in SPEEDS:
+        raise ValueError("Velocidade deve ser quality ou fast.")
+    if speed == "fast":
+        config["inpainter"].update({"inpainter": "lama_mpe", "inpainting_size": 1024})
+        config["detector"]["detection_size"] = min(config["detector"].get("detection_size", 1536), 1536)
+    return config
+
+
+def profile_config(profile, requested, speed=None):
     if profile not in {"basic", "byok"}:
         raise ValueError("Perfil deve ser basic ou byok.")
     config = json.loads((ROOT / "profiles" / f"{profile}.json").read_text())
+    apply_speed(config, speed or os.environ.get("MANGALATE_SPEED", "quality"))
     target = requested.get("translator", {}).get("target_lang", "PTB")
     if target not in TARGETS:
         raise ValueError("Idioma de destino não suportado.")
@@ -159,11 +173,20 @@ def create_app(key=None, upstream=None, profile=None, transport=None):
                 raise HTTPException(413, "Página maior que 40 MB.")
         request._body = bytes(raw)
         try:
-            async with request.form(max_files=1, max_fields=1, max_part_size=MAX_BODY) as form:
+            async with request.form(max_files=3, max_fields=1, max_part_size=MAX_BODY) as form:
                 upload = form.get("image")
                 if not isinstance(upload, UploadFile):
                     raise ValueError("Envie o campo image.")
                 data = await upload.read()
+                # Optional neighbouring webtoon slices, used to translate bubbles cut between pages.
+                neighbours = {}
+                for name in ("above", "below"):
+                    extra = form.get(name)
+                    if isinstance(extra, UploadFile):
+                        content = await extra.read()
+                        if content:
+                            await asyncio.to_thread(open_page, content)
+                            neighbours[name] = (f"{name}.png", content, "application/octet-stream")
                 requested = json.loads(str(form.get("config", "{}")))
                 if not isinstance(requested, dict):
                     raise ValueError("Configuração deve ser um objeto JSON.")
@@ -174,13 +197,16 @@ def create_app(key=None, upstream=None, profile=None, transport=None):
         try:
             result = await app.state.client.post(
                 "/translate/with-form/image",
-                files={"image": ("page.png", data, "application/octet-stream")},
+                files={"image": ("page.png", data, "application/octet-stream"), **neighbours},
                 data={"config": json.dumps(config)},
             )
         except httpx.TimeoutException:
             raise HTTPException(504, "O motor demorou demais. Prepare os modelos com check.py --warmup.")
         except httpx.HTTPError:
             raise HTTPException(503, "Motor indisponível. Confira os logs locais do servidor.")
+        if result.status_code == 424:
+            raise HTTPException(502, "Limite gratuito de todos os provedores atingido. "
+                                     "A leitura continua sozinha quando um deles liberar.")
         if result.status_code != 200:
             # Never echo upstream errors containing provider keys, prompt text or paths.
             raise HTTPException(502, "Motor recusou a tradução. No BYOK, confira chave, modelo, saldo e logs.")

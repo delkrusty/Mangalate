@@ -186,12 +186,16 @@ class WebtoonPageHolder(
     private suspend fun setImage() {
         progressIndicator.setProgress(0)
 
-        val streamFn = page?.stream ?: return
+        val currentPage = page ?: return
+        val streamFn = currentPage.stream ?: return
 
         try {
             val buffer = withContext(Dispatchers.IO) { streamFn().use { Buffer().readFrom(it) } }
-            // Mangalate: troca a página pela versão traduzida (com fallback para a original)
-            val translated = app.mangalate.translate.MangalateTranslator.maybeTranslate(context, buffer)
+            // Mangalate: troca a página pela versão traduzida (com fallback para a original);
+            // as vizinhas permitem traduzir balões cortados entre fatias.
+            val translated = app.mangalate.translate.MangalateTranslator.maybeTranslate(context, buffer) {
+                app.mangalate.translate.MangalateNeighbors.of(currentPage)
+            }
             // Splitting and merging decode the image, which is CPU work
             val (source, isAnimated) = withContext(Dispatchers.Default) {
                 val source = process(translated)

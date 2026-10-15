@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: ❌ Help with Extensions
-    url: https://mihon.app/docs/faq/browse/extensions
-    about: For extension-related questions/issues
-  - name: 🖥️ Mihon website
-    url: https://mihon.app/
-    about: Guides, troubleshooting, and answers to common questions
+  - name: 📖 Ajuda do Mangalate
+    url: https://github.com/delkrusty/Mangalate/blob/main/HELP.md
+    about: Dúvidas de uso, conexão com o servidor e problemas comuns
+  - name: 🖥️ Manual do servidor
+    url: https://github.com/delkrusty/Mangalate/blob/main/server/README.md
+    about: Instalar, atualizar e configurar as IAs do servidor

@@ -173,13 +173,17 @@ object MangalateTranslator {
      * devolve a página traduzida; em qualquer falha devolve a original, para a leitura
      * nunca travar.
      */
-    suspend fun maybeTranslate(context: Context, source: Buffer): BufferedSource {
+    suspend fun maybeTranslate(
+        context: Context,
+        source: Buffer,
+        neighbors: (suspend () -> Pair<ByteArray?, ByteArray?>)? = null,
+    ): BufferedSource {
         if (!isEnabled(context)) return source
         if (source.size < 2048) return source
         if (isGifOrAnimated(source)) return source
         return try {
             val bytes = source.peek().readByteArray()
-            val translated = translate(context, bytes)
+            val translated = translate(context, bytes, neighbors = neighbors)
             Buffer().write(translated)
         } catch (e: CancellationException) {
             throw e
@@ -201,7 +205,12 @@ object MangalateTranslator {
     }
 
     /** Traduz os bytes de uma imagem, usando cache em disco e deduplicação. */
-    suspend fun translate(context: Context, image: ByteArray, keepOffline: Boolean = false): ByteArray {
+    suspend fun translate(
+        context: Context,
+        image: ByteArray,
+        keepOffline: Boolean = false,
+        neighbors: (suspend () -> Pair<ByteArray?, ByteArray?>)? = null,
+    ): ByteArray {
         init(context)
         val s = _settings.value
         if (!s.isConfigured) throw IOException("Tradução não configurada")
@@ -230,7 +239,11 @@ object MangalateTranslator {
                         _activeJobs.update { it + 1 }
                         try {
                             val result = when (s.mode) {
-                                TranslateMode.SERVER -> request(s, s.toServerConfig(), image)
+                                TranslateMode.SERVER -> {
+                                    // Vizinhas só no modo servidor: ele emenda balões cortados entre fatias.
+                                    val (above, below) = neighbors?.invoke() ?: (null to null)
+                                    request(s, s.toServerConfig(), image, above, below)
+                                }
                                 else -> LocalPipeline.process(context.applicationContext, image, s) { _status.value = it }
                             }
                             writeCache(context, cacheFile, result)
@@ -251,13 +264,26 @@ object MangalateTranslator {
         return result
     }
 
-    private fun request(s: MangalateSettings, config: String, image: ByteArray): ByteArray {
+    private fun request(
+        s: MangalateSettings,
+        config: String,
+        image: ByteArray,
+        above: ByteArray? = null,
+        below: ByteArray? = null,
+    ): ByteArray {
         val mime = sniffMime(image)
         val ext = mime.substringAfter('/')
         val body = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
             .addFormDataPart("image", "page.$ext", image.toRequestBody(mime.toMediaType()))
             .addFormDataPart("config", config)
+            .apply {
+                for ((name, bytes) in listOf("above" to above, "below" to below)) {
+                    if (bytes == null) continue
+                    val type = sniffMime(bytes)
+                    addFormDataPart(name, "$name.${type.substringAfter('/')}", bytes.toRequestBody(type.toMediaType()))
+                }
+            }
             .build()
         val request = Request.Builder()
             .url(s.normalizedUrl + ENDPOINT)
@@ -271,7 +297,8 @@ object MangalateTranslator {
                     401, 403 -> "Chave Mangalate inválida. Copie o conteúdo de server/secrets/mangalate_key.txt; não use a chave da IA."
                     429 -> "O servidor já está traduzindo uma página. Aguarde antes de tentar de novo."
                     422 -> "Página bloqueada pela proteção de imagem ou configuração. Confira o original e os logs do seu servidor."
-                    502 -> "O motor de tradução falhou. No BYOK, confira modelo, chave e saldo no servidor."
+                    502 -> serverDetail(bytes)?.takeIf { it.startsWith("Limite gratuito") }
+                        ?: "O motor de tradução falhou. Confira a chave e o modelo da IA no servidor (docker compose logs)."
                     503 -> "O processo de tradução ainda está iniciando ou parou. Aguarde e rode check.py --warmup no computador."
                     504 -> "A tradução demorou demais. Prepare os modelos com check.py --warmup antes de abrir o capítulo."
                     else -> null
@@ -287,6 +314,11 @@ object MangalateTranslator {
             return bytes
         }
     }
+
+    /** Mensagem "detail" do servidor, sem expor corpos inesperados. */
+    private fun serverDetail(bytes: ByteArray): String? =
+        runCatching { org.json.JSONObject(String(bytes)).optString("detail") }.getOrNull()
+            ?.takeIf { it.isNotBlank() && it.length < 300 }
 
     private fun authHeaders(s: MangalateSettings): Map<String, String> =
         if (s.accessKey.isBlank()) {
