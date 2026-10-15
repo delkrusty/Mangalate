@@ -24,6 +24,7 @@ jobs:
         run: |
           python -c "from setup import configure;configure('basic','cpu','127.0.0.1')"
           docker compose --profile cpu config --quiet
+          docker compose --profile amd-wsl config --quiet
           MANGALATE_DOMAIN=manga.example.com docker compose -f docker-compose.yml -f docker-compose.public.yml --profile cpu config --quiet
           docker compose --profile cpu build
       - name: Verify upstream imports, start and warm up real CPU pipeline
@@ -46,6 +47,9 @@ jobs:
           # The translation must be fitted to the bubble by lettering.py, not silently fall back.
           grep -E "Bubble layout: [1-9][0-9]* of" batch.log
           ! grep -q "Bubble layout skipped" batch.log
+          # The page is cleaned while the translation runs (speed.py), with the real engine.
+          grep -E "Tempos: .*limpeza_antecipada=" batch.log
+          ! grep -q "Limpeza antecipada falhou" batch.log
           docker compose --profile cpu exec -T translator-cpu python -c "import json; from pathlib import Path; d=Path('/tmp/batch-review/diagnostico/0001'); assert all((d/n).exists() for n in ('1-original.png','3-regioes.png','regioes.json')), list(d.iterdir()); print(json.load(open(d/'regioes.json')))"
           docker cp "$worker":/tmp/batch-review/review.json review/batch-review.json
           python -c "import json; r=json.load(open('review/batch-review.json')); assert r and r[0]['status']=='review',r; assert any(x['translation'].strip() and x['translation'].lower()!=x['original'].lower() for x in r[0]['regions']),r"

@@ -16,12 +16,13 @@ IMAGES = {
     "cpu": ("cpu", "mangalate-translator-cpu:local", "translator-cpu"),
     "gpu": ("gpu", "mangalate-translator-gpu:local", "translator-gpu"),
     "amd-rocm": ("rocm", "mangalate-translator-amd:local", "translator-amd"),
+    "amd-wsl": ("rocm", "mangalate-translator-amd:local", "translator-amd-wsl"),
 }
 # Files whose copy inside the running server must equal the one in this folder.
 CHECKED = {"colab/batch.py": "/mangalate/batch.py", "engine_compat.py": "/mangalate/engine_compat.py",
            "providers.py": "/mangalate/providers.py", "seams.py": "/mangalate/seams.py",
            "quality.py": "/mangalate/quality.py",
-           "lettering.py": "/mangalate/lettering.py", "memory.py": "/mangalate/memory.py",
+           "lettering.py": "/mangalate/lettering.py", "memory.py": "/mangalate/memory.py", "speed.py": "/mangalate/speed.py",
            "core.py": "/mangalate/core.py"}
 
 

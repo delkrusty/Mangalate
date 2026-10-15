@@ -323,6 +323,35 @@ class ServerTest(unittest.TestCase):
         report = detect(system="Linux", kfd=True, nvidia=False)
         self.assertEqual(next(x for x in report["backends"] if x["id"] == "amd-rocm")["state"], "experimental_candidate")
 
+    def test_amd_on_windows_is_offered_only_inside_wsl_with_rocdxg(self):
+        state = lambda report: next(x for x in report["backends"] if x["id"] == "amd-wsl")["state"]
+        self.assertEqual(state(detect(system="Windows", kfd=False, nvidia=False, dxg=False)), "not_detected")
+        self.assertEqual(state(detect(system="Linux", kfd=False, nvidia=False, dxg=True)), "experimental_candidate")
+
+    def test_amd_choices_stop_with_the_next_step(self):
+        from setup import check_amd
+        everything = lambda path: True
+        check_amd("amd-wsl", "Linux", everything)
+        check_amd("cpu", "Windows", lambda path: False)
+        with self.assertRaises(SystemExit) as stop:
+            check_amd("amd-wsl", "Windows", everything)
+        self.assertIn("Ubuntu do WSL2", str(stop.exception))
+        with self.assertRaises(SystemExit) as stop:
+            check_amd("amd-wsl", "Linux", lambda path: path != "/opt/rocm/lib/librocdxg.so")
+        self.assertIn("librocdxg", str(stop.exception))
+        with self.assertRaises(SystemExit):
+            check_amd("amd-rocm", "Windows", everything)
+
+    def test_amd_wsl_service_gets_the_wsl_card_and_rebuilds(self):
+        from rebuild import IMAGES, commands
+        compose = (Path(__file__).resolve().parents[1] / "docker-compose.yml").read_text()
+        service = compose.split("translator-amd-wsl:", 1)[1].split("\nsecrets:", 1)[0]
+        for needed in ("/dev/dxg", "librocdxg.so", "libdxcore.so", "HSA_ENABLE_DXG_DETECTION", "memoria:/data/memoria"):
+            self.assertIn(needed, service)
+        self.assertIn("amd-wsl", IMAGES)
+        steps, name = commands("amd-wsl")
+        self.assertEqual(name, "translator-amd-wsl")
+
 
 if __name__ == "__main__":
     unittest.main()

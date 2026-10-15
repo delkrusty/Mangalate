@@ -12,6 +12,19 @@ from fastapi.responses import Response
 from gateway import MAX_BODY, open_page
 
 
+def graphics_card():
+    """True when PyTorch reaches the card; otherwise say so and use the processor."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            print(f"Placa de vídeo em uso: {torch.cuda.get_device_name(0)}", flush=True)
+            return True
+    except Exception as exc:
+        print(f"Placa de vídeo não respondeu ({type(exc).__name__}).", flush=True)
+    print("Placa de vídeo não encontrada pelo servidor; usando o processador.", flush=True)
+    return False
+
+
 def create_core(engine=None, config_factory=None):
     @asynccontextmanager
     async def lifespan(app):
@@ -21,6 +34,8 @@ def create_core(engine=None, config_factory=None):
             apply_compatibility()
             from manga_translator import MangaTranslator, Config
             gpu = os.environ.get("MANGALATE_USE_GPU", "false").lower() == "true"
+            if gpu:
+                gpu = graphics_card()
             limited = gpu and os.environ.get("MANGALATE_ACCELERATOR") == "amd-rocm"
             engine = MangaTranslator({"use_gpu": gpu and not limited,
                                      "use_gpu_limited": limited, "verbose": False,
@@ -83,6 +98,9 @@ def create_core(engine=None, config_factory=None):
                     print(f"Memória da obra: {type(exc).__name__}", flush=True)
                 result = finish(strip, ctx.result, getattr(ctx, "text_regions", None) if strip.stitched else None,
                                 seam_cache, config)
+                from speed import summary
+                if getattr(ctx, "mangalate_timings", None):
+                    print(f"Tempos: {summary(ctx.mangalate_timings)}", flush=True)
                 if strip.stitched:
                     print(f"Seams: above={strip.above is not None} below={strip.below is not None}", flush=True)
                 output = io.BytesIO()
