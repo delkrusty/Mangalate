@@ -39,7 +39,7 @@ Para usar o servidor, siga o [manual do servidor](server/README.md); a escolha d
 
 - Letras muito estilizadas, japonês vertical, balões abertos e texto sobre o desenho podem sair errados ou ficar no original. Confira o resultado antes de compartilhar.
 - O servidor deixa no original o texto que está sobre a arte, em vez de apagar o desenho, e marca essas páginas para revisão.
-- Aceleração por placa de vídeo no servidor: NVIDIA (CUDA). AMD/ROCm é experimental e só no Linux; nos demais casos, o servidor usa a CPU.
+- Aceleração por placa de vídeo no servidor: NVIDIA (CUDA). AMD é experimental: Radeon RX 7000 ou mais nova no Windows (pelo WSL2) ou ROCm no Linux; nos demais casos, o servidor usa a CPU.
 - Com a tradução ligada, o renderizador experimental do Mihon é trocado pelo leitor clássico.
 
 ## Compilar
