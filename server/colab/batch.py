@@ -196,6 +196,10 @@ async def run(args):
                             seam_cache, salt)
             entry["seams"] = {"above": strip.above is not None, "below": strip.below is not None}
             entry["seconds"] = round(time.monotonic() - started, 1)
+            from speed import summary
+            if getattr(ctx, "mangalate_timings", None):
+                entry["timings"] = ctx.mangalate_timings
+                print(f"  Tempos: {summary(ctx.mangalate_timings)}", flush=True)
             entry.update(inspect_result(original, result))
             pairs = [
                 {"original": str(getattr(r, "text_raw", r.text)), "translation": str(r.translation)}

@@ -713,4 +713,6 @@ def apply_compatibility():
             if os.environ.get("MANGALATE_BUBBLE_LAYOUT", "true").lower() != "false":
                 import manga_translator.rendering as rendering
                 bubble_layout(rendering, text_render)
+        from speed import install
+        install(MangaTranslator)
         MangaTranslator._mangalate_compat_applied = True

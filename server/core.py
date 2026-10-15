@@ -83,6 +83,9 @@ def create_core(engine=None, config_factory=None):
                     print(f"Memória da obra: {type(exc).__name__}", flush=True)
                 result = finish(strip, ctx.result, getattr(ctx, "text_regions", None) if strip.stitched else None,
                                 seam_cache, config)
+                from speed import summary
+                if getattr(ctx, "mangalate_timings", None):
+                    print(f"Tempos: {summary(ctx.mangalate_timings)}", flush=True)
                 if strip.stitched:
                     print(f"Seams: above={strip.above is not None} below={strip.below is not None}", flush=True)
                 output = io.BytesIO()
