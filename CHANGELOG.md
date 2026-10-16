@@ -24,6 +24,7 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 - Gagueira mantém a palavra em minúscula ("E-eu tô com medo", não "E-Eu").
 - "Você deve estar preocupada" sem nenhuma mulher na página também pede a tradução de novo.
 - Quando a tradução diz "não" e o original não tem negação ("I WANT TO FIGHT IN THE WAR!" virando "Eu não quero lutar na guerra!"), o servidor pede de novo. A checagem de negação também deixou de confundir palavras como "WANT" com "N'T".
+- Balões brancos pequenos que o detector não viu ("MUSCLE?", "I SEE.", "HOW'S THAT?") são achados pelo formato: área branca fechada com linhas de letras no meio. Eles são traduzidos e limpos como os outros. Um som desenhado num contorno fechado ("GRAB") fica na arte.
 
 ## 0.5.6
 

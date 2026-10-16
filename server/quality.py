@@ -623,6 +623,122 @@ def stair_lines(pixels, x, y, height):
     return boxes
 
 
+# White bubbles the detector did not see ------------------------------------------
+
+SCAN_WHITE = 200          # bubble interior is brighter than this
+SCAN_INK = 110            # letters are darker than this
+SCAN_AREA = (0.0015, 0.08)  # bubble area, as a fraction of the page
+SCAN_SOLIDITY = 0.85      # filled outline over its convex hull: round or square, not a jagged burst
+SCAN_INK_SHARE = (0.01, 0.25)
+SCAN_CENTRE = (0.25, 0.3)  # text block centre within this share of the bubble width / height
+
+
+def _text_rows(ink):
+    """Line boxes when ``ink`` looks like rows of letters, else None.
+
+    Letters are components of about one height, side by side in rows with no
+    wide gap, rows stacked one under the other.  A face, hair or a hatched
+    shadow fails one of those.
+    """
+    n, _, stats, _ = cv2.connectedComponentsWithStats(ink.astype(np.uint8), connectivity=8)
+    comps = [tuple(int(v) for v in stats[k]) for k in range(1, n) if stats[k][4] >= 6]
+    if len(comps) < 2:
+        return None
+    med = float(np.median([c[3] for c in comps]))
+    letters = [c for c in comps if 0.5 * med <= c[3] <= 1.6 * med and c[2] <= 2.5 * med]
+    if sum(c[4] for c in letters) < 0.7 * sum(c[4] for c in comps):
+        return None
+    rows = []
+    for c in sorted(letters, key=lambda c: c[1] + c[3] / 2):
+        cy = c[1] + c[3] / 2
+        for row in rows:
+            if abs(row["cy"] - cy) <= 0.45 * med:
+                row["c"].append(c)
+                break
+        else:
+            rows.append({"cy": cy, "c": [c]})
+    out, words = [], 0
+    for row in rows:
+        cs = sorted(row["c"], key=lambda c: c[0])
+        gaps = [b[0] - (a[0] + a[2]) for a, b in zip(cs, cs[1:])]
+        if gaps and max(gaps) > 1.5 * med:
+            continue
+        words += len(cs) >= 2
+        out.append((min(c[0] for c in cs), min(c[1] for c in cs),
+                    max(c[0] + c[2] for c in cs), max(c[1] + c[3] for c in cs)))
+    if not words:
+        return None
+    out.sort(key=lambda b: b[1])
+    if any(b[1] - a[3] > 1.2 * med for a, b in zip(out, out[1:])):
+        return None
+    return out
+
+
+def bubble_text_lines(image, boxes):
+    """Text lines inside white bubbles that no detected box touches.
+
+    Grand Blue pp. 19/27: small bubbles "MUSCLE?", "I SEE.", "HOW'S THAT?" were
+    missing from the detector mask, so they stayed in English.  A closed white
+    area of bubble size, not touching the page edge and not jagged, whose dark
+    pixels form centred rows of letters, is taken as an undetected bubble.
+    Returns a list of (bubble box, line boxes, letter pixel mask of the page size).
+    """
+    gray = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2GRAY)
+    h, w = gray.shape
+    raw = (gray > SCAN_WHITE).astype(np.uint8)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+    opened = cv2.morphologyEx(raw, cv2.MORPH_OPEN, kernel)
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(opened, connectivity=4)
+    found = []
+    for i in range(1, n):
+        x, y, bw, bh, area = (int(v) for v in stats[i])
+        if not SCAN_AREA[0] * h * w <= area <= SCAN_AREA[1] * h * w:
+            continue
+        if x == 0 or y == 0 or x + bw >= w or y + bh >= h:
+            continue
+        # Back to the full white area the opening trimmed (thin strips between letters).
+        g = 6
+        x0, y0, x1, y1 = max(0, x - g), max(0, y - g), min(w, x + bw + g), min(h, y + bh + g)
+        if any(min(x1, b[2]) > max(x0, b[0]) and min(y1, b[3]) > max(y0, b[1]) for b in boxes):
+            continue
+        comp = cv2.dilate((labels[y0:y1, x0:x1] == i).astype(np.uint8), kernel) & raw[y0:y1, x0:x1]
+        contours, _ = cv2.findContours(comp, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        outline = max(contours, key=cv2.contourArea)
+        filled = cv2.drawContours(np.zeros_like(comp), [outline], -1, 1, -1)
+        if filled.sum() < SCAN_SOLIDITY * cv2.contourArea(cv2.convexHull(outline)):
+            continue
+        inner = cv2.erode(filled, np.ones((7, 7), np.uint8)) > 0
+        ink = inner & (comp == 0) & (gray[y0:y1, x0:x1] < SCAN_INK)
+        if not SCAN_INK_SHARE[0] <= ink.sum() / max(1, filled.sum()) <= SCAN_INK_SHARE[1]:
+            continue
+        rows = _text_rows(ink)
+        if not rows:
+            continue
+        cw, ch = x1 - x0, y1 - y0
+        tx = (min(r[0] for r in rows) + max(r[2] for r in rows)) / 2
+        ty = (rows[0][1] + rows[-1][3]) / 2
+        if abs(tx - cw / 2) > SCAN_CENTRE[0] * cw or abs(ty - ch / 2) > SCAN_CENTRE[1] * ch:
+            continue
+        letters = np.zeros((h, w), bool)
+        letters[y0:y1, x0:x1] = ink
+        found.append(((x0, y0, x1, y1), [(x0 + a, y0 + b, x0 + c, y0 + d) for a, b, c, d in rows], letters))
+    return found
+
+
+def reads_as_speech(text):
+    """True when a scanned bubble's OCR text reads as an English line, not a drawn sound.
+
+    A line has a common English word and either two words or end punctuation:
+    "MUSCLE?", "I SEE." yes; "GRAB" (a sound in a jagged box) or "REEE" no.
+    """
+    common, _ = english_words()
+    words = re.findall(r"[A-Za-z']+", text or "")
+    if not words or not any(len(w) >= 2 and (w.lower() in common or w.lower().replace("'", "") in _contractions(common))
+                            for w in words):
+        return False
+    return len(words) >= 2 or bool(re.search(r"[.!?…]\W*$", text.strip()))
+
+
 # Words that show a woman or girl is on the page (speaker or listener).
 FEMALE_EVIDENCE = re.compile(
     r"\b(?:she|her|hers|herself|girl|girls|woman|women|lady|ladies|queen|princess|sister|sis|mother|mom|"

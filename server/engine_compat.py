@@ -459,6 +459,30 @@ def fix_ocr(regions):
         print(f"OCR fix: {total} word(s)", flush=True)
 
 
+def scanned_sounds(regions, bubbles):
+    """Split off text found only by the bubble scan that does not read as a line of speech.
+
+    The scan also catches a sound drawn in a closed shape ("GRAB", "REEE"); those
+    stay as drawn.  Returns (kept regions, regions left as art).
+    """
+    from quality import reads_as_speech
+    if not bubbles:
+        return regions, []
+    kept, drawn = [], []
+    for region in regions:
+        x0, y0, x1, y1 = (int(v) for v in region.xyxy)
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        inside = any(b[0] <= cx <= b[2] and b[1] <= cy <= b[3] for b in bubbles)
+        if inside and not reads_as_speech(getattr(region, "text", "")):
+            region.mangalate_background = {"kind": "efeito_sonoro"}
+            drawn.append(region)
+        else:
+            kept.append(region)
+    if drawn:
+        print(f"Bubble scan: {len(drawn)} kept as art: {[getattr(r, 'text', '') for r in drawn]}", flush=True)
+    return kept, drawn
+
+
 def drop_duplicates(regions):
     """A second, worse reading of the same letters is dropped (quality.duplicate_regions)."""
     from quality import duplicate_regions
@@ -491,6 +515,8 @@ def classify_regions(original_merge):
                 print(f"Region check: {len(context_only)} only in the neighbouring pages, skipped", flush=True)
             regions = join_split_blocks(regions, ctx.img_rgb)
             regions = drop_duplicates(regions)
+            regions, drawn = scanned_sounds(regions, getattr(ctx, "mangalate_scanned", []))
+            ctx.mangalate_preserved.extend(drawn)
         if not regions or not protect_art(config):
             fix_ocr(regions or [])
             return regions
@@ -554,9 +580,10 @@ def repair_textlines(original_detect):
     """
     async def detect(self, config, ctx):
         result = await original_detect(self, config, ctx)
-        if not result or not result[0] or result[1] is None:
+        if not result or result[1] is None:
             return result
-        textlines, mask_raw, mask = result[0], result[1], result[2]
+        textlines, mask_raw, mask = list(result[0] or []), result[1], result[2]
+        import cv2
         import numpy as np
         from quality import repair_lines, _box
         from manga_translator.utils import Quadrilateral
@@ -573,6 +600,26 @@ def repair_textlines(original_detect):
                 seen = seen | bubble_glyphs(np.asarray(image), box, box[3] - box[1], near=NEAR_LINES)
         repaired, changes = repair_lines(seen.astype(np.uint8) * 255, boxes)
         ctx.mangalate_line_repairs = [{"tipo": kind, "antes": before, "depois": after} for kind, before, after in changes]
+        # Small white bubbles the detector did not see at all.
+        scanned = []
+        if image is not None:
+            from quality import bubble_text_lines
+            try:
+                scanned = bubble_text_lines(np.asarray(image), [_box(line.pts) for line in textlines])
+            except Exception as exc:  # never lose a page over this
+                print(f"Bubble scan skipped: {type(exc).__name__}", flush=True)
+        ctx.mangalate_scanned = [bubble for bubble, _, _ in scanned]
+        if scanned:
+            mask_raw = np.asarray(mask_raw).copy()
+            for bubble, rows, letters in scanned:
+                mask_raw[cv2.dilate(letters.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0] = 255
+                for x0, y0, x1, y1 in rows:
+                    if x1 - x0 < y1 - y0:  # a one-letter row ("I") stays a horizontal line
+                        pad = (y1 - y0 - (x1 - x0)) // 2 + 1
+                        x0, x1 = max(bubble[0], x0 - pad), min(bubble[2], x1 + pad)
+                    changes.append(("bubble", None, (x0, y0, x1, y1)))
+                    repaired.append(((x0, y0, x1, y1), None))
+            print(f"Bubble scan: {len(scanned)} bubble(s) at {ctx.mangalate_scanned}", flush=True)
         if not changes:
             return result
         lines = [line for i, line in enumerate(textlines) if i not in set(horizontal)]
@@ -585,7 +632,8 @@ def repair_textlines(original_detect):
             pts = np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=np.int64)
             lines.append(Quadrilateral(pts, "", original.prob if original is not None else 1.0))
         split = sum(1 for kind, _, _ in changes if kind == "split")
-        print(f"Line repair: split={split} added={len(changes) - split}", flush=True)
+        scan = sum(1 for kind, _, _ in changes if kind == "bubble")
+        print(f"Line repair: split={split} added={len(changes) - split - scan} scanned={scan}", flush=True)
         return (lines, mask_raw, mask) + tuple(result[3:])
     return detect
 

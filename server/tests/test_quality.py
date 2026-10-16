@@ -529,3 +529,90 @@ class AddedNegationTest(unittest.TestCase):
         for source, text in (("COUNT ME IN!", "Não quero ficar de fora!"), ("I DONT WANT IT", "Não quero."),
                              ("AS IF...", "Até parece..."), ("IM UNFAMILIAR WITH IT", "Não conheço.")):
             self.assertFalse(quality.added_negation(source, text), source)
+
+
+class BubbleScanTest(unittest.TestCase):
+    """Small white bubbles the detector missed (Grand Blue pp. 19/27)."""
+
+    def page(self, text="I SEE.", shape="ellipse"):
+        from PIL import Image, ImageDraw, ImageFont
+        img = Image.new("RGB", (700, 700), (150, 150, 150))
+        d = ImageDraw.Draw(img)
+        if shape == "ellipse":
+            d.ellipse((250, 250, 450, 400), fill="white", outline="black", width=3)
+        else:  # a jagged burst
+            pts = []
+            for k in range(24):
+                r = 110 if k % 2 else 60
+                a = np.pi * k / 12
+                pts.append((350 + r * np.cos(a), 325 + r * np.sin(a)))
+            d.polygon(pts, fill="white", outline="black")
+        font = ImageFont.truetype(str(Path(__file__).resolve().parents[1] / "fonts" / "ComicNeue-Bold.ttf"), 26)
+        w = d.textlength(text, font=font)
+        d.text((350 - w / 2, 312), text, fill="black", font=font)
+        return np.array(img)
+
+    def test_finds_text_in_undetected_bubble(self):
+        found = quality.bubble_text_lines(self.page(), [])
+        self.assertEqual(len(found), 1)
+        bubble, rows, letters = found[0]
+        self.assertEqual(len(rows), 1)
+        x0, y0, x1, y1 = rows[0]
+        self.assertTrue(300 < x0 < 350 < x1 < 400 and 300 < y0 < y1 < 350, rows[0])
+        self.assertTrue(letters[y0:y1, x0:x1].any())
+
+    def test_bubble_with_a_detected_box_is_skipped(self):
+        self.assertEqual(quality.bubble_text_lines(self.page(), [(320, 310, 380, 340)]), [])
+
+    def test_jagged_burst_and_empty_bubble_are_skipped(self):
+        self.assertEqual(quality.bubble_text_lines(self.page(shape="burst"), []), [])
+        self.assertEqual(quality.bubble_text_lines(self.page(text=""), []), [])
+
+    def test_reads_as_speech(self):
+        for text in ("MUSCLE?", "I SEE.", "HOW'S THAT?", "WHAT ARE YOU"):
+            self.assertTrue(quality.reads_as_speech(text), text)
+        for text in ("GRAB", "REEE", "", "ZZZT!"):
+            self.assertFalse(quality.reads_as_speech(text), text)
+
+    def test_hook_adds_scanned_lines_and_paints_mask(self):
+        import asyncio
+        import types
+        from types import SimpleNamespace
+        from engine_compat import repair_textlines
+
+        class Quad:
+            def __init__(self, pts, text, prob):
+                self.pts, self.text, self.prob, self.direction = np.asarray(pts), text, prob, "h"
+        fake = types.ModuleType("manga_translator.utils")
+        fake.Quadrilateral = Quad
+        package = types.ModuleType("manga_translator")
+        package.utils = fake
+        image = self.page()
+        mask = np.zeros(image.shape[:2], np.uint8)
+        async def detect(self, config, ctx):
+            return [], mask, None
+        ctx = SimpleNamespace(img_rgb=image)
+        saved = {k: sys.modules.get(k) for k in ("manga_translator", "manga_translator.utils")}
+        sys.modules.update({"manga_translator": package, "manga_translator.utils": fake})
+        try:
+            result = asyncio.run(repair_textlines(detect)(None, None, ctx))
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    sys.modules.pop(key, None)
+                else:
+                    sys.modules[key] = value
+        self.assertEqual(len(result[0]), 1)
+        self.assertEqual(len(ctx.mangalate_scanned), 1)
+        self.assertTrue(result[1].any())
+        self.assertFalse(mask.any())
+
+    def test_scanned_sound_stays_as_art(self):
+        from types import SimpleNamespace
+        from engine_compat import scanned_sounds
+        speech = SimpleNamespace(xyxy=(300, 310, 400, 340), text="I SEE.")
+        sound = SimpleNamespace(xyxy=(300, 310, 400, 340), text="GRAB")
+        outside = SimpleNamespace(xyxy=(10, 10, 60, 40), text="GRAB")
+        kept, drawn = scanned_sounds([speech, sound, outside], [(250, 250, 450, 400)])
+        self.assertEqual(kept, [speech, outside])
+        self.assertEqual(drawn, [sound])
