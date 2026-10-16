@@ -18,6 +18,7 @@ provider.  Keys never leave the server and are never logged.
 import json
 import os
 import time
+from pathlib import Path
 from urllib.parse import urlparse
 
 PRESETS = {
@@ -176,7 +177,11 @@ class ProviderPool:
         elif kind == "config":
             self.rest(name, LONG_REST, "chave, saldo ou modelo recusado — confira a chave rodando py setup.py")
         else:
-            self.rest(name, SHORT_REST, type(exc).__name__)
+            # Where it broke (file:line), never the message: it may carry the provider's body.
+            import traceback
+            frames = traceback.extract_tb(exc.__traceback__)
+            where = f" em {Path(frames[-1].filename).name}:{frames[-1].lineno}" if frames else ""
+            self.rest(name, SHORT_REST, type(exc).__name__ + where)
 
     async def run(self, attempt):
         """Call attempt(provider) on each available provider until one succeeds."""

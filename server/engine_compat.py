@@ -212,13 +212,13 @@ async def request_byok_translation(self, to_lang, prompt, client=None, model=Non
         temperature=self.temperature,
         top_p=self.top_p,
     )
-    if not response.choices:
+    if isinstance(response, (str, bytes)) or not getattr(response, "choices", None):
         raise ValueError("BYOK returned no choices")
     choice = response.choices[0]
-    content = choice.message.content
+    content = getattr(getattr(choice, "message", None), "content", None)
     if not isinstance(content, str) or not content.strip():
         raise ValueError("BYOK returned empty content")
-    if choice.finish_reason == "length":
+    if getattr(choice, "finish_reason", None) == "length":
         raise ValueError("BYOK answer cut by max_tokens")
     usage = response.usage
     self.token_count_last = (getattr(usage, "total_tokens", 0) or 0) if usage else 0
