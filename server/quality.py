@@ -878,7 +878,7 @@ def bubble_text_lines(image, boxes):
     return found
 
 
-def reads_as_speech(text):
+def reads_as_speech(text, several_rows=False):
     """True when a scanned bubble's OCR text reads as an English line, not a drawn sound.
 
     A line has a common English word and either two words or end punctuation:
@@ -889,7 +889,7 @@ def reads_as_speech(text):
     if not words or not any(len(w) >= 2 and (w.lower() in common or w.lower().replace("'", "") in _contractions(common))
                             for w in words):
         return False
-    return len(words) >= 2 or bool(re.search(r"[.!?…]\W*$", text.strip()))
+    return several_rows or len(words) >= 2 or bool(re.search(r"[.!?…-]\W*$", text.strip()))
 
 
 # Words that show a woman or girl is on the page (speaker or listener).
@@ -995,7 +995,7 @@ def translation_problems(sources, translations, glossary=(), earlier=""):
 # What the OCR read -> what the letterer drew.  Only words the list does not know
 # are touched, and only when exactly one common word comes out.
 OCR_CONFUSIONS = (("LI", "U"), ("LJ", "U"), ("IJ", "U"), ("E", "F"), ("F", "E"), ("O", "D"), ("O", "C"), ("O", "Q"),
-                  ("C", "D"), ("I", "D"), ("I", "L"), ("L", "I"), ("0", "O"), ("1", "I"), ("5", "S"),
+                  ("C", "D"), ("I", "D"), ("I", "L"), ("I", "T"), ("L", "I"), ("0", "O"), ("1", "I"), ("5", "S"),
                   ("7", "T"), ("8", "B"), ("/", "I"), ("|", "I"), ("VV", "W"), ("RN", "M"))
 _WORDS = None
 
@@ -1022,9 +1022,15 @@ def english_words():
     return _WORDS
 
 
+# Comic speech the dictionary does not list; never "fixed" into another word ("LIL" -> "LII").
+SLANG = {"lil", "gonna", "wanna", "gotta", "ya", "yall", "kinda", "sorta", "dunno", "nah", "yup", "nope",
+         "cmon", "em", "outta", "lotta", "gimme", "lemme", "whatcha", "gotcha", "betcha", "dude", "bro", "sis",
+         "goin", "doin", "nothin", "somethin", "huh", "heh", "hmph", "tch", "ugh", "oi", "eh", "uh", "um", "hm"}
+
+
 def _known(word, common, names):
     w = word.lower()
-    return w in common or w in names or w in _contractions(common)
+    return w in common or w in names or w in SLANG or w in _contractions(common)
 
 
 def _contractions(common, cache={}):
@@ -1097,10 +1103,11 @@ def fix_ocr_words(text, keep=()):
             changed += 1
             return "I'M"
         core = word.strip("'")
-        if len(core) < (2 if noisy else 4) or _known(core.replace("'", ""), common, names):
+        if len(core) < (2 if noisy else 3) or _known(core.replace("'", ""), common, names):
             return word
         for depth in (1, 2) if len(core) >= 6 else (1,):
-            hits = {c for c in _ocr_candidates(core, depth) if c.lower() in common}
+            hits = {c for c in _ocr_candidates(core, depth)
+                    if c.lower() in common and not re.fullmatch(r"[IVXLCDM]+", c)}
             if len(hits) == 1:
                 changed += 1
                 return word.replace(core, hits.pop())

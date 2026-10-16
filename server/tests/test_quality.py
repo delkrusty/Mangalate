@@ -725,3 +725,16 @@ class BrokenWordTest(unittest.TestCase):
     def test_real_words_kept_apart(self):
         for text in ("WALK IN TO THE ROOM", "A LOT OF FUN", "THE KING IS DEAD", "I CAN SING", "WAIT-- WHAT"):
             self.assertEqual(quality.fix_ocr_words(text), (text, 0))
+
+
+class OuroSevenTest(unittest.TestCase):
+    def test_short_ocr_mixups(self):
+        self.assertEqual(quality.fix_ocr_words("IWO BODIES IN PAIN")[0], "TWO BODIES IN PAIN")
+        self.assertEqual(quality.fix_ocr_words("ITLL PASS RIGHI THROUGH--")[0], "ITLL PASS RIGHT THROUGH--")
+        for text in ("A LIL?", "I GOTTA GO", "YOU AND THE"):
+            self.assertEqual(quality.fix_ocr_words(text), (text, 0))
+
+    def test_two_rows_of_letters_are_speech(self):
+        self.assertFalse(quality.reads_as_speech("ASS"))
+        self.assertTrue(quality.reads_as_speech("ASS", several_rows=True))
+        self.assertFalse(quality.reads_as_speech("REEE", several_rows=True))

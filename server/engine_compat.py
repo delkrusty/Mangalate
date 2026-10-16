@@ -491,21 +491,25 @@ def fix_ocr(regions):
         print(f"OCR fix: {total} word(s)", flush=True)
 
 
-def scanned_sounds(regions, bubbles):
+def scanned_sounds(regions, bubbles, rows=None):
     """Split off text found only by the bubble scan that does not read as a line of speech.
 
     The scan also catches a sound drawn in a closed shape ("GRAB", "REEE"); those
-    stay as drawn.  Returns (kept regions, regions left as art).
+    stay as drawn.  Two or more rows of letters with a common word are speech even
+    when the OCR kept one word (Grand Blue p23: "ASS- / HOLE..." read as "ASS").
+    Returns (kept regions, regions left as art).
     """
     from quality import reads_as_speech
     if not bubbles:
         return regions, []
+    rows = list(rows or [1] * len(bubbles))
     kept, drawn = [], []
     for region in regions:
         x0, y0, x1, y1 = (int(v) for v in region.xyxy)
         cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-        inside = any(b[0] <= cx <= b[2] and b[1] <= cy <= b[3] for b in bubbles)
-        if inside and not reads_as_speech(getattr(region, "text", "")):
+        found = [k for k, b in enumerate(bubbles) if b[0] <= cx <= b[2] and b[1] <= cy <= b[3]]
+        text = getattr(region, "text", "")
+        if found and not reads_as_speech(text, several_rows=rows[found[0]] >= 2):
             region.mangalate_background = {"kind": "efeito_sonoro"}
             drawn.append(region)
         else:
@@ -547,7 +551,8 @@ def classify_regions(original_merge):
                 print(f"Region check: {len(context_only)} only in the neighbouring pages, skipped", flush=True)
             regions = join_split_blocks(regions, ctx.img_rgb)
             regions = drop_duplicates(regions)
-            regions, drawn = scanned_sounds(regions, getattr(ctx, "mangalate_scanned", []))
+            regions, drawn = scanned_sounds(regions, getattr(ctx, "mangalate_scanned", []),
+                                            getattr(ctx, "mangalate_scanned_rows", None))
             ctx.mangalate_preserved.extend(drawn)
         if not regions or not protect_art(config):
             fix_ocr(regions or [])
@@ -656,6 +661,7 @@ def repair_textlines(original_detect):
             except Exception as exc:  # never lose a page over this
                 print(f"Bubble scan skipped: {type(exc).__name__}", flush=True)
         ctx.mangalate_scanned = [bubble for bubble, _, _ in scanned]
+        ctx.mangalate_scanned_rows = [len(rows) for _, rows, _ in scanned]
         if scanned:
             mask_raw = np.asarray(mask_raw).copy()
             for bubble, rows, letters in scanned:
@@ -897,6 +903,8 @@ def validate_page_translations(original_translate):
                     # The (m)/(f) marks belong to the terms line only (memory.TERMS_INSTRUCTION);
                     # Grand Blue p42 got "Bob (m)" written on the page.
                     region.translation = re.sub(r"\s*\((?:m|f)\)(?!\w)", "", region.translation)
+                    # Model control tokens that leaked into the answer (Grand Blue p22: "Kouhei: 5 pts. <|10|").
+                    region.translation = re.sub(r"\s*<\|[^<>|]{0,20}(?:\|>?|>|$)", "", region.translation)
                     own = names | source_names(getattr(region, "text", ""), region.translation)
                     fixed = sentence_case(region.translation, own)
                     fixed = tidy_start(fixed, getattr(region, "text", ""), own)
