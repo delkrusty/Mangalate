@@ -519,3 +519,13 @@ class OuroThreeTest(unittest.TestCase):
             self.assertTrue(quality.english_sound_effect(sfx), sfx)
         for word in ("BOB", "NO!", "HELLO", "TOKITA", "I JUST CANT GET IT!"):
             self.assertFalse(quality.english_sound_effect(word), word)
+
+
+class AddedNegationTest(unittest.TestCase):
+    def test_added_negation_asks_again(self):
+        # TBATE 238 p42: "I WANT TO FIGHT IN THE WAR!" -> "Eu não quero lutar na guerra!"
+        notes = quality.translation_problems(["I WANT TO FIGHT IN THE WAR!"], ["Eu não quero lutar na guerra!"])
+        self.assertTrue(any("no negation" in n for n in notes))
+        for source, text in (("COUNT ME IN!", "Não quero ficar de fora!"), ("I DONT WANT IT", "Não quero."),
+                             ("AS IF...", "Até parece..."), ("IM UNFAMILIAR WITH IT", "Não conheço.")):
+            self.assertFalse(quality.added_negation(source, text), source)

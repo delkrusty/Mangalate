@@ -640,14 +640,32 @@ FEMININE_SELF = re.compile(
 # A clear negation in the English line, and any negation in Portuguese.  Questions
 # with n't ("isn't it great?", "why don't we") and idioms that lose the "not"
 # ("can't wait") are left out.
+# "DON'T", "DIDNT", "CAN'T" with or without the apostrophe, but not "WANT" or "EVENT".
+NT = r"(?:do|does|did|is|are|was|were|has|have|had|could|would|should|must|might|need|ca|wo|ai|sha)n'?t"
 SOURCE_NEGATION = re.compile(
-    r"\b(?:not|never|nobody|nothing|none|neither|nor|no one|cannot|without)\b|n'?t\b|\bno\s+\w", re.I)
+    r"\b(?:not|never|nobody|nothing|none|neither|nor|no one|cannot|without)\b|\b" + NT + r"\b|\bno\s+\w", re.I)
 NEGATION_IDIOMS = re.compile(
-    r"\b\w+n'?t\b[^.!?]*\?|can'?t\s+wait|"
+    r"\b" + NT + r"\b[^.!?]*\?|can'?t\s+wait|"
     r"nothing\s+but|not\s+only|no\s+(?:wonder|doubt|way)", re.I)
 TARGET_NEGATION = re.compile(
     r"\b(?:não|nao|nunca|jamais|nem|nada|ninguém|nenhum\w*|sem|tampouco|mal)\b|"
     r"\b(?:desconhe\w*|incapa\w*|impossív\w*|inútil|inúteis|in\w+ável|in\w+ível)\b", re.I)
+
+
+def added_negation(source, text):
+    """True when the translation says "não"/"nunca" to an English line with no negation at all.
+
+    TBATE 238 p42: "I WANT TO FIGHT IN THE WAR!" came back "Eu não quero lutar na
+    guerra!", the meaning reversed.  Only a plain "não"/"nunca" before a verb counts;
+    "nem", "nada" or "sem" are often how Portuguese says an English positive.
+    """
+    source = str(source or "")
+    if not re.search(r"[A-Za-z]{2}", source) or SOURCE_NEGATION.search(source) or \
+            re.search(r"\b(?:un\w+|\w+less|fail\w*|refus\w*|stop\w*|quit|lack\w*|deny|denied|hardly|barely|"
+                      r"only|just|too|rather|as if|count me in|left out|miss\w*|lose|lost|forget|forgot\w*)\b",
+                      source, re.I):
+        return False
+    return bool(re.search(r"\b(?:não|nunca|jamais)\b", text or "", re.I))
 
 
 def lost_negation(source, text):
@@ -693,6 +711,8 @@ def translation_problems(sources, translations, glossary=(), earlier=""):
                 notes.append(f"<|{number}|> must keep the name {target}")
         if lost_negation(source, text):
             notes.append(f"<|{number}|> drops the negation of the original (not/no/never): keep the meaning")
+        elif added_negation(source, text):
+            notes.append(f"<|{number}|> says \"não\" but the original has no negation: keep the meaning")
         if not female:
             word = FEMININE_SELF.search(text)
             if word:
