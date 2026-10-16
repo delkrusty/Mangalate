@@ -7,13 +7,16 @@ written by setup.py:
 
     {"providers": [{"name": "groq", "base": "...", "model": "...", "key": "..."}, ...]}
 
-With several providers, a page goes to the first one that is not resting.  A
+With several providers, pages take turns among the ones not resting (page 1 to
+the first, page 2 to the second...), so each free quota lasts longer; set
+MANGALATE_ROTATION=ordem to always start with the first.  A
 provider that answers "limit reached" rests for the time it asks (or a minute);
 after three limits in a row it rests for an hour, which covers daily quotas.
 Wrong key or model rests it for an hour too, so reading continues on the next
 provider.  Keys never leave the server and are never logged.
 """
 import json
+import os
 import time
 from urllib.parse import urlparse
 
@@ -42,10 +45,29 @@ PRESETS = {
         "model": "",
         "keys_url": "",
     },
+    "mistral": {
+        "label": "Mistral (grátis no plano Experiment, cota mensal grande)",
+        "base": "https://api.mistral.ai/v1",
+        "model": "mistral-small-latest",
+        "keys_url": "https://console.mistral.ai/api-keys",
+    },
+    "groq-llama": {
+        "label": "Groq, segundo modelo (mesma chave do Groq, cota separada)",
+        "base": "https://api.groq.com/openai/v1",
+        "model": "llama-3.3-70b-versatile",
+        "keys_url": "https://console.groq.com/keys",
+    },
+    "github": {
+        "label": "GitHub Models (grátis com conta do GitHub, reserva)",
+        "base": "https://models.github.ai/inference",
+        "model": "openai/gpt-4.1-mini",
+        "keys_url": "https://github.com/settings/personal-access-tokens/new (permissão Models: leitura)",
+    },
 }
 LOCAL_HOSTS = {"host.docker.internal", "localhost", "127.0.0.1"}
 SHORT_REST = 60
 LONG_REST = 3600
+AI_TIMEOUT = 45     # seconds before a silent provider is left for the next one
 
 
 def validate_base(url):
@@ -118,12 +140,16 @@ def retry_after(exc):
 
 
 class ProviderPool:
-    def __init__(self, providers, clock=time.monotonic, log=print):
+    def __init__(self, providers, clock=time.monotonic, log=print, take_turns=None):
         self.providers = list(providers)
         self.clock = clock
         self.log = log
         self.resting = {}
         self.strikes = {}
+        self.turn = 0
+        if take_turns is None:
+            take_turns = os.environ.get("MANGALATE_ROTATION", "alternar").lower() != "ordem"
+        self.take_turns = take_turns
         self.events = []  # (provider, reason) of the last page, for review reports
 
     def available(self):
@@ -156,7 +182,13 @@ class ProviderPool:
         """Call attempt(provider) on each available provider until one succeeds."""
         self.events = []
         self.__dict__["raw"] = []
-        for provider in self.available():
+        ready = self.available()
+        if self.take_turns and ready:
+            # Each page starts with the next provider; the others stay as fallbacks.
+            start = self.turn % len(ready)
+            self.turn += 1
+            ready = ready[start:] + ready[:start]
+        for provider in ready:
             try:
                 result = await attempt(provider)
             except Exception as exc:  # provider bodies are never logged

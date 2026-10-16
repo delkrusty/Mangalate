@@ -150,26 +150,41 @@ def parse_marked(content, count):
 
 
 # Work memory for the page being translated (memory.WorkMemory.context), set by the
-# caller before each page like PAGE_ROWS; terms the AI listed are collected here.
-PAGE_CONTEXT = None
-LEARNED_TERMS = []
+# caller before each page like the page rows; terms the AI listed are collected here.
+# Context variables: two pages can be in flight at once (core.py), each with its own.
+import contextvars
+
+_PAGE_CONTEXT = contextvars.ContextVar("mangalate_page_context", default=None)
+_LEARNED_TERMS = contextvars.ContextVar("mangalate_learned_terms", default=None)
+_PAGE_ROWS = contextvars.ContextVar("mangalate_page_rows", default=None)
+
+
+def page_context():
+    return _PAGE_CONTEXT.get()
+
+
+def _learned():
+    terms = _LEARNED_TERMS.get()
+    if terms is None:
+        terms = []
+        _LEARNED_TERMS.set(terms)
+    return terms
 
 
 def set_page_context(context):
-    global PAGE_CONTEXT
-    PAGE_CONTEXT = context
-    LEARNED_TERMS.clear()
+    _PAGE_CONTEXT.set(context)
+    _LEARNED_TERMS.set([])
 
 
 def take_learned_terms():
-    terms = list(LEARNED_TERMS)
-    LEARNED_TERMS.clear()
+    terms = list(_learned())
+    _LEARNED_TERMS.set([])
     return terms
 
 
 def strip_terms(content):
     """(answer without the optional <|termos|> line, terms); kept only if the answer parses."""
-    if PAGE_CONTEXT is None:
+    if page_context() is None:
         return content, []
     from memory import split_terms
     return split_terms(content)
@@ -177,9 +192,9 @@ def strip_terms(content):
 
 async def request_byok_translation(self, to_lang, prompt, client=None, model=None):
     system = self.chat_system_template.format(to_lang=to_lang)
-    if PAGE_CONTEXT is not None:
+    if page_context() is not None:
         from memory import context_block
-        system += context_block(PAGE_CONTEXT, prompt)
+        system += context_block(page_context(), prompt)
     messages = [{"role": "system", "content": system}]
     sample = self.get_chat_sample(to_lang)
     if sample:
@@ -216,18 +231,19 @@ async def translate_byok(self, from_lang, to_lang, queries):
     translations = []
     # Avoid the upstream loop which restarts still-running paid requests.
     self.client.max_retries = 0
+    from providers import AI_TIMEOUT
     pool = provider_pool()
     for prompt, count in self._assemble_prompts(from_lang, to_lang, queries):
         if pool:
             async def attempt(provider, prompt=prompt, count=count):
                 content = await asyncio.wait_for(
                     self._request_translation(to_lang, prompt, provider_client(pool, provider), provider["model"]),
-                    timeout=180)
+                    timeout=AI_TIMEOUT)
                 answer, terms = strip_terms(content)
                 extracted = (self.extract_capture_groups(answer, rf"{self.rgx_capture}") or "").strip()
                 try:
                     parsed = parse_marked(extracted, count)
-                    LEARNED_TERMS.extend(terms)
+                    _learned().extend(terms)
                     return parsed
                 except ValueError:
                     # Kept in memory for the local --diagnostics report only; never logged.
@@ -238,7 +254,7 @@ async def translate_byok(self, from_lang, to_lang, queries):
         content = await asyncio.wait_for(self._request_translation(to_lang, prompt), timeout=180)
         answer, terms = strip_terms(content)
         translations += parse_marked(self.extract_capture_groups(answer, rf"{self.rgx_capture}").strip(), count)
-        LEARNED_TERMS.extend(terms)
+        _learned().extend(terms)
     return translations
 
 
@@ -265,13 +281,9 @@ def protect_art(config):
 
 
 # Rows of the page inside the strip being translated (seams.Strip), set by the
-# caller before each page; pages are translated one at a time.
-PAGE_ROWS = None
-
-
+# caller before each page (a context variable, see the page context above).
 def set_page_rows(top, bottom):
-    global PAGE_ROWS
-    PAGE_ROWS = (int(top), int(bottom))
+    _PAGE_ROWS.set((int(top), int(bottom)))
 
 
 def on_page(regions, rows):
@@ -409,7 +421,7 @@ def classify_regions(original_merge):
         regions = await original_merge(self, config, ctx)
         ctx.mangalate_preserved = []
         if regions:
-            regions, context_only = on_page(regions, PAGE_ROWS)
+            regions, context_only = on_page(regions, _PAGE_ROWS.get())
             if context_only:
                 print(f"Region check: {len(context_only)} only in the neighbouring pages, skipped", flush=True)
             regions = join_split_blocks(regions, ctx.img_rgb)
@@ -694,7 +706,7 @@ def validate_page_translations(original_translate):
             from quality import normalize_spacing, page_names, sentence_case, source_names, tidy_start
             texts = [getattr(region, "translation", None) for region in result]
             names = page_names([t for t in texts if isinstance(t, str)])
-            names |= {g["target"] for g in (PAGE_CONTEXT or {}).get("glossary", [])}
+            names |= {g["target"] for g in (page_context() or {}).get("glossary", [])}
             for region in result:
                 if isinstance(getattr(region, "translation", None), str):
                     own = names | source_names(getattr(region, "text", ""), region.translation)
