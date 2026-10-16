@@ -412,7 +412,7 @@ def join_split_blocks(regions, image):
     import cv2
     import numpy as np
     import lettering
-    from quality import join_blocks
+    from quality import join_blocks, absorb_contained, column_groups, _box
 
     def inside(a, b):
         found = lettering.bubble_mask(image, tuple(int(v) for v in a.xyxy))
@@ -431,11 +431,39 @@ def join_split_blocks(regions, image):
                        font_size=max(a.font_size, b.font_size), angle=a.angle, prob=min(a.prob, b.prob),
                        fg_color=a.fg_colors, bg_color=a.bg_colors)
 
+    def absorb(outer, inner):
+        # Lines in reading order: "LOOKS / LIKE / IORI..." (Grand Blue p25), not "LOOKS IORI ... LIKE".
+        pairs = list(zip(np.asarray(outer.lines), outer.texts)) + list(zip(np.asarray(inner.lines), inner.texts))
+        pairs.sort(key=lambda p: float(np.asarray(p[0], float)[:, 1].mean()))
+        return type(outer)(np.stack([p[0] for p in pairs]), [p[1] for p in pairs],
+                           font_size=max(outer.font_size, inner.font_size), angle=outer.angle,
+                           prob=min(outer.prob, inner.prob), fg_color=outer.fg_colors, bg_color=outer.bg_colors)
+
     if image is None or not all(hasattr(r, "xyxy") and hasattr(r, "lines") for r in regions):
         return regions
     horizontal = [r for r in regions if getattr(r, "horizontal", True)]
     others = [r for r in regions if not getattr(r, "horizontal", True)]
+    def columns(region):
+        # Two speeches side by side that the merge read as one, line by line interleaved.
+        boxes = [_box(q) for q in np.asarray(region.lines)]
+        groups = column_groups(boxes)
+        gaps = [min(boxes[i][0] for i in b) - max(boxes[i][2] for i in a) for a, b in zip(groups, groups[1:])]
+        if len(groups) < 2 or min(gaps) <= 0 or max(len(g) for g in groups) < 2 or len(region.texts) != len(boxes):
+            return [region]
+        lines, texts = np.asarray(region.lines), list(region.texts)
+        return [type(region)(lines[g], [texts[i] for i in g], font_size=region.font_size, angle=region.angle,
+                             prob=region.prob, fg_color=region.fg_colors, bg_color=region.bg_colors)
+                for g in (sorted(g, key=lambda i: boxes[i][1]) for g in groups)]
+
     try:
+        split = [part for region in horizontal for part in columns(region)]
+        if len(split) > len(horizontal):
+            print(f"Region split: {len(split) - len(horizontal)} column(s) separated", flush=True)
+        horizontal = split
+        before = len(horizontal)
+        horizontal = absorb_contained(horizontal, absorb, inside)
+        if len(horizontal) < before:
+            print(f"Region join: {before - len(horizontal)} line(s) inside another speech joined", flush=True)
         joined = join_blocks(horizontal, make, inside)
     except Exception as exc:  # never lose a page over this
         print(f"Region join skipped: {type(exc).__name__}", flush=True)
@@ -604,6 +632,21 @@ def repair_textlines(original_detect):
                 seen = seen | bubble_glyphs(np.asarray(image), box, box[3] - box[1], near=NEAR_LINES)
         repaired, changes = repair_lines(seen.astype(np.uint8) * 255, boxes)
         ctx.mangalate_line_repairs = [{"tipo": kind, "antes": before, "depois": after} for kind, before, after in changes]
+        # One box across two columns of text in the same bubble is cut at the gutter.
+        if image is not None:
+            from quality import column_cuts
+            try:
+                gray = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2GRAY)
+                cuts = column_cuts(gray, [box for box, _ in repaired])
+            except Exception as exc:  # never lose a page over this
+                print(f"Column check skipped: {type(exc).__name__}", flush=True)
+                cuts = {}
+            for i in sorted(cuts, reverse=True):
+                (x0, y0, x1, y1), source = repaired[i]
+                gx0, gx1 = cuts[i]
+                parts = [(x0, y0, gx0, y1), (gx1, y0, x1, y1)]
+                repaired[i:i + 1] = [(part, source) for part in parts]
+                changes.append(("column", (x0, y0, x1, y1), parts))
         # Small white bubbles the detector did not see at all.
         scanned = []
         if image is not None:
@@ -637,7 +680,9 @@ def repair_textlines(original_detect):
             lines.append(Quadrilateral(pts, "", original.prob if original is not None else 1.0))
         split = sum(1 for kind, _, _ in changes if kind == "split")
         scan = sum(1 for kind, _, _ in changes if kind == "bubble")
-        print(f"Line repair: split={split} added={len(changes) - split - scan} scanned={scan}", flush=True)
+        column = sum(1 for kind, _, _ in changes if kind == "column")
+        print(f"Line repair: split={split} added={len(changes) - split - scan - column} scanned={scan} "
+              f"column_cuts={column}", flush=True)
         return (lines, mask_raw, mask) + tuple(result[3:])
     return detect
 

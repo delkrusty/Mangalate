@@ -144,9 +144,20 @@ def normalize_spacing(text):
 
 
 def _median_line(region):
+    """Line height of a region; for stacked lines, no more than the distance between them.
+
+    The detector sometimes draws overlapping, inflated line boxes (Grand Blue
+    p27: 36 px boxes 28 px apart, next to a piece of the same bubble with 22 px
+    boxes), which made one bubble look like two lettering sizes.
+    """
     lines = np.asarray(region.lines, dtype=float)
     heights = [np.linalg.norm(q[3] - q[0]) for q in lines]
-    return float(np.median(heights)) if heights else 0.0
+    if not heights:
+        return 0.0
+    height = float(np.median(heights))
+    centres = sorted(q[:, 1].mean() for q in lines)
+    pitch = [b - a for a, b in zip(centres, centres[1:]) if b - a > 0.5 * height]
+    return min(height, float(np.median(pitch))) if pitch else height
 
 
 def same_block(a, b, inside=None):
@@ -192,6 +203,39 @@ def join_blocks(regions, make, inside=None):
         else:
             out.append(region)
     return out
+
+
+def absorb_contained(regions, absorb, inside=None):
+    """A small region whose centre lies inside a larger one is a line of that speech.
+
+    Grand Blue p25: the tilted "LIKE" of "LOOKS / LIKE / IORI SCORED..." got its own
+    region inside the bubble's region, so the bubble read "LOOKS IORI SCORED..."
+    and a second "Tipo..." was written over it.  ``absorb(outer, inner)`` builds
+    the merged region; ``inside(outer, inner)``, when given, must confirm they share a bubble.
+    """
+    out = list(regions)
+    changed = True
+    while changed:
+        changed = False
+        for inner in sorted(out, key=_area):
+            ix0, iy0, ix1, iy1 = (float(v) for v in inner.xyxy)
+            cx, cy = (ix0 + ix1) / 2, (iy0 + iy1) / 2
+            for outer in out:
+                ox0, oy0, ox1, oy1 = (float(v) for v in outer.xyxy)
+                if outer is inner or _area(outer) <= 2 * _area(inner):
+                    continue
+                if ox0 <= cx <= ox1 and oy0 <= cy <= oy1 and (inside is None or inside(outer, inner)):
+                    out = [r for r in out if r is not inner and r is not outer] + [absorb(outer, inner)]
+                    changed = True
+                    break
+            if changed:
+                break
+    return out
+
+
+def _area(region):
+    x0, y0, x1, y1 = (float(v) for v in region.xyxy)
+    return max(0.0, x1 - x0) * max(0.0, y1 - y0)
 
 
 def sentence_case(text, names=()):
@@ -384,6 +428,9 @@ def bubble_glyphs(image, box, line_height, near=GLYPH_NEAR):
 INK = 127
 ROW_GAP = 2           # blank rows tolerated inside one line of lettering
 SPLIT_FACTOR = 1.6    # a box this many times the usual line height may hold two lines
+SPLIT_CHECK = 1.3     # boxes from this height up are checked for a second line the box only grazes
+SPLIT_REACH = 0.6     # rows read past the box edge, in line heights
+SPLIT_INSIDE = 0.25   # a row run must reach this far into the box to be one of its lines
 MIN_PART = 0.45       # a split part shorter than this share of a line is noise
 ORPHAN_COVERED = 0.2  # mask pixels already under a box above this share are not orphans
 NEAR_LINES = 1.6      # an orphan line must sit this many line heights from a known one
@@ -466,17 +513,24 @@ def repair_lines(mask, boxes):
         x0, x1, y0, y1 = max(0, x0), min(w, x1), max(0, y0), min(h, y1)
         others = [b for j, b in enumerate(boxes) if j != index]
         # Vertical lettering (Japanese SFX, stacked letters) is never split into rows.
-        if y1 - y0 < SPLIT_FACTOR * height or x1 - x0 <= y1 - y0:
+        if y1 - y0 < SPLIT_CHECK * height or x1 - x0 <= y1 - y0:
             result.append(((x0, y0, x1, y1), index))
             continue
         parts = []
-        for r0, r1 in _runs(ink[y0:y1, x0:x1].any(axis=1)):
-            if r1 - r0 < MIN_PART * height:
+        # A line the box cuts in half still counts (Grand Blue p25: one box over
+        # "DON'T" and the top of "TELL ME"), so the rows are read a little past the box.
+        reach = int(round(SPLIT_REACH * height))
+        wy0, wy1 = max(0, y0 - reach), min(h, y1 + reach)
+        for r0, r1 in _runs(ink[wy0:wy1, x0:x1].any(axis=1)):
+            if r1 - r0 < MIN_PART * height or min(wy0 + r1, y1) - max(wy0 + r0, y0) < SPLIT_INSIDE * height:
                 continue
-            cols = np.flatnonzero(ink[y0 + r0:y0 + r1, x0:x1].any(axis=0))
-            part = (x0 + int(cols[0]), y0 + r0, x0 + int(cols[-1]) + 1, y0 + r1)
+            cols = np.flatnonzero(ink[wy0 + r0:wy0 + r1, x0:x1].any(axis=0))
+            part = (x0 + int(cols[0]), wy0 + r0, x0 + int(cols[-1]) + 1, wy0 + r1)
             if _covered(part, others) < 0.5:
                 parts.append(part)
+        if len(parts) < 2 and y1 - y0 < SPLIT_FACTOR * height:
+            result.append(((x0, y0, x1, y1), index))
+            continue
         if len(parts) < 2 and y1 - y0 <= STAIR_FACTOR * height:
             # One box over two touching lines of a staircase caption (236 p32);
             # ink of the lines above and below, already boxed, is left out.
@@ -524,6 +578,105 @@ def repair_lines(mask, boxes):
         result.extend((box, None) for box in paragraph)
         changes.append(("added", None, paragraph))
     return result, changes
+
+
+# Two columns of text side by side in one bubble --------------------------------
+
+COLUMN_GAP = 0.3      # blank stripe through every line of a stack, in line heights
+COLUMN_ROW_GAP = 0.6  # a line crossing the stripe has this much blank there
+COLUMN_WORD_GAP = 2   # and that blank is this many times its widest word gap
+INK_LEVEL = 110       # dark lettering on a light bubble
+
+
+def _stacks(boxes):
+    """Groups of line boxes stacked one under the other (overlapping horizontally)."""
+    parent = list(range(len(boxes)))
+
+    def root(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    for i, a in enumerate(boxes):
+        for j in range(i + 1, len(boxes)):
+            b = boxes[j]
+            height = min(a[3] - a[1], b[3] - b[1])
+            if max(a[1], b[1]) - min(a[3], b[3]) <= 0.8 * height and min(a[2], b[2]) > max(a[0], b[0]):
+                parent[root(i)] = root(j)
+    groups = {}
+    for i in range(len(boxes)):
+        groups.setdefault(root(i), []).append(i)
+    return list(groups.values())
+
+
+def column_cuts(gray, boxes):
+    """{line index: (x0, x1)} for line boxes that run across two columns of text.
+
+    Grand Blue p19 ("YOU / GOTTA / RELAX." beside "THERE'S NO POINT / TRYING / TO
+    POWER / THROUGH / IT.") and p7 ("BOAT'S / FULL / UP." beside "SORRY / Y'ALL."):
+    the detector drew one box over "YOU TO POWER", so the OCR read the two
+    speeches interleaved.  A blank vertical stripe through a whole stack of lines,
+    with lines on both sides of it, is the gutter between two columns when the
+    lines it crosses have a much wider blank there than between their words.
+    """
+    gray = np.asarray(gray)
+    cuts = {}
+    for idx in _stacks(boxes):
+        if len(idx) < 3:
+            continue
+        height = float(np.median([boxes[i][3] - boxes[i][1] for i in idx]))
+        x0, x1 = min(boxes[i][0] for i in idx), max(boxes[i][2] for i in idx)
+        ink = np.zeros((len(idx), x1 - x0), bool)
+        for k, i in enumerate(idx):
+            bx0, by0, bx1, by1 = boxes[i]
+            ink[k, bx0 - x0:bx1 - x0] = (gray[by0:by1, bx0:bx1] < INK_LEVEL).any(axis=0)
+        blank = ~ink.any(axis=0)
+        best, x = None, 0
+        while x < len(blank):
+            if not blank[x]:
+                x += 1
+                continue
+            start = x
+            while x < len(blank) and blank[x]:
+                x += 1
+            if start == 0 or x >= len(blank) or x - start < COLUMN_GAP * height:
+                continue
+            left = {k for k in range(len(idx)) if ink[k, :start].any()}
+            right = {k for k in range(len(idx)) if ink[k, x:].any()}
+            both = left & right
+            if not both or len(left) < 2 or len(right) < 2:
+                continue
+            ok = True
+            for k in both:
+                cols = np.flatnonzero(ink[k])
+                last = cols[cols < start].max()
+                first = cols[cols >= x].min()
+                words = [b - a - 1 for a, b in zip(cols, cols[1:]) if b - a > 1 and not (a == last and b == first)]
+                gap = first - last - 1
+                if gap < COLUMN_ROW_GAP * height or (words and gap < COLUMN_WORD_GAP * max(words)):
+                    ok = False
+            if ok and (best is None or x - start > best[1] - best[0]):
+                best = (start, x)
+        if best:
+            gx0, gx1 = x0 + best[0], x0 + best[1]
+            for i in idx:
+                if boxes[i][0] < gx0 and boxes[i][2] > gx1:
+                    cuts[i] = (gx0, gx1)
+    return cuts
+
+
+def column_groups(boxes):
+    """Line indexes split into columns that share no horizontal span, left to right; one group when not."""
+    order = sorted(range(len(boxes)), key=lambda i: boxes[i][0])
+    groups, right = [], None
+    for i in order:
+        if groups and boxes[i][0] < right:
+            groups[-1].append(i)
+            right = max(right, boxes[i][2])
+        else:
+            groups.append([i])
+            right = boxes[i][2]
+    return groups
 
 
 DUPLICATE_OVERLAP = 0.6  # share of the smaller box inside the other one
@@ -947,6 +1100,11 @@ def english_sound_effect(text):
     and written as "Vluuuf".  Real words ("BOB", "NO!") are left to the translator.
     """
     words = re.findall(r"[A-Za-z]+", text or "")
+    # A lone letter that is no word ("R", a piece of the vertical "KRRK" on Grand Blue
+    # p19, was written over as "É.") is a piece of a drawn sound.
+    if len(words) == 1 and len(words[0]) == 1 and words[0].upper() not in "IAO" \
+            and not re.search(r"[?!]", text):
+        return True
     if len(words) != 1 or len(words[0]) < 4 or words[0] != words[0].upper():
         return False
     common, names = english_words()

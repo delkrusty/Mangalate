@@ -25,6 +25,11 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 - "Você deve estar preocupada" sem nenhuma mulher na página também pede a tradução de novo.
 - Quando a tradução diz "não" e o original não tem negação ("I WANT TO FIGHT IN THE WAR!" virando "Eu não quero lutar na guerra!"), o servidor pede de novo. A checagem de negação também deixou de confundir palavras como "WANT" com "N'T".
 - Balões brancos pequenos que o detector não viu ("MUSCLE?", "I SEE.", "HOW'S THAT?") são achados pelo formato: área branca fechada com linhas de letras no meio. Eles são traduzidos e limpos como os outros. Um som desenhado num contorno fechado ("GRAB") fica na arte.
+- Duas falas lado a lado no mesmo balão ("YOU / GOTTA / RELAX." ao lado de "THERE'S NO POINT...") não são mais lidas intercaladas linha a linha: a caixa que atravessa as duas colunas é cortada no vão entre elas e cada fala é traduzida sozinha.
+- Uma linha que ganhou caixa própria dentro de outra fala ("LOOKS / LIKE / IORI...") volta para a fala no lugar certo, em vez de virar um "Tipo..." escrito por cima do balão.
+- Uma linha que a caixa do detector só pegou pela metade ("DON'T / TELL ME") é separada e lida, em vez de ficar meio apagada.
+- Um balão partido em dois pelo detector, com caixas de linha de alturas diferentes, volta a ser uma fala só ("I'M SURE AZUSA-SAN / APPRECIATED THAT!").
+- Uma letra solta de onomatopeia ("R" de "KRRK") fica na arte, em vez de virar "É.".
 
 ### IAs
 - Mistral e GitHub Models saíram da lista. Num teste com as chaves reais, o plano grátis da Mistral responde "limite" com zero pedidos permitidos para os modelos small e medium (o único que respondeu foi um modelo pequeno que conversa em vez de traduzir), e o GitHub Models devolveu só "OK" em vez de uma tradução. Nos 7 capítulos de teste nenhum dos dois traduziu uma página. Chaves já salvas deles são ignoradas; as outras IAs continuam.

@@ -515,9 +515,9 @@ class OuroThreeTest(unittest.TestCase):
         self.assertEqual(quality.duplicate_regions(same, ["GOT IT!", "GOTIT 8E 3"]), {1})
 
     def test_english_sound_effects(self):
-        for sfx in ("VLOOSH", "SPLOOSH!", "GRRR", "KONK"):
+        for sfx in ("VLOOSH", "SPLOOSH!", "GRRR", "KONK", "R", "K."):
             self.assertTrue(quality.english_sound_effect(sfx), sfx)
-        for word in ("BOB", "NO!", "HELLO", "TOKITA", "I JUST CANT GET IT!"):
+        for word in ("BOB", "NO!", "HELLO", "TOKITA", "I JUST CANT GET IT!", "I...", "A", "O!", "H?"):
             self.assertFalse(quality.english_sound_effect(word), word)
 
 
@@ -616,3 +616,94 @@ class BubbleScanTest(unittest.TestCase):
         kept, drawn = scanned_sounds([speech, sound, outside], [(250, 250, 450, 400)])
         self.assertEqual(kept, [speech, outside])
         self.assertEqual(drawn, [sound])
+
+
+class ContainedRegionTest(unittest.TestCase):
+    """Grand Blue p25: the tilted "LIKE" had its own region inside "LOOKS / IORI SCORED..."."""
+
+    def region(self, box, texts, lines):
+        from types import SimpleNamespace
+        return SimpleNamespace(xyxy=box, texts=texts, lines=lines)
+
+    def absorb(self, outer, inner):
+        pairs = sorted(list(zip(outer.lines, outer.texts)) + list(zip(inner.lines, inner.texts)))
+        return self.region(outer.xyxy, [t for _, t in pairs], [y for y, _ in pairs])
+
+    def test_inner_line_joins_in_reading_order(self):
+        outer = self.region((1096, 1383, 1231, 1612), ["LOOKS", "IORI", "SCORED"], [1400, 1460, 1495])
+        inner = self.region((1115, 1392, 1214, 1465), ["LIKE"], [1428])
+        other = self.region((300, 1400, 400, 1450), ["DON'T"], [1420])
+        out = quality.absorb_contained([outer, inner, other], self.absorb)
+        self.assertEqual(len(out), 2)
+        self.assertIn(["LOOKS", "LIKE", "IORI", "SCORED"], [r.texts for r in out])
+
+    def test_separate_bubble_is_kept(self):
+        outer = self.region((0, 0, 400, 400), ["A"], [10])
+        inner = self.region((150, 150, 200, 180), ["B"], [160])
+        out = quality.absorb_contained([outer, inner], self.absorb, inside=lambda a, b: False)
+        self.assertEqual(len(out), 2)
+
+
+class ColumnTest(unittest.TestCase):
+    """Grand Blue p19: "YOU / GOTTA / RELAX." beside "THERE'S NO POINT / ... / THROUGH IT."."""
+
+    def page(self):
+        from PIL import Image, ImageDraw, ImageFont
+        img = Image.new("RGB", (500, 300), "white")
+        d = ImageDraw.Draw(img)
+        font = ImageFont.truetype(str(Path(__file__).resolve().parents[1] / "fonts" / "ComicNeue-Bold.ttf"), 24)
+        right = ["THERE'S NO", "POINT", "TRYING", "TO POWER", "THROUGH"]
+        left = {3: "YOU", 4: "GOTTA", 5: "RELAX."}
+        boxes = []
+        for row in range(6):
+            y = 20 + 30 * row
+            spans = []
+            if row in left:
+                d.text((40, y), left[row], fill="black", font=font)
+                spans.append((40, 40 + int(d.textlength(left[row], font=font))))
+            if row < len(right):
+                w = int(d.textlength(right[row], font=font))
+                d.text((260 - w // 2, y), right[row], fill="black", font=font)
+                spans.append((260 - w // 2, 260 - w // 2 + w))
+            boxes.append((min(s[0] for s in spans), y + 4, max(s[1] for s in spans), y + 28))
+        return cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY), boxes
+
+    def test_box_across_two_columns_is_cut(self):
+        gray, boxes = self.page()
+        cuts = quality.column_cuts(gray, boxes)
+        self.assertEqual(sorted(cuts), [3, 4])
+        gx0, gx1 = cuts[3]
+        self.assertTrue(boxes[5][2] <= gx0 + 2 and gx1 <= 260 - 60, cuts)
+
+    def test_one_paragraph_is_not_cut(self):
+        from PIL import Image, ImageDraw, ImageFont
+        img = Image.new("RGB", (500, 200), "white")
+        d = ImageDraw.Draw(img)
+        font = ImageFont.truetype(str(Path(__file__).resolve().parents[1] / "fonts" / "ComicNeue-Bold.ttf"), 24)
+        boxes = []
+        for row, text in enumerate(["I THOUGHT I'D", "OVERCOME MY FEAR,", "BUT THE WATER", "STILL FREAKS ME OUT!"]):
+            w = int(d.textlength(text, font=font))
+            d.text((250 - w // 2, 20 + 30 * row), text, fill="black", font=font)
+            boxes.append((250 - w // 2, 24 + 30 * row, 250 - w // 2 + w, 48 + 30 * row))
+        self.assertEqual(quality.column_cuts(cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY), boxes), {})
+
+    def test_column_groups(self):
+        self.assertEqual(quality.column_groups([(0, 0, 50, 10), (60, 0, 120, 10), (10, 12, 40, 22), (70, 12, 110, 22)]),
+                         [[0, 2], [1, 3]])
+        self.assertEqual(len(quality.column_groups([(0, 0, 100, 10), (20, 12, 80, 22), (40, 24, 140, 34)])), 1)
+
+    def test_region_over_two_columns_is_split(self):
+        from engine_compat import join_split_blocks
+
+        class Block:
+            def __init__(self, lines, texts, font_size=20, angle=0, prob=1.0, fg_color=None, bg_color=None):
+                self.lines, self.texts = np.asarray(lines), list(texts)
+                self.font_size, self.angle, self.prob = font_size, angle, prob
+                self.fg_colors, self.bg_colors, self.horizontal = fg_color, bg_color, True
+                pts = self.lines.reshape(-1, 2)
+                self.xyxy = (*pts.min(axis=0), *pts.max(axis=0))
+        rows = [(200, 0, 320, 20, "THERE'S NO"), (40, 30, 100, 50, "YOU"), (200, 30, 320, 50, "TO POWER"),
+                (40, 60, 100, 80, "GOTTA"), (200, 60, 320, 80, "THROUGH")]
+        block = Block([quad(*r[:4]) for r in rows], [r[4] for r in rows])
+        out = join_split_blocks([block], np.full((300, 400, 3), 255, np.uint8))
+        self.assertEqual(sorted(b.texts for b in out), [["THERE'S NO", "TO POWER", "THROUGH"], ["YOU", "GOTTA"]])
