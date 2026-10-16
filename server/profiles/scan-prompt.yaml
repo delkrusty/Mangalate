@@ -48,7 +48,11 @@ chat_system_template: >
   merged words. Translate the intended words when the context makes them clear; keep
   names you are unsure about exactly as written. A word that does not fit the sentence is
   an OCR mistake, not a name: "BE HARI ON HER" is "be hard on her", "THE TEME" is "the
-  temp", "CALI IT" is "call it". Never copy such a word into the translation.
+  temp", "CALI IT" is "call it". Never copy such a word into the translation. A rounded U
+  is often read as LI or LJ and I'M as TM: "TM LINEAMILIAR" is "I'm unfamiliar", "LINDER"
+  is "under". Keep every negation (not, no, never, un-) in the meaning.
+  A name between commas is the person being addressed: "AND GENERAL ARTHUR, YOU WILL..."
+  is "E, General Arthur, você vai...", not "E o General Arthur, você...".
   Answer format: one line per bubble, each starting with its marker exactly as given,
   for example "<|1|>Ei, Chisa." then "<|2|>Preciso ir para a aula.". Keep the markers
   even for very short bubbles or sound effects.

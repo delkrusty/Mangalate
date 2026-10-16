@@ -139,7 +139,8 @@ def normalize_spacing(text):
     text = re.sub(rf"(?<={_LETTER})([,;:])(?={_LETTER})", r"\1 ", text)
     text = re.sub(rf"([!?…]+)(?={_LETTER})", r"\1 ", text)
     text = re.sub(rf"(?<={_LETTER}{{2}})\.(?=[A-ZÀ-Ý])", ". ", text)
-    return text.strip()
+    text = re.sub(rf"^([.…]+) +(?={_LETTER})", r"\1", text.strip())  # "… mas" (TBATE 240 p30)
+    return text
 
 
 def _median_line(region):
@@ -495,6 +496,7 @@ def repair_lines(mask, boxes):
     lines = cv2.dilate(ink.astype(np.uint8), np.ones((1, join), np.uint8))
     count, labels, stats, _ = cv2.connectedComponentsWithStats(lines, connectivity=8)
     current = [b for b, _ in result]
+    lonely = []  # line-shaped orphans far from any box: kept only as a paragraph (below)
     for label in range(1, count):
         x, y, bw, bh = (int(v) for v in stats[label, :4])
         if not (0.5 * height <= bh <= STAIR_FACTOR * height and bw >= height):
@@ -511,7 +513,39 @@ def repair_lines(mask, boxes):
         if boxes_here and any(_near(b, current, height) for b in boxes_here):
             result.extend((box, None) for box in boxes_here)
             changes.append(("added", None, boxes_here))
+        elif len(boxes_here) == 1:
+            lonely.extend(boxes_here)
+    paragraph = paragraph_lines(lonely, height)
+    if paragraph:
+        result.extend((box, None) for box in paragraph)
+        changes.append(("added", None, paragraph))
     return result, changes
+
+
+def paragraph_lines(boxes, height):
+    """Orphan lines that stack into a paragraph of two or more lines.
+
+    TBATE 240 p32: the whole "--THOUGH I / MAY OFFER SOME / SUGGESTIONS HERE /
+    AND THERE." bubble was in the detector mask but had no line box, and no
+    known line was near it.  One stray line far from text may be art; several
+    lines of the same height stacked and centred on each other are lettering.
+    """
+    lines = sorted((b for b in boxes if 0.6 * height <= b[3] - b[1] <= 1.5 * height), key=lambda b: b[1])
+    groups, kept = [], []
+    for box in lines:
+        for group in groups:
+            last = group[-1]
+            gap = box[1] - last[3]
+            centre = abs((box[0] + box[2]) - (last[0] + last[2])) / 2
+            if -0.3 * height <= gap <= 0.9 * height and centre <= 0.35 * max(box[2] - box[0], last[2] - last[0]):
+                group.append(box)
+                break
+        else:
+            groups.append([box])
+    for group in groups:
+        if len(group) >= 2:
+            kept.extend(group)
+    return kept
 
 
 STAIR_FACTOR = 2.6  # an orphan this tall may be two touching lines
@@ -563,13 +597,40 @@ FEMININE_SELF = re.compile(
     r"orgulhosa|curiosa|ansiosa|interessada|convencida|machucada|ferida|arqueira|guerreira|"
     r"aluna|maga|sozinha)\b", re.I)
 
+# A clear negation in the English line, and any negation in Portuguese.  Questions
+# with n't ("isn't it great?", "why don't we") and idioms that lose the "not"
+# ("can't wait") are left out.
+SOURCE_NEGATION = re.compile(
+    r"\b(?:not|never|nobody|nothing|none|neither|nor|no one|cannot|without)\b|n'?t\b|\bno\s+\w", re.I)
+NEGATION_IDIOMS = re.compile(
+    r"\b\w+n'?t\b[^.!?]*\?|can'?t\s+wait|"
+    r"nothing\s+but|not\s+only|no\s+(?:wonder|doubt|way)", re.I)
+TARGET_NEGATION = re.compile(
+    r"\b(?:não|nao|nunca|jamais|nem|nada|ninguém|nenhum\w*|sem|tampouco|mal)\b|"
+    r"\b(?:desconhe\w*|incapa\w*|impossív\w*|inútil|inúteis|in\w+ável|in\w+ível)\b", re.I)
+
+
+def lost_negation(source, text):
+    """True when the English line says no/not/never and the translation says nothing negative.
+
+    240 p32: "I'M UNFAMILIAR WITH..." read by OCR as "TM LINEAMILIAR" came back
+    "Estou familiarizado", the meaning turned around.
+    """
+    source = re.sub(r"\s+", " ", str(source or "")).strip()
+    if not SOURCE_NEGATION.search(source):
+        return False
+    rest = NEGATION_IDIOMS.sub(" ", source)
+    if not SOURCE_NEGATION.search(rest):
+        return False
+    return not TARGET_NEGATION.search(text or "")
+
 
 def _has(name, text):
     return re.search(rf"(?<![\wÀ-ÿ]){re.escape(name)}(?![\wÀ-ÿ])", text or "", re.I) is not None
 
 
 def translation_problems(sources, translations, glossary=(), earlier=""):
-    """Notes for a second try: names the AI dropped, feminine forms with no woman in sight.
+    """Notes for a second try: dropped names and negations, feminine forms with no woman in sight.
 
     238 p64: "ARTHUR. ELEANOR. SYLVIE." came back "Arthur. E Sylvie."; 236 p32:
     "I TOLD MYSELF" became "eu disse a mim mesma" with Arthur narrating.
@@ -590,6 +651,8 @@ def translation_problems(sources, translations, glossary=(), earlier=""):
             key = normalize(g.get("source", ""))
             if key and target[:1].isupper() and f" {key} " in here and not _has(target, text):
                 notes.append(f"<|{number}|> must keep the name {target}")
+        if lost_negation(source, text):
+            notes.append(f"<|{number}|> drops the negation of the original (not/no/never): keep the meaning")
         if not female:
             word = FEMININE_SELF.search(text)
             if word:

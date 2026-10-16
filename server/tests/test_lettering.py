@@ -142,3 +142,61 @@ class BubbleLayoutHookTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+FONT = str(Path(__file__).resolve().parents[1] / "fonts" / "ComicNeue-Bold.ttf")
+
+
+class ShapedLetteringTest(unittest.TestCase):
+    """Lines that follow the oval, in the comic font (TBATE 199 p13, Grand Blue p44)."""
+
+    TEXT = "É, porque foi só isso que os líderes deste continente nos deram."
+
+    def test_lines_follow_the_oval_and_stay_inside(self):
+        image = page_with_bubble(axes=(150, 200))
+        plan = lettering.plan_shaped(image, (220, 240, 380, 360), [], self.TEXT, FONT, 30, 10)
+        self.assertIsNotNone(plan)
+        self.assertEqual(" ".join(plan["lines"]), self.TEXT)
+        self.assertGreaterEqual(plan["size"], 30)  # the bubble has room: not shrunk below the original
+        x0, y0, x1, y1 = plan["box"]
+        self.assertLess(abs((y0 + y1) / 2 - 300), 0.1 * (y1 - y0) + 5)  # centred in the oval
+        # Every line inside the ellipse: the corners of each line slot, not of the whole block.
+        measure = lettering.Measure(FONT, plan["size"])
+        widths = [measure(line) for line in plan["lines"]]
+        for i, w in enumerate(widths):
+            top = plan["top"] + i * plan["advance"]
+            for x in (plan["x"] - w / 2, plan["x"] + w / 2):
+                for y in (top, top + plan["slot"]):
+                    self.assertLess(((x - 300) / 150) ** 2 + ((y - 300) / 200) ** 2, 1.0, plan["lines"][i])
+        # The middle lines are the widest, like the oval.
+        self.assertGreaterEqual(max(widths[1:-1] or widths), max(widths[0], widths[-1]))
+
+    def test_no_lone_short_word_on_its_own_line(self):
+        measure = lettering.Measure(FONT, 30)
+        words = "Você gostou de alguma coisa um".split()
+        self.assertIsNone(lettering.wrap(words, [measure("Você gostou de alguma coisa") + 2] * 2, measure))
+        self.assertEqual(lettering.wrap(["Oi"], [500], measure), ["Oi"])
+
+    def test_no_font_falls_back(self):
+        self.assertIsNone(lettering.plan_shaped(page_with_bubble(), (220, 240, 380, 360), [], self.TEXT, None, 30, 10))
+
+    def test_font_choice(self):
+        from unittest import mock
+        with mock.patch.dict("os.environ", {"MANGALATE_FONT": FONT}):
+            self.assertEqual(lettering.font_file(), FONT)
+        with mock.patch.dict("os.environ", {"MANGALATE_FONT": "/nao/existe.ttf"}):
+            self.assertIsNone(lettering.font_file())  # missing font: the engine's own layout
+
+    def test_draw_writes_dark_ink_inside_the_box(self):
+        image = page_with_bubble(axes=(150, 200))
+        plan = lettering.plan_shaped(image, (220, 240, 380, 360), [], self.TEXT, FONT, 30, 10)
+        out = image.copy()
+        lettering.draw_shaped(out, plan, (0, 0, 0), (255, 255, 255))
+        changed = np.argwhere((out != image).any(axis=2))
+        self.assertGreater(len(changed), 500)
+        x0, y0, x1, y1 = plan["box"]
+        pad = 6
+        self.assertGreaterEqual(changed[:, 1].min(), x0 - pad)
+        self.assertLessEqual(changed[:, 1].max(), x1 + pad)
+        self.assertGreaterEqual(changed[:, 0].min(), y0 - pad)
+        self.assertLessEqual(changed[:, 0].max(), y1 + pad)

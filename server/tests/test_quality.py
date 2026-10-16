@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import quality
 from quality import (broken_words, bubble_glyphs, classify_region, compact_symbols, normalize_spacing,
                      repair_lines, whole_word_breaker)
 
@@ -448,3 +449,25 @@ class PageRowsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GoldStandardTextTest(unittest.TestCase):
+    def test_leading_ellipsis_has_no_space(self):
+        self.assertEqual(quality.normalize_spacing("… mas eu"), "…mas eu")  # TBATE 240 p30
+        self.assertEqual(quality.normalize_spacing("Ok… Vamos"), "Ok… Vamos")
+
+    def test_lost_negation_asks_again(self):
+        notes = quality.translation_problems(["I'M NOT FAMILIAR WITH IT"], ["Estou familiarizado com isso."])
+        self.assertTrue(any("negation" in n for n in notes))
+        for source, text in (("I'M NOT FAMILIAR", "Não conheço."), ("ISN'T IT GREAT?", "Que ótimo, né?"),
+                             ("I CAN'T WAIT!", "Mal posso esperar!"), ("NO ONE CAME", "Ninguém veio."),
+                             ("I CANNOT ALLOW THIS", "Isso é inaceitável."), ("HELLO", "Olá.")):
+            self.assertFalse(quality.lost_negation(source, text), source)
+
+    def test_stacked_orphan_lines_are_a_paragraph(self):
+        h = 20
+        para = [(100, 100 + i * 24, 180 + (i % 2) * 10, 120 + i * 24) for i in range(4)]
+        stray = [(400, 300, 440, 320)]
+        kept = quality.paragraph_lines(para + stray, h)
+        self.assertEqual(sorted(kept), sorted(para))
+        self.assertEqual(quality.paragraph_lines(stray, h), [])

@@ -216,3 +216,215 @@ def plan(image, region_box, others, text, layout, original_size, minimum, offset
         return None
     size, (rx0, ry0, rx1, ry1) = chosen
     return size, (rx0 + wx0, ry0 + wy0, rx1 + wx0, ry1 + wy0)
+
+
+# Shaped lettering --------------------------------------------------------------
+#
+# Gold standard (scanlation look): the lines follow the bubble.  In an oval the
+# middle lines are wider than the first and the last, the block sits in the
+# middle of the bubble, and the lines are balanced instead of one long line and
+# a stray word (TBATE 199 p13: "É, porque foi só isso" touched the top of the
+# oval; 242 p43: "alguma coisa / de que / gostou?" in a thin column).
+
+import os
+import re
+
+FONTS = {
+    # Comic Neue Bold (SIL Open Font License, server/fonts): the scanlation look.
+    "quadrinhos": "/mangalate/fonts/ComicNeue-Bold.ttf",
+    # The engine's own Arial, for readers who prefer plain letters.
+    "simples": "/app/fonts/Arial-Unicode-Regular.ttf",
+}
+
+
+def font_file():
+    """The font of the shaped lettering (MANGALATE_FONT); None = the engine's own layout."""
+    choice = os.environ.get("MANGALATE_FONT", "quadrinhos").strip()
+    path = FONTS.get(choice.lower(), choice if choice.lower().endswith((".ttf", ".otf")) else None)
+    return path if path and os.path.exists(path) else None
+
+
+# The original lettering is in capitals; mixed-case Portuguese at the same em size
+# reads smaller (x-height ~0.5 em against caps ~0.7 em), so the shaped plan may go
+# further than the rectangle plan when the bubble has the room.
+SHAPED_MAX_SCALE = 1.45
+REFERENCE = "ÉÇÃgjpq"   # tallest accents and deepest descenders: the height of a line slot
+MAX_LINES = 12
+BALANCE_STEPS = 7
+
+
+def half_widths(mask, cx):
+    """Per row, half the width of the interior span symmetric around column ``cx`` (0 = outside)."""
+    h, w = mask.shape
+    half = np.zeros(h, int)
+    if not 0 <= cx < w:
+        return half
+    for y in np.flatnonzero(mask[:, cx]):
+        row = mask[y]
+        l = cx
+        while l > 0 and row[l - 1]:
+            l -= 1
+        r = cx
+        while r < w - 1 and row[r + 1]:
+            r += 1
+        half[y] = min(cx - l, r + 1 - cx)
+    return half
+
+
+def wrap(words, widths, measure):
+    """Greedy wrap into lines of the given widths; None when a word does not fit or lines run out."""
+    lines, current = [], ""
+    for word in words:
+        trial = f"{current} {word}" if current else word
+        if measure(trial) <= widths[len(lines)]:
+            current = trial
+            continue
+        if not current:
+            return None  # the word alone is wider than its line
+        lines.append(current)
+        if len(lines) >= len(widths) or measure(word) > widths[len(lines)]:
+            return None
+        current = word
+    if current:
+        lines.append(current)
+    if len(lines) > 1 and any(re.sub(r"[^\w]", "", line).lower() in DANGLING for line in lines):
+        return None  # a lone "um" or "de" on its own line reads as a mistake (Grand Blue p44)
+    return lines
+
+
+# Short words that lean on their neighbour: alone on a line they read as a mistake.
+DANGLING = set("a o as os à ao um uma e é de da do das dos em no na nos nas que se me te lhe por pra pro "
+               "com sem mas ou nem".split())
+
+
+def shaped(half, centre_x, rows, text, font, spacing=LINE_SPACING):
+    """Fewest balanced lines of ``text`` that follow the interior; (lines, top, slot, advance) or None.
+
+    ``half`` comes from half_widths, ``rows`` = (top, bottom) of the interior
+    around the text, ``font(text) -> width`` measures at the size being tried
+    and carries ``slot`` (line height) and ``size`` attributes.
+    """
+    words = text.split()
+    if not words:
+        return None
+    top_row, bottom_row = rows
+    slot, advance = font.slot, font.slot + font.size * spacing
+    for n in range(1, MAX_LINES + 1):
+        height = slot + advance * (n - 1)
+        if height > bottom_row - top_row + 1:
+            return None
+        top = (top_row + bottom_row + 1 - height) / 2
+        widths = []
+        for i in range(n):
+            y0 = int(round(top + i * advance))
+            y1 = int(round(top + i * advance + slot))
+            span = half[max(0, y0):max(0, y1)]
+            widths.append(2 * int(span.min()) if len(span) and span.min() > 0 else 0)
+        if min(widths) <= 0 or wrap(words, widths, font) is None:
+            continue
+        # Balance: the narrowest widths that still hold the text in n lines.
+        lo, hi = 0.3, 1.0
+        for _ in range(BALANCE_STEPS):
+            mid = (lo + hi) / 2
+            if wrap(words, [w * mid for w in widths], font) is not None:
+                hi = mid
+            else:
+                lo = mid
+        lines = wrap(words, [w * hi for w in widths], font) or wrap(words, widths, font)
+        if len(lines) < n:
+            continue  # fewer lines would sit elsewhere; the smaller n already failed there
+        return lines, top, slot, advance
+    return None
+
+
+class Measure:
+    """Width of a line at one size of a font file (PIL), with its line slot."""
+
+    _cache = {}
+
+    def __init__(self, path, size):
+        from PIL import ImageFont
+        key = (path, size)
+        if key not in Measure._cache:
+            Measure._cache[key] = ImageFont.truetype(path, size)
+        self.font = Measure._cache[key]
+        self.size = size
+        x0, y0, x1, y1 = self.font.getbbox(REFERENCE)
+        self.offset = y0
+        self.slot = y1 - y0
+
+    def __call__(self, text):
+        return self.font.getlength(text)
+
+
+def plan_shaped(image, region_box, others, text, font_path, original_size, minimum, offset=0):
+    """Font size and lines that follow the bubble; None to use the rectangle plan."""
+    found = bubble_mask(image, region_box, others)
+    if found is None or not font_path:
+        return None
+    mask, wx0, wy0 = found
+    x0, y0, x1, y1 = region_box
+    margin = max(MIN_MARGIN, int(round(original_size * MARGIN)))
+    inner = cv2.erode(mask.astype(np.uint8), np.ones((2 * margin + 1, 2 * margin + 1), np.uint8)) > 0
+    cx = int(round((x0 + x1) / 2 - wx0))
+    cy = int(round((y0 + y1) / 2 - wy0))
+    half = half_widths(inner, cx)
+    if not 0 <= cy < len(half) or half[cy] <= 0:
+        return None
+    # The interior rows around the text: the block is centred in them, like a letterer would.
+    top = bottom = cy
+    while top > 0 and half[top - 1] > 0:
+        top -= 1
+    while bottom < len(half) - 1 and half[bottom + 1] > 0:
+        bottom += 1
+    floor = max(1, int(minimum))
+    cap = max(floor, int(round(original_size * SHAPED_MAX_SCALE)) + int(offset))
+
+    def attempt(size):
+        return shaped(half, cx, (top, bottom), text, Measure(font_path, size))
+
+    if attempt(floor) is None:
+        return None
+    lo, hi = floor, cap
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if attempt(mid) is not None:
+            lo = mid
+        else:
+            hi = mid - 1
+    lines, block_top, slot, advance = attempt(lo)
+    width = max(Measure(font_path, lo)(line) for line in lines)
+    x, top = cx + wx0, block_top + wy0
+    box = (int(x - width / 2), int(top), int(x + width / 2) + 1, int(top + slot + advance * (len(lines) - 1)) + 1)
+    return {"size": lo, "lines": lines, "x": x, "top": top, "slot": slot, "advance": advance,
+            "font": font_path, "box": box}
+
+
+def draw_shaped(img, plan, fg, bg):
+    """Draw a plan_shaped result on the RGB page (in place)."""
+    from PIL import Image, ImageDraw
+    measure = Measure(plan["font"], plan["size"])
+    h, w = img.shape[:2]
+    stroke = max(1, int(round(plan["size"] * 0.07))) if bg is not None else 0
+    pad = stroke + 2
+    widths = [measure(line) for line in plan["lines"]]
+    left = int(plan["x"] - max(widths) / 2) - pad
+    top = int(plan["top"]) - pad
+    width = int(max(widths)) + 2 * pad + 1
+    height = int(plan["slot"] + plan["advance"] * (len(plan["lines"]) - 1)) + 2 * pad + 1
+    layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(layer)
+    for i, (line, lw) in enumerate(zip(plan["lines"], widths)):
+        x = plan["x"] - lw / 2 - left
+        y = plan["top"] + i * plan["advance"] - measure.offset - top
+        draw.text((x, y), line, font=measure.font, fill=tuple(int(c) for c in fg) + (255,),
+                  stroke_width=stroke, stroke_fill=tuple(int(c) for c in bg) + (255,) if stroke else None)
+    box = np.asarray(layer)
+    cx0, cy0, cx1, cy1 = max(0, left), max(0, top), min(w, left + width), min(h, top + height)
+    if cx1 <= cx0 or cy1 <= cy0:
+        return img
+    part = box[cy0 - top:cy1 - top, cx0 - left:cx1 - left]
+    alpha = part[:, :, 3:4].astype(np.float32) / 255.0
+    target = img[cy0:cy1, cx0:cx1].astype(np.float32)
+    img[cy0:cy1, cx0:cx1] = np.clip(target * (1 - alpha) + part[:, :, :3] * alpha, 0, 255).astype(np.uint8)
+    return img

@@ -583,12 +583,27 @@ def bubble_layout(rendering, text_render):
         planned = 0
         for i, region in enumerate(text_regions):
             region.mangalate_plan = None
+            region.mangalate_shaped = None
             text = region.get_translation_for_rendering()
             if not text or not horizontal(region) or has_cjk(text):
                 continue
             def layout(size, width, height, text=text, lang=region.target_lang):
                 return text_render.calc_horizontal(size, text, width, height, lang, False)
             others = boxes[:i] + boxes[i + 1:]
+            try:
+                shaped = lettering.plan_shaped(img, boxes[i], others, text, lettering.font_file(),
+                                               line_height(region), max(8, round(minimum * 0.6)),
+                                               offset=font_size_offset or 0)
+            except Exception as exc:  # never lose a page over the nicer layout
+                print(f"Shaped layout skipped: {type(exc).__name__}", flush=True)
+                shaped = None
+            if shaped is not None:
+                region.mangalate_shaped = shaped
+                region.font_size = shaped["size"]
+                x0, y0, x1, y1 = shaped["box"]
+                points[i] = np.array([[[x0, y0], [x1, y0], [x1, y1], [x0, y1]]], dtype=np.int64)
+                planned += 1
+                continue
             try:
                 plan = lettering.plan(img, boxes[i], others, text, layout,
                                       line_height(region) + 0, max(8, round(minimum * 0.6)),
@@ -607,6 +622,10 @@ def bubble_layout(rendering, text_render):
         return points
 
     def render(img, region, dst_points, hyphenate, line_spacing, disable_font_border):
+        shaped = getattr(region, "mangalate_shaped", None)
+        if shaped is not None:
+            fg, bg = rendering.fg_bg_compare(*region.get_font_colors())
+            return lettering.draw_shaped(img, shaped, fg, None if disable_font_border else bg)
         plan = getattr(region, "mangalate_plan", None)
         if plan is None:
             return original_render(img, region, dst_points, hyphenate, line_spacing, disable_font_border)

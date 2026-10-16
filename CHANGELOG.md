@@ -2,6 +2,20 @@
 
 As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://github.com/mihonapp/mihon/blob/main/CHANGELOG.md).
 
+## Em teste (próxima versão)
+
+### Letreiramento
+- A tradução é escrita numa fonte de quadrinhos (Comic Neue Bold, licença livre) em vez da Arial, com contorno branco fino.
+- As linhas seguem o formato do balão: curtas no topo e no pé de um balão oval, largas no meio, o bloco centrado no balão e sem encostar na borda. As linhas ficam equilibradas, sem uma linha comprida seguida de uma palavra sozinha, e um "um", "de" ou "que" nunca fica sozinho numa linha.
+- Quando o balão tem espaço, a letra pode ficar um pouco maior que a original, porque minúsculas no tamanho das maiúsculas do inglês parecem menores.
+- MANGALATE_FONT=simples volta para a Arial do motor.
+
+### Tradução e balões
+- Um balão de várias linhas que o detector marcou mas não separou em linhas ("--THOUGH I / MAY OFFER SOME / SUGGESTIONS...") agora é lido e traduzido em vez de ficar em inglês.
+- Quando a tradução perde o "não" do original ("I'm not..." virando afirmação), o servidor pede de novo apontando o problema.
+- Instruções da IA: o OCR costuma ler U como LI ("LINEAMILIAR" = UNFAMILIAR), e um nome entre vírgulas é com quem se fala ("E, General Arthur, você vai...").
+- Reticências no começo da fala ficam coladas na palavra ("…mas", não "… mas").
+
 ## 0.5.6
 
 ### Tradução e balões
