@@ -212,7 +212,10 @@ async def request_byok_translation(self, to_lang, prompt, client=None, model=Non
         temperature=self.temperature,
         top_p=self.top_p,
     )
-    if isinstance(response, (str, bytes)) or not getattr(response, "choices", None):
+    if isinstance(response, (str, bytes)):
+        from providers import NotAnAnswer
+        raise NotAnAnswer("BYOK address did not answer as a chat API")
+    if not getattr(response, "choices", None):
         raise ValueError("BYOK returned no choices")
     choice = response.choices[0]
     content = getattr(getattr(choice, "message", None), "content", None)

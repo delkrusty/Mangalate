@@ -69,6 +69,8 @@ PRESETS = {
 # llama-3.3-70b-versatile in 2026: "modelo recusado" every page).
 RETIRED = {"llama-3.3-70b-versatile": "openai/gpt-oss-20b"}
 RENAMED = {"groq-llama": "groq-2"}
+# Weaker or less reliable: used only while the others are at their limit, never in the turns.
+RESERVES = {"groq-2", "github"}
 LOCAL_HOSTS = {"host.docker.internal", "localhost", "127.0.0.1"}
 SHORT_REST = 60
 LONG_REST = 3600
@@ -121,6 +123,11 @@ class AllProvidersResting(RuntimeError):
 
 class UnusableAnswer(ValueError):
     """No provider produced a usable translation for this page (content, not health)."""
+
+
+class NotAnAnswer(RuntimeError):
+    """The address answered, but not like a chat API (GitHub Models gave a plain "OK")."""
+    status_code = 404
 
 
 def classify(exc):
@@ -193,11 +200,14 @@ class ProviderPool:
         self.events = []
         self.__dict__["raw"] = []
         ready = self.available()
-        if self.take_turns and ready:
+        main = [p for p in ready if p["name"] not in RESERVES] or ready
+        spare = [p for p in ready if p not in main]
+        if self.take_turns and main:
             # Each page starts with the next provider; the others stay as fallbacks.
-            start = self.turn % len(ready)
+            start = self.turn % len(main)
             self.turn += 1
-            ready = ready[start:] + ready[:start]
+            main = main[start:] + main[:start]
+        ready = main + spare
         for provider in ready:
             try:
                 result = await attempt(provider)
@@ -205,6 +215,7 @@ class ProviderPool:
                 self.failed(provider, exc)
                 continue
             self.strikes[provider["name"]] = 0
+            self.log(f"BYOK: página traduzida por {provider['name']}")
             return result
         # If any provider that is still available answered (badly), the problem is this
         # page, not the providers' limits: never make the caller wait for a pause.

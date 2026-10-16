@@ -96,7 +96,10 @@ def classify_region(image, text_mask, quads, line_height=None):
     inner = cv2.erode(lines, np.ones((3, 3), np.uint8))
     sample = np.zeros((h, w), bool)
     sample[y0:y1, x0:x1] = True
-    sample &= (text == 0) & (inner == 0)
+    # Only the margin of the lines themselves: a block shaped like a staircase
+    # (236 p32) has page or art in the empty corners of its bounding box.
+    near = cv2.dilate(lines, np.ones((2 * pad + 1, 2 * pad + 1), np.uint8))
+    sample &= (text == 0) & (inner == 0) & (near > 0)
     ys, xs = np.nonzero(sample)
     if len(xs) < MIN_SAMPLES:
         return {"kind": "art", "interior_share": 0.0, "samples": int(len(xs))}
@@ -470,8 +473,15 @@ def repair_lines(mask, boxes):
             if _covered(part, others) < 0.5:
                 parts.append(part)
         if len(parts) < 2 and y1 - y0 <= STAIR_FACTOR * height:
-            # One box over two touching lines of a staircase caption (236 p32).
-            parts = stair_lines(ink[y0:y1, x0:x1], x0, y0, height)
+            # One box over two touching lines of a staircase caption (236 p32);
+            # ink of the lines above and below, already boxed, is left out.
+            own = ink[y0:y1, x0:x1].copy()
+            # Their letters overflow the boxes a little, mostly sideways.
+            side, edge = int(round(0.5 * height)), 2
+            for ox0, oy0, ox1, oy1 in others:
+                own[max(0, oy0 - edge - y0):max(0, oy1 + edge - y0),
+                    max(0, ox0 - side - x0):max(0, ox1 + side - x0)] = False
+            parts = stair_lines(own, x0, y0, height)
         if len(parts) >= 2:
             result.extend((part, index) for part in parts)
             changes.append(("split", (x0, y0, x1, y1), parts))

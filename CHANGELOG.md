@@ -15,13 +15,13 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 - Começo da tradução arrumado: "M-ME LIGA assim que" vira "M-me liga assim que", e uma fala que continua com reticências ("..DREAM") começa em minúscula.
 - Quando a IA some com um nome do original ("Arthur. Eleanor. Sylvie." virando "Arthur. E Sylvie.") ou usa feminino sem nenhuma mulher na página nem nas anteriores ("eu disse a mim mesma" com o Arthur narrando), o servidor pede a tradução de novo apontando o problema e fica com a melhor.
 - A memória da obra guarda o gênero de cada personagem quando a página mostra, e a IA usa isso nas páginas seguintes, inclusive quando o personagem narra. No lote, o glossário CSV aceita a coluna `gender` (m ou f).
-- Legenda em escada com uma palavra riscada que encosta na linha de baixo ("THAT ENOUGH, ~~GREY~~" / "ARTHUR, AND") tem as duas linhas lidas e traduzidas.
+- Legenda em escada com uma palavra riscada que encosta na linha de baixo ("THAT ENOUGH, ~~GREY~~" / "ARTHUR, AND") tem as duas linhas lidas e traduzidas, e a legenda inteira deixa de ser confundida com desenho por causa dos cantos vazios da escada.
 - Uma hesitação curta em maiúsculas ("EU...") volta para "Eu...".
 - Instruções da IA: todo nome do original aparece na tradução, sem troca nem sobrenome inventado; gênero só com evidência (pronome, título, nome já conhecido), senão frase neutra; título ou apelido segue o gênero de quem ele nomeia.
 
 ### IAs e velocidade
 - Novas IAs gratuitas na instalação: Mistral, um segundo modelo do Groq (GPT-OSS 20B, usa a mesma chave e tem limite separado) e GitHub Models (GPT-4.1 mini, com um token do GitHub).
-- Com mais de uma IA configurada, as páginas se revezam entre elas (uma página vai para a primeira, a seguinte para a segunda), então o limite gratuito de cada uma demora mais para acabar. MANGALATE_ROTATION=ordem volta ao jeito antigo (sempre a primeira, as outras só de reserva).
+- Com mais de uma IA configurada, as páginas se revezam entre elas (uma página vai para a primeira, a seguinte para a segunda), então o limite gratuito de cada uma demora mais para acabar. O segundo Groq e o GitHub Models ficam só de reserva (entram quando as outras estão no limite), porque traduzem pior. O log diz qual IA traduziu cada página. MANGALATE_ROTATION=ordem volta ao jeito antigo (sempre a primeira, as outras só de reserva).
 - Uma IA que demora mais de 45 segundos é deixada de lado e a página vai para a próxima.
 - O servidor traduz 2 páginas ao mesmo tempo: enquanto uma espera a IA, a outra é lida e limpa. O app manda 2 páginas por vez e, num servidor antigo que só aceita uma, espera a vez em vez de dar erro. MANGALATE_PAGES_AT_ONCE muda o número (1 a 4).
 

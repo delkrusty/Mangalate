@@ -266,3 +266,32 @@ class RetiredModelTest(unittest.TestCase):
                                            "model": "llama-3.3-70b-versatile", "key": "gsk_x"}]})
         self.assertEqual(parse_secret(saved)[0]["name"], "groq-2")
         self.assertEqual(parse_secret(saved)[0]["model"], "openai/gpt-oss-20b")
+
+
+class ReserveTest(unittest.TestCase):
+    """Round 6: gpt-oss-20b (groq-2) translated worse; GitHub Models answered a plain "OK"."""
+
+    def providers(self):
+        base = "https://api.example.com/v1"
+        return [{"name": n, "base": base, "model": "m", "key": "k"} for n in ("groq", "groq-2", "gemini", "github")]
+
+    def test_reserves_stay_out_of_the_turns(self):
+        import asyncio
+        from providers import ProviderPool
+        logs = []
+        pool = ProviderPool(self.providers(), clock=lambda: 0.0, log=logs.append, take_turns=True)
+        used = [asyncio.run(pool.run(lambda p: asyncio.sleep(0, p["name"]))) for _ in range(4)]
+        self.assertEqual(used, ["groq", "gemini", "groq", "gemini"])
+        self.assertIn("BYOK: página traduzida por groq", logs)
+
+    def test_reserves_take_over_when_the_others_rest(self):
+        import asyncio
+        from providers import ProviderPool, NotAnAnswer
+        pool = ProviderPool(self.providers(), clock=lambda: 0.0, log=lambda m: None, take_turns=True)
+
+        async def attempt(p):
+            if p["name"] in ("groq", "gemini"):
+                raise NotAnAnswer("x")
+            return p["name"]
+        self.assertEqual(asyncio.run(pool.run(attempt)), "groq-2")
+        self.assertGreater(pool.resting["groq"], 1000)  # not a chat API: long pause
