@@ -267,13 +267,45 @@ class RetiredModelTest(unittest.TestCase):
         self.assertEqual(parse_secret(saved)[0]["name"], "groq-2")
         self.assertEqual(parse_secret(saved)[0]["model"], "openai/gpt-oss-20b")
 
+    def test_saved_mistral_and_github_keys_are_skipped(self):
+        """16/10: free Mistral answered 429 with 0 requests allowed; GitHub Models a plain "OK"."""
+        import json
+        from providers import parse_secret
+        item = lambda n, b: {"name": n, "base": b, "model": "m", "key": "k" * 24}
+        saved = json.dumps({"providers": [item("groq", "https://api.groq.com/openai/v1"),
+                                          item("mistral", "https://api.mistral.ai/v1"),
+                                          item("github", "https://models.github.ai/inference")]})
+        self.assertEqual([p["name"] for p in parse_secret(saved)], ["groq"])
+        with self.assertRaises(ValueError):
+            parse_secret(json.dumps({"providers": [item("mistral", "https://api.mistral.ai/v1")]}))
+
+    def test_groq_gpt_oss_thinks_briefly(self):
+        """Groq counts GPT-OSS thinking against 8,000 free tokens per minute."""
+        import asyncio
+        from types import SimpleNamespace
+        from engine_compat import request_byok_translation
+        sent = []
+
+        async def create(**kwargs):
+            sent.append(kwargs)
+            message = SimpleNamespace(content="<|1|>Oi")
+            return SimpleNamespace(choices=[SimpleNamespace(message=message, finish_reason="stop")], usage=None)
+        translator = SimpleNamespace(chat_system_template="S {to_lang}", get_chat_sample=lambda lang: None,
+                                     _MAX_TOKENS=100, temperature=.2, top_p=1, token_count=0)
+        for base, model, short in (("https://api.groq.com/openai/v1", "openai/gpt-oss-120b", True),
+                                   ("https://api.groq.com/openai/v1", "other", False),
+                                   ("https://openrouter.ai/api/v1", "openai/gpt-oss-120b", False)):
+            client = SimpleNamespace(base_url=base, chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+            asyncio.run(request_byok_translation(translator, "PTB", "<|1|>Hi", client, model))
+            self.assertEqual(sent[-1].get("extra_body"), {"reasoning_effort": "low"} if short else None)
+
 
 class ReserveTest(unittest.TestCase):
-    """Round 6: gpt-oss-20b (groq-2) translated worse; GitHub Models answered a plain "OK"."""
+    """Round 6: gpt-oss-20b (groq-2) translated worse; an address answered a plain "OK"."""
 
     def providers(self):
         base = "https://api.example.com/v1"
-        return [{"name": n, "base": base, "model": "m", "key": "k"} for n in ("groq", "groq-2", "gemini", "github")]
+        return [{"name": n, "base": base, "model": "m", "key": "k"} for n in ("groq", "groq-2", "gemini")]
 
     def test_reserves_stay_out_of_the_turns(self):
         import asyncio

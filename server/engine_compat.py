@@ -205,12 +205,16 @@ async def request_byok_translation(self, to_lang, prompt, client=None, model=Non
     if not model:
         from manga_translator.translators.keys import CUSTOM_OPENAI_MODEL
         model = CUSTOM_OPENAI_MODEL
-    response = await (client or self.client).chat.completions.create(
+    client = client or self.client
+    from providers import short_reasoning
+    extra = {"extra_body": {"reasoning_effort": "low"}} if short_reasoning(getattr(client, "base_url", ""), model) else {}
+    response = await client.chat.completions.create(
         model=model,
         messages=messages,
         max_tokens=self._MAX_TOKENS,
         temperature=self.temperature,
         top_p=self.top_p,
+        **extra,
     )
     if isinstance(response, (str, bytes)):
         from providers import NotAnAnswer

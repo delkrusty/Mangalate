@@ -24,6 +24,10 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 - Gagueira mantém a palavra em minúscula ("E-eu tô com medo", não "E-Eu").
 - "Você deve estar preocupada" sem nenhuma mulher na página também pede a tradução de novo.
 
+### IAs
+- Mistral e GitHub Models saíram da lista. Num teste com as chaves reais, o plano grátis da Mistral responde "limite" com zero pedidos permitidos para os modelos small e medium (o único que respondeu foi um modelo pequeno que conversa em vez de traduzir), e o GitHub Models devolveu só "OK" em vez de uma tradução. Nos 7 capítulos de teste nenhum dos dois traduziu uma página. Chaves já salvas deles são ignoradas; as outras IAs continuam.
+- O Groq (GPT-OSS) pensa menos antes de responder: na mesma página, o segundo modelo gastou 290 tokens de resposta em vez de 631, com a mesma tradução ou melhor. O limite grátis do Groq é de 200 mil tokens por dia por modelo, então isso deixa mais páginas por dia.
+
 ## 0.5.6
 
 ### Tradução e balões
