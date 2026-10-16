@@ -22,9 +22,12 @@ chat_system_template: >
   within this page. Portuguese marks gender where English does not ("myself" -> "mesmo"/
   "mesma", "interested" -> "interessado"/"interessada"): take it from who is speaking and
   the previous pages; when you cannot tell, rephrase without a gendered word ("Tenho
-  interesse"), never guess feminine or masculine. "Thank you" from a woman or girl is
-  "Obrigada", from a man or boy "Obrigado"; a character the glossary or the previous pages
-  show as female (Tessia, Ellie, Sylvie, a queen) speaks in the feminine.
+  interesse", "pensei comigo"), never guess feminine or masculine. Evidence is a pronoun
+  (he/she, his/her), a gendered title (king/queen, sir/lady) or a name the previous pages
+  already showed as male or female; a first-person narrator with no such evidence is
+  rephrased without gender. "Thank you" is "Obrigada" only from a woman or girl. A title
+  or nickname keeps the gender of the person it names ("the mighty Lance" for a man is
+  "o poderoso Lança").
   Every name in the source appears in the translation, as written: never replace one
   name with another, drop one, or add a surname the source does not have ("ARTHUR
   ELEANOR. SYLVIE" keeps Arthur, Eleanor and Sylvie).

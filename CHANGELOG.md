@@ -11,7 +11,9 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 - A última palavra de uma fala lida ao lado da última linha ("THE REAL" | "TRAINING") também volta para a fala.
 - Nome que a IA manteve numa resposta em maiúsculas continua com inicial maiúscula ("Rainha Merial", não "Rainha merial").
 - A linha logo abaixo de um crédito ("Original Art by:" / nomes) também fica no original.
-- Instruções da IA: todo nome do original aparece na tradução, sem troca nem sobrenome inventado; "Obrigada" quando quem fala é mulher.
+- Página de créditos do fim do capítulo (dois ou mais créditos de equipe) fica inteira no original: logo, selo da plataforma e nomes.
+- Começo da tradução arrumado: "M-ME LIGA assim que" vira "M-me liga assim que", e uma fala que continua com reticências ("..DREAM") começa em minúscula.
+- Instruções da IA: todo nome do original aparece na tradução, sem troca nem sobrenome inventado; gênero só com evidência (pronome, título, nome já conhecido), senão frase neutra; título ou apelido segue o gênero de quem ele nomeia.
 
 ### Servidor
 - A instalação para placa NVIDIA voltou a compilar (a imagem base do PyTorch passou a recusar o pip) e agora é conferida a cada mudança.

@@ -14,6 +14,7 @@ class OfflineTextTest {
         assertTrue(OfflineText.isCredit("Join our DISCORD"))
         assertTrue(OfflineText.isCredit("TOWER OF GOD™"))
         assertTrue(OfflineText.isCredit("Original Art by: YOYO,"))
+        assertTrue(OfflineText.isCredit("Producedby:MGK-story"))
         assertFalse(OfflineText.isCredit("Stand by me."))
         assertFalse(OfflineText.isCredit("IT SCANS THE AREA."))
         assertFalse(OfflineText.isCredit("Where are you going?"))

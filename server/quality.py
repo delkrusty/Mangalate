@@ -227,6 +227,31 @@ def source_names(original, translation):
             if w.lower() not in COGNATES and re.search(rf"(?<![\wÀ-ÿ]){re.escape(w.lower())}(?![\wÀ-ÿ])", kept)}
 
 
+def tidy_start(text, original="", names=()):
+    """Fix how a translation starts.
+
+    "M-ME LIGA assim que..." (TBATE 236 p30): a run of capitals at the start of
+    an otherwise sentence-case answer becomes sentence case.  "...Sendo sonho ou
+    não." (236 p34): when the source continues a sentence ("..DREAM OR NO DREAM"),
+    the first word after the dots stays lowercase.
+    """
+    if not text or has_cjk(text):
+        return text
+    keep = {n for n in names if n and n[:1].isupper()}
+    run = re.match(r"^([\W_]*)((?:[A-ZÀ-Ý]{1,3}-)?[A-ZÀ-Ý]{2,}(?:\s+[A-ZÀ-Ý]{2,})*)(?=\s+[a-zà-ÿ])", text)
+    if run and any(c.islower() for c in text):
+        words = run.group(2).split()
+        fixed = [w.title() if w.title() in keep else w.lower() for w in words]
+        first = fixed[0]
+        fixed[0] = first[:1].upper() + first[1:]
+        text = run.group(1) + " ".join(fixed) + text[run.end():]
+    if re.match(r"^\s*(?:\.{2,}|…)", original or ""):
+        cont = re.match(r"^(\s*(?:\.{2,}|…)\s*)([A-ZÀ-Ý])([a-zà-ÿ]+)", text)
+        if cont and (cont.group(2) + cont.group(3)) not in keep:
+            text = cont.group(1) + cont.group(2).lower() + cont.group(3) + text[cont.end():]
+    return text
+
+
 def page_names(translations):
     """Words written with a capital in the middle of a sentence elsewhere on the page."""
     names = set()

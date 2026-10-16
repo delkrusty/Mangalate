@@ -319,10 +319,23 @@ def is_credit(text):
     global CREDIT
     if CREDIT is None:
         CREDIT = re.compile(r"[™©®]|\b\w{3,}scans?\b|discord|patreon|ko-?fi|www\.|\.(?:com|net|org|gg)\b"
-                            r"|\b(?:by|tl|pr|ts|qc|raws?|editor|proofreader|typesetter|translator|cleaner|redrawer)\s*:"
+                            r"|by\s*:|\b(?:tl|pr|ts|qc|raws?|editor|proofreader|typesetter|translator|cleaner|redrawer)\s*:"
+                            r"|\btapa\w*\W{0,3}origin"
                             r"|read (?:the |this |more |latest )?chapters? (?:at|on)|support us|our (?:web)?site",
                             re.I)
     return bool(CREDIT.search(str(text or "")))
+
+
+CREDIT_ROLE = None
+
+
+def credits_page(regions):
+    """Two or more staff credits ("Story and adaptation by:", "Original Art by:") make a credits page."""
+    import re
+    global CREDIT_ROLE
+    if CREDIT_ROLE is None:
+        CREDIT_ROLE = re.compile(r"by\s*:|adaptation|original art|story and|produced\s*by", re.I)
+    return sum(bool(CREDIT_ROLE.search(str(getattr(r, "text", "") or ""))) for r in regions) >= 2
 
 
 def credit_followers(regions):
@@ -406,10 +419,18 @@ def classify_regions(original_merge):
         if raw is not None and raw.shape[:2] != image.shape[:2]:
             raw = cv2.resize(raw, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
         follow = credit_followers(regions)
+        if credits_page(regions):
+            # End-of-chapter credits: the logo, the platform seal and every name stay as drawn
+            # (TBATE 240 p68: the logo read as "FTERTHEEND" became "After the end").
+            follow |= {id(r) for r in regions}
         kept = []
         for region in regions:
             text = getattr(region, "text", "")
             if is_sound_effect(text) or is_credit(text) or id(region) in follow:
+                if id(region) in follow and not is_sound_effect(text):
+                    region.mangalate_background = {"kind": "creditos"}
+                    ctx.mangalate_preserved.append(region)
+                    continue
                 region.mangalate_background = {"kind": "efeito_sonoro" if is_sound_effect(text) else "creditos"}
                 ctx.mangalate_preserved.append(region)
                 continue
@@ -670,14 +691,16 @@ def validate_page_translations(original_translate):
         regions = list(ctx.text_regions or [])
         result = await original_translate(self, config, ctx)
         if not legacy_quality() and isinstance(result, list):
-            from quality import normalize_spacing, page_names, sentence_case, source_names
+            from quality import normalize_spacing, page_names, sentence_case, source_names, tidy_start
             texts = [getattr(region, "translation", None) for region in result]
             names = page_names([t for t in texts if isinstance(t, str)])
             names |= {g["target"] for g in (PAGE_CONTEXT or {}).get("glossary", [])}
             for region in result:
                 if isinstance(getattr(region, "translation", None), str):
                     own = names | source_names(getattr(region, "text", ""), region.translation)
-                    region.translation = normalize_spacing(sentence_case(region.translation, own))
+                    fixed = sentence_case(region.translation, own)
+                    fixed = tidy_start(fixed, getattr(region, "text", ""), own)
+                    region.translation = normalize_spacing(fixed)
         blank = sum(not getattr(region, "translation", "").strip() for region in regions)
         unchanged = sum(getattr(region, "translation", "").strip().lower() == region.text.strip().lower()
                         for region in regions)

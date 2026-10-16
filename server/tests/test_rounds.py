@@ -102,6 +102,27 @@ class Round2Test(unittest.TestCase):
         self.assertEqual(follow, {id(below)})
 
 
+class Round3Test(unittest.TestCase):
+    def test_credits_page_keeps_everything(self):
+        from engine_compat import credits_page
+        page = [region(0, 0, 10, 10, t) for t in ("tapayoriginal", "FTERTHEEND", "Producedby:MGK-story",
+                                                  "Story and adaptation by: TurtleMe", "Original Art by: YOY")]
+        self.assertTrue(credits_page(page))
+        self.assertFalse(credits_page([region(0, 0, 10, 10, t) for t in ("Read at asurascans.com", "Run!")]))
+        self.assertTrue(is_credit("Producedby:MGK-story"))
+        self.assertTrue(is_credit("tapa..origina"))
+
+    def test_start_of_the_translation(self):
+        from quality import tidy_start
+        self.assertEqual(tidy_start("M-ME LIGA assim que descobrir, tá?"), "M-me liga assim que descobrir, tá?")
+        self.assertEqual(tidy_start("NÃO faça isso!"), "Não faça isso!")
+        self.assertEqual(tidy_start("ARTHUR VEIO aqui.", names={"Arthur"}), "Arthur veio aqui.")
+        self.assertEqual(tidy_start("OK, vamos."), "OK, vamos.")
+        self.assertEqual(tidy_start("...Sendo sonho ou não.", "..DREAM OR NO DREAM"), "...sendo sonho ou não.")
+        self.assertEqual(tidy_start("...Arthur voltou.", "..ARTHUR CAME BACK", {"Arthur"}), "...Arthur voltou.")
+        self.assertEqual(tidy_start("...Certo.", "OKAY."), "...Certo.")
+
+
 class RoundFixesTest(unittest.TestCase):
     def test_credit_lines_stay_as_drawn(self):
         self.assertTrue(is_credit("Original Art by: YOYO,"))

@@ -11,7 +11,8 @@ object OfflineText {
     /** Créditos e marcas d'água de scan: ficam como estão, sem tradução. */
     private val credit = Regex(
         "[™©®]|\\b\\w{3,}scans?\\b|discord|patreon|ko-?fi|www\\.|\\.(?:com|net|org|gg)\\b" +
-            "|\\b(?:by|tl|pr|ts|qc|raws?|editor|proofreader|typesetter|translator|cleaner|redrawer)\\s*:" +
+            "|by\\s*:|\\b(?:tl|pr|ts|qc|raws?|editor|proofreader|typesetter|translator|cleaner|redrawer)\\s*:" +
+            "|\\btapa\\w*\\W{0,3}origin" +
             "|read (?:the |this |more |latest )?chapters? (?:at|on)|support us|our (?:web)?site",
         RegexOption.IGNORE_CASE,
     )
