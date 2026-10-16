@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(python -m unittest:*)",
+      "Bash(python3 -m unittest:*)",
+      "Bash(py -m unittest:*)",
+      "Bash(docker compose ps:*)",
+      "Bash(docker compose logs:*)"
+    ],
+    "deny": [
+      "Read(**/secrets/**)",
+      "Edit(**/secrets/**)",
+      "Read(**/*.jks)",
+      "Read(**/keystore.properties)",
+      "Read(**/local.properties)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git push --force-with-lease:*)",
+      "Bash(git push origin main:*)",
+      "Bash(git push origin +main:*)",
+      "Bash(git push origin HEAD:main:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "RE='gsk_[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{35}|sk-or-v1-[0-9a-f]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}'\nFAKE='^(gsk_|AIza|sk-ant-|gh[pousr]_|github_pat_)(.)\\2+$'\nfound() { grep -oE \"$RE\" | grep -vE \"$FAKE\" | grep -q .; }\nin=$(cat)\nif printf '%s' \"$in\" | grep -qE '\"tool_name\" *: *\"Bash\"' && printf '%s' \"$in\" | grep -qE 'secrets[/\\\\]'; then echo 'Bloqueado: comandos não leem nem mexem em server/secrets/.' >&2; exit 2; fi\nif printf '%s' \"$in\" | found; then echo 'Bloqueado: o comando ou o texto tem algo com cara de chave de API. Chaves ficam só em server/secrets/ no PC.' >&2; exit 2; fi\ncase \"$in\" in *'git commit'*)\n  if git diff --cached | found; then echo 'Bloqueado: o que está preparado para o commit tem algo com cara de chave de API.' >&2; exit 2; fi\n  if git diff --cached --name-only | grep -qE '(^|/)(secrets/|\\.env$|keystore\\.properties$|local\\.properties$)|\\.jks$'; then echo 'Bloqueado: arquivo de segredo preparado para o commit.' >&2; exit 2; fi;;\nesac\nexit 0",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "py=$(command -v py || command -v python3 || command -v python) || exit 0\n\"$py\" -c 'import ast, json, sys\np = json.load(sys.stdin).get(\"tool_input\", {}).get(\"file_path\", \"\")\ntry:\n    if p.endswith(\".py\"):\n        ast.parse(open(p, encoding=\"utf-8\").read(), p)\n    elif p.endswith(\".json\"):\n        json.load(open(p, encoding=\"utf-8\"))\nexcept (SyntaxError, ValueError) as e:\n    print(f\"Arquivo inválido depois da edição: {p}: {e}\", file=sys.stderr)\n    sys.exit(2)'",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}
