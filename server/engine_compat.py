@@ -205,12 +205,16 @@ async def request_byok_translation(self, to_lang, prompt, client=None, model=Non
     if not model:
         from manga_translator.translators.keys import CUSTOM_OPENAI_MODEL
         model = CUSTOM_OPENAI_MODEL
-    response = await (client or self.client).chat.completions.create(
+    client = client or self.client
+    from providers import short_reasoning
+    extra = {"extra_body": {"reasoning_effort": "low"}} if short_reasoning(getattr(client, "base_url", ""), model) else {}
+    response = await client.chat.completions.create(
         model=model,
         messages=messages,
         max_tokens=self._MAX_TOKENS,
         temperature=self.temperature,
         top_p=self.top_p,
+        **extra,
     )
     if isinstance(response, (str, bytes)):
         from providers import NotAnAnswer
@@ -344,9 +348,10 @@ def is_sound_effect(text):
     Kana or kanji with only a few Latin letters around them is left as drawn.
     """
     import re
+    from quality import english_sound_effect
     text = str(text or "")
     if not re.search(r"[\u3040-\u30ff\u3400-\u9fff\uff66-\uff9f]", text):
-        return False
+        return english_sound_effect(text)
     return len(re.findall(r"[A-Za-z]", text)) < 12
 
 
@@ -407,7 +412,7 @@ def join_split_blocks(regions, image):
     import cv2
     import numpy as np
     import lettering
-    from quality import join_blocks
+    from quality import join_blocks, absorb_contained, column_groups, _box
 
     def inside(a, b):
         found = lettering.bubble_mask(image, tuple(int(v) for v in a.xyxy))
@@ -426,11 +431,39 @@ def join_split_blocks(regions, image):
                        font_size=max(a.font_size, b.font_size), angle=a.angle, prob=min(a.prob, b.prob),
                        fg_color=a.fg_colors, bg_color=a.bg_colors)
 
+    def absorb(outer, inner):
+        # Lines in reading order: "LOOKS / LIKE / IORI..." (Grand Blue p25), not "LOOKS IORI ... LIKE".
+        pairs = list(zip(np.asarray(outer.lines), outer.texts)) + list(zip(np.asarray(inner.lines), inner.texts))
+        pairs.sort(key=lambda p: float(np.asarray(p[0], float)[:, 1].mean()))
+        return type(outer)(np.stack([p[0] for p in pairs]), [p[1] for p in pairs],
+                           font_size=max(outer.font_size, inner.font_size), angle=outer.angle,
+                           prob=min(outer.prob, inner.prob), fg_color=outer.fg_colors, bg_color=outer.bg_colors)
+
     if image is None or not all(hasattr(r, "xyxy") and hasattr(r, "lines") for r in regions):
         return regions
     horizontal = [r for r in regions if getattr(r, "horizontal", True)]
     others = [r for r in regions if not getattr(r, "horizontal", True)]
+    def columns(region):
+        # Two speeches side by side that the merge read as one, line by line interleaved.
+        boxes = [_box(q) for q in np.asarray(region.lines)]
+        groups = column_groups(boxes)
+        gaps = [min(boxes[i][0] for i in b) - max(boxes[i][2] for i in a) for a, b in zip(groups, groups[1:])]
+        if len(groups) < 2 or min(gaps) <= 0 or max(len(g) for g in groups) < 2 or len(region.texts) != len(boxes):
+            return [region]
+        lines, texts = np.asarray(region.lines), list(region.texts)
+        return [type(region)(lines[g], [texts[i] for i in g], font_size=region.font_size, angle=region.angle,
+                             prob=region.prob, fg_color=region.fg_colors, bg_color=region.bg_colors)
+                for g in (sorted(g, key=lambda i: boxes[i][1]) for g in groups)]
+
     try:
+        split = [part for region in horizontal for part in columns(region)]
+        if len(split) > len(horizontal):
+            print(f"Region split: {len(split) - len(horizontal)} column(s) separated", flush=True)
+        horizontal = split
+        before = len(horizontal)
+        horizontal = absorb_contained(horizontal, absorb, inside)
+        if len(horizontal) < before:
+            print(f"Region join: {before - len(horizontal)} line(s) inside another speech joined", flush=True)
         joined = join_blocks(horizontal, make, inside)
     except Exception as exc:  # never lose a page over this
         print(f"Region join skipped: {type(exc).__name__}", flush=True)
@@ -438,6 +471,66 @@ def join_split_blocks(regions, image):
     if len(joined) < len(horizontal):
         print(f"Region join: {len(horizontal) - len(joined)} split speech(es) joined", flush=True)
     return joined + others
+
+
+def fix_ocr(regions):
+    """OCR letter mix-ups ("TM LINEAMILIAR" -> "I'M UNFAMILIAR") fixed before translation."""
+    from quality import fix_ocr_words
+    keep = [g.get("source", "") for g in (page_context() or {}).get("glossary") or [] if isinstance(g, dict)]
+    total = 0
+    for region in regions:
+        try:
+            text, changed = fix_ocr_words(getattr(region, "text", ""), keep)
+        except Exception as exc:  # never lose a page over this
+            print(f"OCR fix skipped: {type(exc).__name__}", flush=True)
+            return
+        if changed:
+            region.text = text
+            total += changed
+    if total:
+        print(f"OCR fix: {total} word(s)", flush=True)
+
+
+def scanned_sounds(regions, bubbles, rows=None):
+    """Split off text found only by the bubble scan that does not read as a line of speech.
+
+    The scan also catches a sound drawn in a closed shape ("GRAB", "REEE"); those
+    stay as drawn.  Two or more rows of letters with a common word are speech even
+    when the OCR kept one word (Grand Blue p23: "ASS- / HOLE..." read as "ASS").
+    Returns (kept regions, regions left as art).
+    """
+    from quality import reads_as_speech
+    if not bubbles:
+        return regions, []
+    rows = list(rows or [1] * len(bubbles))
+    kept, drawn = [], []
+    for region in regions:
+        x0, y0, x1, y1 = (int(v) for v in region.xyxy)
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        found = [k for k, b in enumerate(bubbles) if b[0] <= cx <= b[2] and b[1] <= cy <= b[3]]
+        text = getattr(region, "text", "")
+        if found and not reads_as_speech(text, several_rows=rows[found[0]] >= 2):
+            region.mangalate_background = {"kind": "efeito_sonoro"}
+            drawn.append(region)
+        else:
+            kept.append(region)
+    if drawn:
+        print(f"Bubble scan: {len(drawn)} kept as art: {[getattr(r, 'text', '') for r in drawn]}", flush=True)
+    return kept, drawn
+
+
+def drop_duplicates(regions):
+    """A second, worse reading of the same letters is dropped (quality.duplicate_regions)."""
+    from quality import duplicate_regions
+    try:
+        boxes = [tuple(int(v) for v in r.xyxy) for r in regions]
+        drop = duplicate_regions(boxes, [getattr(r, "text", "") for r in regions])
+    except Exception as exc:  # never lose a page over this
+        print(f"Duplicate check skipped: {type(exc).__name__}", flush=True)
+        return regions
+    if drop:
+        print(f"Duplicate regions: {len(drop)} dropped at {[boxes[i] for i in sorted(drop)]}", flush=True)
+    return [r for i, r in enumerate(regions) if i not in drop]
 
 
 def classify_regions(original_merge):
@@ -457,7 +550,12 @@ def classify_regions(original_merge):
             if context_only:
                 print(f"Region check: {len(context_only)} only in the neighbouring pages, skipped", flush=True)
             regions = join_split_blocks(regions, ctx.img_rgb)
+            regions = drop_duplicates(regions)
+            regions, drawn = scanned_sounds(regions, getattr(ctx, "mangalate_scanned", []),
+                                            getattr(ctx, "mangalate_scanned_rows", None))
+            ctx.mangalate_preserved.extend(drawn)
         if not regions or not protect_art(config):
+            fix_ocr(regions or [])
             return regions
         image, raw = ctx.img_rgb, ctx.mask_raw
         if raw is not None and raw.shape[:2] != image.shape[:2]:
@@ -484,6 +582,7 @@ def classify_regions(original_merge):
             else:
                 ctx.mangalate_preserved.append(region)
         print(f"Region check: kept={len(kept)} preserved_original={len(ctx.mangalate_preserved)}", flush=True)
+        fix_ocr(kept)
         return kept
     return merge
 
@@ -518,9 +617,10 @@ def repair_textlines(original_detect):
     """
     async def detect(self, config, ctx):
         result = await original_detect(self, config, ctx)
-        if not result or not result[0] or result[1] is None:
+        if not result or result[1] is None:
             return result
-        textlines, mask_raw, mask = result[0], result[1], result[2]
+        textlines, mask_raw, mask = list(result[0] or []), result[1], result[2]
+        import cv2
         import numpy as np
         from quality import repair_lines, _box
         from manga_translator.utils import Quadrilateral
@@ -537,6 +637,42 @@ def repair_textlines(original_detect):
                 seen = seen | bubble_glyphs(np.asarray(image), box, box[3] - box[1], near=NEAR_LINES)
         repaired, changes = repair_lines(seen.astype(np.uint8) * 255, boxes)
         ctx.mangalate_line_repairs = [{"tipo": kind, "antes": before, "depois": after} for kind, before, after in changes]
+        # One box across two columns of text in the same bubble is cut at the gutter.
+        if image is not None:
+            from quality import column_cuts
+            try:
+                gray = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2GRAY)
+                cuts = column_cuts(gray, [box for box, _ in repaired])
+            except Exception as exc:  # never lose a page over this
+                print(f"Column check skipped: {type(exc).__name__}", flush=True)
+                cuts = {}
+            for i in sorted(cuts, reverse=True):
+                (x0, y0, x1, y1), source = repaired[i]
+                gx0, gx1 = cuts[i]
+                parts = [(x0, y0, gx0, y1), (gx1, y0, x1, y1)]
+                repaired[i:i + 1] = [(part, source) for part in parts]
+                changes.append(("column", (x0, y0, x1, y1), parts))
+        # Small white bubbles the detector did not see at all.
+        scanned = []
+        if image is not None:
+            from quality import bubble_text_lines
+            try:
+                scanned = bubble_text_lines(np.asarray(image), [_box(line.pts) for line in textlines])
+            except Exception as exc:  # never lose a page over this
+                print(f"Bubble scan skipped: {type(exc).__name__}", flush=True)
+        ctx.mangalate_scanned = [bubble for bubble, _, _ in scanned]
+        ctx.mangalate_scanned_rows = [len(rows) for _, rows, _ in scanned]
+        if scanned:
+            mask_raw = np.asarray(mask_raw).copy()
+            for bubble, rows, letters in scanned:
+                mask_raw[cv2.dilate(letters.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0] = 255
+                for x0, y0, x1, y1 in rows:
+                    if x1 - x0 < y1 - y0:  # a one-letter row ("I") stays a horizontal line
+                        pad = (y1 - y0 - (x1 - x0)) // 2 + 1
+                        x0, x1 = max(bubble[0], x0 - pad), min(bubble[2], x1 + pad)
+                    changes.append(("bubble", None, (x0, y0, x1, y1)))
+                    repaired.append(((x0, y0, x1, y1), None))
+            print(f"Bubble scan: {len(scanned)} bubble(s) at {ctx.mangalate_scanned}", flush=True)
         if not changes:
             return result
         lines = [line for i, line in enumerate(textlines) if i not in set(horizontal)]
@@ -549,7 +685,10 @@ def repair_textlines(original_detect):
             pts = np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=np.int64)
             lines.append(Quadrilateral(pts, "", original.prob if original is not None else 1.0))
         split = sum(1 for kind, _, _ in changes if kind == "split")
-        print(f"Line repair: split={split} added={len(changes) - split}", flush=True)
+        scan = sum(1 for kind, _, _ in changes if kind == "bubble")
+        column = sum(1 for kind, _, _ in changes if kind == "column")
+        print(f"Line repair: split={split} added={len(changes) - split - scan - column} scanned={scan} "
+              f"column_cuts={column}", flush=True)
         return (lines, mask_raw, mask) + tuple(result[3:])
     return detect
 
@@ -583,12 +722,27 @@ def bubble_layout(rendering, text_render):
         planned = 0
         for i, region in enumerate(text_regions):
             region.mangalate_plan = None
+            region.mangalate_shaped = None
             text = region.get_translation_for_rendering()
             if not text or not horizontal(region) or has_cjk(text):
                 continue
             def layout(size, width, height, text=text, lang=region.target_lang):
                 return text_render.calc_horizontal(size, text, width, height, lang, False)
             others = boxes[:i] + boxes[i + 1:]
+            try:
+                shaped = lettering.plan_shaped(img, boxes[i], others, text, lettering.font_file(),
+                                               line_height(region), max(8, round(minimum * 0.6)),
+                                               offset=font_size_offset or 0)
+            except Exception as exc:  # never lose a page over the nicer layout
+                print(f"Shaped layout skipped: {type(exc).__name__}", flush=True)
+                shaped = None
+            if shaped is not None:
+                region.mangalate_shaped = shaped
+                region.font_size = shaped["size"]
+                x0, y0, x1, y1 = shaped["box"]
+                points[i] = np.array([[[x0, y0], [x1, y0], [x1, y1], [x0, y1]]], dtype=np.int64)
+                planned += 1
+                continue
             try:
                 plan = lettering.plan(img, boxes[i], others, text, layout,
                                       line_height(region) + 0, max(8, round(minimum * 0.6)),
@@ -607,6 +761,10 @@ def bubble_layout(rendering, text_render):
         return points
 
     def render(img, region, dst_points, hyphenate, line_spacing, disable_font_border):
+        shaped = getattr(region, "mangalate_shaped", None)
+        if shaped is not None:
+            fg, bg = rendering.fg_bg_compare(*region.get_font_colors())
+            return lettering.draw_shaped(img, shaped, fg, None if disable_font_border else bg)
         plan = getattr(region, "mangalate_plan", None)
         if plan is None:
             return original_render(img, region, dst_points, hyphenate, line_spacing, disable_font_border)
@@ -735,12 +893,18 @@ def validate_page_translations(original_translate):
         regions = list(ctx.text_regions or [])
         result = await original_translate(self, config, ctx)
         if not legacy_quality() and isinstance(result, list):
+            import re
             from quality import normalize_spacing, page_names, sentence_case, source_names, tidy_start
             texts = [getattr(region, "translation", None) for region in result]
             names = page_names([t for t in texts if isinstance(t, str)])
             names |= {g["target"] for g in (page_context() or {}).get("glossary", [])}
             for region in result:
                 if isinstance(getattr(region, "translation", None), str):
+                    # The (m)/(f) marks belong to the terms line only (memory.TERMS_INSTRUCTION);
+                    # Grand Blue p42 got "Bob (m)" written on the page.
+                    region.translation = re.sub(r"\s*\((?:m|f)\)(?!\w)", "", region.translation)
+                    # Model control tokens that leaked into the answer (Grand Blue p22: "Kouhei: 5 pts. <|10|").
+                    region.translation = re.sub(r"\s*<\|[^<>|]{0,20}(?:\|>?|>|$)", "", region.translation)
                     own = names | source_names(getattr(region, "text", ""), region.translation)
                     fixed = sentence_case(region.translation, own)
                     fixed = tidy_start(fixed, getattr(region, "text", ""), own)

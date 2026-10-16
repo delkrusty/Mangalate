@@ -2,6 +2,44 @@
 
 As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://github.com/mihonapp/mihon/blob/main/CHANGELOG.md).
 
+## Em teste (próxima versão)
+
+### Letreiramento
+- A tradução é escrita numa fonte de quadrinhos (Comic Neue Bold, licença livre) em vez da Arial, com contorno branco fino.
+- As linhas seguem o formato do balão: curtas no topo e no pé de um balão oval, largas no meio, o bloco centrado no balão e sem encostar na borda. As linhas ficam equilibradas, sem uma linha comprida seguida de uma palavra sozinha, e um "um", "de" ou "que" nunca fica sozinho numa linha.
+- Quando o balão tem espaço, a letra pode ficar um pouco maior que a original, porque minúsculas no tamanho das maiúsculas do inglês parecem menores.
+- Uma frase que termina no meio de uma linha passa para a linha seguinte quando a letra continua do tamanho do original ("E se eles / levarem ela? / Por favor, vem.").
+- Mais espaço entre o texto e a borda de legendas e balões.
+- Balão que fura a borda do quadro e encosta na margem branca da página é reconhecido inteiro, em vez de o texto ficar espremido no tamanho da caixa original.
+- MANGALATE_FONT=simples volta para a Arial do motor.
+
+### Tradução e balões
+- Um balão de várias linhas que o detector marcou mas não separou em linhas ("--THOUGH I / MAY OFFER SOME / SUGGESTIONS...") agora é lido e traduzido em vez de ficar em inglês.
+- Quando a tradução perde o "não" do original ("I'm not..." virando afirmação), o servidor pede de novo apontando o problema.
+- Instruções da IA: o OCR costuma ler U como LI ("LINEAMILIAR" = UNFAMILIAR), e um nome entre vírgulas é com quem se fala ("E, General Arthur, você vai...").
+- Reticências no começo da fala ficam coladas na palavra ("…mas", não "… mas").
+- Letras que o OCR troca nas maiúsculas de quadrinhos são corrigidas antes da tradução, com uma lista de palavras do inglês: "TM LINEAMILIAR" vira "I'M UNFAMILIAR" (antes saía "Estou familiarizado", o contrário), "PULLEO" vira "PULLED", "L/TTLE" vira "LITTLE". Nomes da obra e palavras que a lista não resolve com certeza ficam como estão.
+- Uma segunda leitura pior das mesmas letras ("GOT IT!" lido também como "8E") é descartada, em vez de escrever "Be" por cima de "Entendi!"; fica a leitura com mais letras para o espaço que ocupa.
+- Onomatopeia em inglês desenhada na arte ("SPLOOSH", lida como "VLOOSH") fica como está, em vez de ser apagada e trocada por "Vluuuf". A marca de gênero da memória ("Bob (m)") nunca vai para a página.
+- Gagueira mantém a palavra em minúscula ("E-eu tô com medo", não "E-Eu").
+- "Você deve estar preocupada" sem nenhuma mulher na página também pede a tradução de novo.
+- Quando a tradução diz "não" e o original não tem negação ("I WANT TO FIGHT IN THE WAR!" virando "Eu não quero lutar na guerra!"), o servidor pede de novo. A checagem de negação também deixou de confundir palavras como "WANT" com "N'T".
+- Balões brancos pequenos que o detector não viu ("MUSCLE?", "I SEE.", "HOW'S THAT?") são achados pelo formato: área branca fechada com linhas de letras no meio. Eles são traduzidos e limpos como os outros. Um som desenhado num contorno fechado ("GRAB") fica na arte.
+- Duas falas lado a lado no mesmo balão ("YOU / GOTTA / RELAX." ao lado de "THERE'S NO POINT...") não são mais lidas intercaladas linha a linha: a caixa que atravessa as duas colunas é cortada no vão entre elas e cada fala é traduzida sozinha.
+- Uma linha que ganhou caixa própria dentro de outra fala ("LOOKS / LIKE / IORI...") volta para a fala no lugar certo, em vez de virar um "Tipo..." escrito por cima do balão.
+- Uma linha que a caixa do detector só pegou pela metade ("DON'T / TELL ME") é separada e lida, em vez de ficar meio apagada.
+- Um balão partido em dois pelo detector, com caixas de linha de alturas diferentes, volta a ser uma fala só ("I'M SURE AZUSA-SAN / APPRECIATED THAT!").
+- Uma letra solta de onomatopeia ("R" de "KRRK") fica na arte, em vez de virar "É.".
+- Palavra que o letrista partiu entre linhas é juntada antes da tradução: "ART- ISTRY" vira "ARTISTRY" (antes saía "arte-ístria"), "STRAIN- ING", "CONVINC ING", "BOY- FRIEND". Tratamentos japoneses ficam ligados ao nome ("AZUSA-SAN").
+- Correção do OCR também em palavras de 3 letras ("IWO BODIES" vira "TWO BODIES", antes saía "Iwo corpos") e com I lido no lugar de T ("RIGHI" vira "RIGHT"). Gírias de quadrinho ("LIL", "GOTTA") não são mexidas.
+- Um pedaço de código da IA que vazava na tradução ("Kouhei: 5 pts. <|10|") é removido antes de ir para a página.
+- Balão achado pelo formato com duas linhas de letras é traduzido mesmo quando o OCR só leu uma palavra, e a linha de baixo que fechava a área branca também é lida ("ASS- / HOLE...").
+
+### IAs
+- Mistral e GitHub Models saíram da lista. Num teste com as chaves reais, o plano grátis da Mistral responde "limite" com zero pedidos permitidos para os modelos small e medium (o único que respondeu foi um modelo pequeno que conversa em vez de traduzir), e o GitHub Models devolveu só "OK" em vez de uma tradução. Nos 7 capítulos de teste nenhum dos dois traduziu uma página. Chaves já salvas deles são ignoradas; as outras IAs continuam.
+- O Groq (GPT-OSS) pensa menos antes de responder: na mesma página, o segundo modelo gastou 290 tokens de resposta em vez de 631, com a mesma tradução ou melhor. O limite grátis do Groq é de 200 mil tokens por dia por modelo, então isso deixa mais páginas por dia.
+- Quando Gemini e Groq param só por um minuto (limite por minuto), o servidor espera até 90 segundos por eles em vez de mandar a página para o segundo Groq, que traduz pior ("PERSONALLY I THINK" virava "Pessoal, acho"). O segundo Groq só entra quando a pausa é longa, como a cota do dia acabada.
+
 ## 0.5.6
 
 ### Tradução e balões

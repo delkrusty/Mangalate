@@ -46,34 +46,30 @@ PRESETS = {
         "model": "",
         "keys_url": "",
     },
-    "mistral": {
-        "label": "Mistral (grátis no plano Experiment, cota mensal grande)",
-        "base": "https://api.mistral.ai/v1",
-        "model": "mistral-small-latest",
-        "keys_url": "https://admin.mistral.ai/organization/api-keys",
-    },
     "groq-2": {
         "label": "Groq, segundo modelo (GPT-OSS 20B, mesma chave do Groq, cota separada)",
         "base": "https://api.groq.com/openai/v1",
         "model": "openai/gpt-oss-20b",
         "keys_url": "https://console.groq.com/keys",
     },
-    "github": {
-        "label": "GitHub Models (grátis com conta do GitHub, reserva)",
-        "base": "https://models.github.ai/inference",
-        "model": "openai/gpt-4.1-mini",
-        "keys_url": "https://github.com/settings/personal-access-tokens/new (permissão Models: leitura)",
-    },
 }
 # Models a provider retired, with the replacement used for keys saved before (Groq dropped
 # llama-3.3-70b-versatile in 2026: "modelo recusado" every page).
 RETIRED = {"llama-3.3-70b-versatile": "openai/gpt-oss-20b"}
 RENAMED = {"groq-llama": "groq-2"}
-# Weaker or less reliable: used only while the others are at their limit, never in the turns.
-RESERVES = {"groq-2", "github"}
+# Presets that never translated a page (16/10/2026 test, one call each): the free Mistral plan
+# answers 429 with a limit of 0 requests for mistral-small and mistral-medium, and GitHub Models
+# answered a plain "OK" instead of a chat reply.  Keys saved for them are skipped.
+REMOVED = {"mistral", "github"}
+# Weaker: used only while the others are at their limit, never in the turns.
+RESERVES = {"groq-2"}
 LOCAL_HOSTS = {"host.docker.internal", "localhost", "127.0.0.1"}
 SHORT_REST = 60
 LONG_REST = 3600
+# A main provider back within this many seconds is waited for instead of handing the page to a
+# reserve (ouro-8: gpt-oss-20b got 7 of 11 pages during per-minute limits and translated
+# "PERSONALLY I THINK" as "Pessoal, acho").  Longer pauses (daily quotas) still use the reserve.
+RESERVE_WAIT = 90
 AI_TIMEOUT = 45     # seconds before a silent provider is left for the next one
 
 
@@ -99,6 +95,8 @@ def parse_secret(text):
     cleaned = []
     for item in providers:
         name, base, model = (str(item.get(k, "")).strip() for k in ("name", "base", "model"))
+        if name in REMOVED:
+            continue
         key = str(item.get("key", "")).strip()
         if not name or not model or not validate_base(base):
             raise ValueError("Provedor incompleto: confira nome, endereço e modelo.")
@@ -106,7 +104,15 @@ def parse_secret(text):
             raise ValueError(f"Provedor {name} sem chave.")
         name, model = RENAMED.get(name, name), RETIRED.get(model, model)
         cleaned.append({"name": name, "base": base, "model": model, "key": key or "ollama"})
+    if not cleaned:
+        raise ValueError("Nenhuma IA em uso na lista; rode py setup.py e escolha outra.")
     return cleaned
+
+
+def short_reasoning(base, model):
+    """Groq's GPT-OSS thinks before answering and the thinking counts against the free
+    8,000 tokens per minute; a short think keeps several pages per minute."""
+    return "gpt-oss" in model and urlparse(str(base)).hostname == "api.groq.com"
 
 
 def dump_secret(providers):
@@ -126,7 +132,7 @@ class UnusableAnswer(ValueError):
 
 
 class NotAnAnswer(RuntimeError):
-    """The address answered, but not like a chat API (GitHub Models gave a plain "OK")."""
+    """The address answered, but not like a chat API (a plain "OK" instead of JSON)."""
     status_code = 404
 
 
@@ -153,8 +159,9 @@ def retry_after(exc):
 
 
 class ProviderPool:
-    def __init__(self, providers, clock=time.monotonic, log=print, take_turns=None):
+    def __init__(self, providers, clock=time.monotonic, log=print, take_turns=None, sleep=None):
         self.providers = list(providers)
+        self.sleep = sleep
         self.clock = clock
         self.log = log
         self.resting = {}
@@ -195,7 +202,15 @@ class ProviderPool:
             where = f" em {Path(frames[-1].filename).name}:{frames[-1].lineno}" if frames else ""
             self.rest(name, SHORT_REST, type(exc).__name__ + where)
 
-    async def run(self, attempt):
+    def main_back_in(self):
+        """Seconds until a resting main provider is back; None when none is resting."""
+        now = self.clock()
+        waits = [self.resting.get(p["name"], 0) - now for p in self.providers if p["name"] not in RESERVES]
+        if not waits or any(w <= 0 for w in waits):
+            return None
+        return min(waits)
+
+    async def run(self, attempt, waited=False):
         """Call attempt(provider) on each available provider until one succeeds."""
         self.events = []
         self.__dict__["raw"] = []
@@ -209,6 +224,14 @@ class ProviderPool:
             main = main[start:] + main[:start]
         ready = main + spare
         for provider in ready:
+            if provider["name"] in RESERVES and not waited:
+                back = self.main_back_in()
+                if back is not None and back <= RESERVE_WAIT \
+                        and not any(kind.startswith("content") for _, kind in self.events):
+                    self.log(f"BYOK: esperando {round(back)} s pela IA principal em vez da reserva.")
+                    import asyncio
+                    await (self.sleep or asyncio.sleep)(back)
+                    return await self.run(attempt, waited=True)
             try:
                 result = await attempt(provider)
             except Exception as exc:  # provider bodies are never logged

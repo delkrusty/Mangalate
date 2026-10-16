@@ -70,7 +70,7 @@ def configure(profile, hardware, bind, api_base="", model="", provider_key="", r
 
 
 KEY_PREFIXES = {"groq": ("gsk_",), "groq-2": ("gsk_",), "gemini": ("AIza", "AQ."),
-                "openrouter": ("sk-or-",), "github": ("github_pat_", "ghp_")}
+                "openrouter": ("sk-or-",)}
 
 
 def read_clipboard():

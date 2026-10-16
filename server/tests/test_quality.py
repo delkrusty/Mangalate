@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import quality
 from quality import (broken_words, bubble_glyphs, classify_region, compact_symbols, normalize_spacing,
                      repair_lines, whole_word_breaker)
 
@@ -448,3 +449,306 @@ class PageRowsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GoldStandardTextTest(unittest.TestCase):
+    def test_leading_ellipsis_has_no_space(self):
+        self.assertEqual(quality.normalize_spacing("… mas eu"), "…mas eu")  # TBATE 240 p30
+        self.assertEqual(quality.normalize_spacing("Ok… Vamos"), "Ok… Vamos")
+
+    def test_lost_negation_asks_again(self):
+        notes = quality.translation_problems(["I'M NOT FAMILIAR WITH IT"], ["Estou familiarizado com isso."])
+        self.assertTrue(any("negation" in n for n in notes))
+        for source, text in (("I'M NOT FAMILIAR", "Não conheço."), ("ISN'T IT GREAT?", "Que ótimo, né?"),
+                             ("I CAN'T WAIT!", "Mal posso esperar!"), ("NO ONE CAME", "Ninguém veio."),
+                             ("I CANNOT ALLOW THIS", "Isso é inaceitável."), ("HELLO", "Olá.")):
+            self.assertFalse(quality.lost_negation(source, text), source)
+
+    def test_stacked_orphan_lines_are_a_paragraph(self):
+        h = 20
+        para = [(100, 100 + i * 24, 180 + (i % 2) * 10, 120 + i * 24) for i in range(4)]
+        stray = [(400, 300, 440, 320)]
+        kept = quality.paragraph_lines(para + stray, h)
+        self.assertEqual(sorted(kept), sorted(para))
+        self.assertEqual(quality.paragraph_lines(stray, h), [])
+
+
+class OuroTwoTest(unittest.TestCase):
+    """What the second gold-standard round showed."""
+
+    def test_ocr_mixups_are_undone(self):
+        cases = {
+            "TM LINEAMILIAR WITH THE WALL": "I'M UNFAMILIAR WITH THE WALL",  # TBATE 240 p32
+            "YOUR ARMS BEING PULLEO": "YOUR ARMS BEING PULLED",             # Grand Blue p45
+            "I BORE L/TTLE FONDNESS": "I BORE LITTLE FONDNESS",
+            "PRAISEO YOUR STRATEGIO ACUMEN": "PRAISED YOUR STRATEGIC ACUMEN",
+            "THEY COVERED /T UP.": "THEY COVERED IT UP.",
+        }
+        for source, expected in cases.items():
+            self.assertEqual(quality.fix_ocr_words(source)[0], expected)
+        for kept in ("OOH! CARIA LOVES THOSE.", "THATS OKAY. SHOULDNT YOU", "COMMANDER VIRION",
+                     "ALBOLD, BACK TO ELSHIRE", "Mixed case words like Pulleo", "HUH?"):
+            self.assertEqual(quality.fix_ocr_words(kept)[0], kept)
+        self.assertEqual(quality.fix_ocr_words("THE PULLEO", keep=["PULLEO"])[0], "THE PULLEO")
+
+    def test_second_reading_of_the_same_letters_is_dropped(self):
+        boxes = [(181, 478, 240, 527), (177, 469, 239, 535), (600, 100, 700, 200)]
+        self.assertEqual(quality.duplicate_regions(boxes, ["GOT IT!", "8E", "SORRY"]), {1})
+        self.assertEqual(quality.duplicate_regions(boxes[:1] + boxes[2:], ["GOT IT!", "SORRY"]), set())
+
+    def test_stutter_keeps_the_word_lowercase(self):
+        self.assertEqual(quality.tidy_start("E-Eu tô com medo, Grey."), "E-eu tô com medo, Grey.")
+        self.assertEqual(quality.tidy_start("A-Arthur, espera", names={"Arthur"}), "A-Arthur, espera")
+
+    def test_feminine_after_estar_needs_a_woman(self):
+        notes = quality.translation_problems(["YOU MUST BE WORRIED ABOUT EVERYONES SAFETY."],
+                                             ["Você deve estar preocupada com a segurança de todos."])
+        self.assertTrue(any("feminine" in n for n in notes))
+
+
+class OuroThreeTest(unittest.TestCase):
+    def test_small_text_inside_a_big_box_is_not_a_duplicate(self):
+        # Grand Blue p43/p55: "SORRY" under a "FULL YALL" box four times its size is another text.
+        boxes = [(595, 1583, 690, 1625), (518, 1587, 691, 1687)]
+        self.assertEqual(quality.duplicate_regions(boxes, ["SORRY", "FULL YALL."]), set())
+        same = [(100, 100, 200, 150), (95, 98, 205, 160)]
+        self.assertEqual(quality.duplicate_regions(same, ["GOT IT!", "GOTIT 8E 3"]), {1})
+
+    def test_english_sound_effects(self):
+        for sfx in ("VLOOSH", "SPLOOSH!", "GRRR", "KONK", "R", "K."):
+            self.assertTrue(quality.english_sound_effect(sfx), sfx)
+        for word in ("BOB", "NO!", "HELLO", "TOKITA", "I JUST CANT GET IT!", "I...", "A", "O!", "H?"):
+            self.assertFalse(quality.english_sound_effect(word), word)
+
+
+class AddedNegationTest(unittest.TestCase):
+    def test_added_negation_asks_again(self):
+        # TBATE 238 p42: "I WANT TO FIGHT IN THE WAR!" -> "Eu não quero lutar na guerra!"
+        notes = quality.translation_problems(["I WANT TO FIGHT IN THE WAR!"], ["Eu não quero lutar na guerra!"])
+        self.assertTrue(any("no negation" in n for n in notes))
+        for source, text in (("COUNT ME IN!", "Não quero ficar de fora!"), ("I DONT WANT IT", "Não quero."),
+                             ("AS IF...", "Até parece..."), ("IM UNFAMILIAR WITH IT", "Não conheço.")):
+            self.assertFalse(quality.added_negation(source, text), source)
+
+
+class BubbleScanTest(unittest.TestCase):
+    """Small white bubbles the detector missed (Grand Blue pp. 19/27)."""
+
+    def page(self, text="I SEE.", shape="ellipse"):
+        from PIL import Image, ImageDraw, ImageFont
+        img = Image.new("RGB", (700, 700), (150, 150, 150))
+        d = ImageDraw.Draw(img)
+        if shape == "ellipse":
+            d.ellipse((250, 250, 450, 400), fill="white", outline="black", width=3)
+        else:  # a jagged burst
+            pts = []
+            for k in range(24):
+                r = 110 if k % 2 else 60
+                a = np.pi * k / 12
+                pts.append((350 + r * np.cos(a), 325 + r * np.sin(a)))
+            d.polygon(pts, fill="white", outline="black")
+        font = ImageFont.truetype(str(Path(__file__).resolve().parents[1] / "fonts" / "ComicNeue-Bold.ttf"), 26)
+        w = d.textlength(text, font=font)
+        d.text((350 - w / 2, 312), text, fill="black", font=font)
+        return np.array(img)
+
+    def test_finds_text_in_undetected_bubble(self):
+        found = quality.bubble_text_lines(self.page(), [])
+        self.assertEqual(len(found), 1)
+        bubble, rows, letters = found[0]
+        self.assertEqual(len(rows), 1)
+        x0, y0, x1, y1 = rows[0]
+        self.assertTrue(300 < x0 < 350 < x1 < 400 and 300 < y0 < y1 < 350, rows[0])
+        self.assertTrue(letters[y0:y1, x0:x1].any())
+
+    def test_bubble_with_a_detected_box_is_skipped(self):
+        self.assertEqual(quality.bubble_text_lines(self.page(), [(320, 310, 380, 340)]), [])
+
+    def test_jagged_burst_and_empty_bubble_are_skipped(self):
+        self.assertEqual(quality.bubble_text_lines(self.page(shape="burst"), []), [])
+        self.assertEqual(quality.bubble_text_lines(self.page(text=""), []), [])
+
+    def test_reads_as_speech(self):
+        for text in ("MUSCLE?", "I SEE.", "HOW'S THAT?", "WHAT ARE YOU"):
+            self.assertTrue(quality.reads_as_speech(text), text)
+        for text in ("GRAB", "REEE", "", "ZZZT!"):
+            self.assertFalse(quality.reads_as_speech(text), text)
+
+    def test_hook_adds_scanned_lines_and_paints_mask(self):
+        import asyncio
+        import types
+        from types import SimpleNamespace
+        from engine_compat import repair_textlines
+
+        class Quad:
+            def __init__(self, pts, text, prob):
+                self.pts, self.text, self.prob, self.direction = np.asarray(pts), text, prob, "h"
+        fake = types.ModuleType("manga_translator.utils")
+        fake.Quadrilateral = Quad
+        package = types.ModuleType("manga_translator")
+        package.utils = fake
+        image = self.page()
+        mask = np.zeros(image.shape[:2], np.uint8)
+        async def detect(self, config, ctx):
+            return [], mask, None
+        ctx = SimpleNamespace(img_rgb=image)
+        saved = {k: sys.modules.get(k) for k in ("manga_translator", "manga_translator.utils")}
+        sys.modules.update({"manga_translator": package, "manga_translator.utils": fake})
+        try:
+            result = asyncio.run(repair_textlines(detect)(None, None, ctx))
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    sys.modules.pop(key, None)
+                else:
+                    sys.modules[key] = value
+        self.assertEqual(len(result[0]), 1)
+        self.assertEqual(len(ctx.mangalate_scanned), 1)
+        self.assertTrue(result[1].any())
+        self.assertFalse(mask.any())
+
+    def test_scanned_sound_stays_as_art(self):
+        from types import SimpleNamespace
+        from engine_compat import scanned_sounds
+        speech = SimpleNamespace(xyxy=(300, 310, 400, 340), text="I SEE.")
+        sound = SimpleNamespace(xyxy=(300, 310, 400, 340), text="GRAB")
+        outside = SimpleNamespace(xyxy=(10, 10, 60, 40), text="GRAB")
+        kept, drawn = scanned_sounds([speech, sound, outside], [(250, 250, 450, 400)])
+        self.assertEqual(kept, [speech, outside])
+        self.assertEqual(drawn, [sound])
+
+
+class ContainedRegionTest(unittest.TestCase):
+    """Grand Blue p25: the tilted "LIKE" had its own region inside "LOOKS / IORI SCORED..."."""
+
+    def region(self, box, texts, lines):
+        from types import SimpleNamespace
+        return SimpleNamespace(xyxy=box, texts=texts, lines=lines)
+
+    def absorb(self, outer, inner):
+        pairs = sorted(list(zip(outer.lines, outer.texts)) + list(zip(inner.lines, inner.texts)))
+        return self.region(outer.xyxy, [t for _, t in pairs], [y for y, _ in pairs])
+
+    def test_inner_line_joins_in_reading_order(self):
+        outer = self.region((1096, 1383, 1231, 1612), ["LOOKS", "IORI", "SCORED"], [1400, 1460, 1495])
+        inner = self.region((1115, 1392, 1214, 1465), ["LIKE"], [1428])
+        other = self.region((300, 1400, 400, 1450), ["DON'T"], [1420])
+        out = quality.absorb_contained([outer, inner, other], self.absorb)
+        self.assertEqual(len(out), 2)
+        self.assertIn(["LOOKS", "LIKE", "IORI", "SCORED"], [r.texts for r in out])
+
+    def test_separate_bubble_is_kept(self):
+        outer = self.region((0, 0, 400, 400), ["A"], [10])
+        inner = self.region((150, 150, 200, 180), ["B"], [160])
+        out = quality.absorb_contained([outer, inner], self.absorb, inside=lambda a, b: False)
+        self.assertEqual(len(out), 2)
+
+
+class ColumnTest(unittest.TestCase):
+    """Grand Blue p19: "YOU / GOTTA / RELAX." beside "THERE'S NO POINT / ... / THROUGH IT."."""
+
+    def page(self):
+        from PIL import Image, ImageDraw, ImageFont
+        img = Image.new("RGB", (500, 300), "white")
+        d = ImageDraw.Draw(img)
+        font = ImageFont.truetype(str(Path(__file__).resolve().parents[1] / "fonts" / "ComicNeue-Bold.ttf"), 24)
+        right = ["THERE'S NO", "POINT", "TRYING", "TO POWER", "THROUGH"]
+        left = {3: "YOU", 4: "GOTTA", 5: "RELAX."}
+        boxes = []
+        for row in range(6):
+            y = 20 + 30 * row
+            spans = []
+            if row in left:
+                d.text((40, y), left[row], fill="black", font=font)
+                spans.append((40, 40 + int(d.textlength(left[row], font=font))))
+            if row < len(right):
+                w = int(d.textlength(right[row], font=font))
+                d.text((260 - w // 2, y), right[row], fill="black", font=font)
+                spans.append((260 - w // 2, 260 - w // 2 + w))
+            boxes.append((min(s[0] for s in spans), y + 4, max(s[1] for s in spans), y + 28))
+        return cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY), boxes
+
+    def test_box_across_two_columns_is_cut(self):
+        gray, boxes = self.page()
+        cuts = quality.column_cuts(gray, boxes)
+        self.assertEqual(sorted(cuts), [3, 4])
+        gx0, gx1 = cuts[3]
+        self.assertTrue(boxes[5][2] <= gx0 + 2 and gx1 <= 260 - 60, cuts)
+
+    def test_one_paragraph_is_not_cut(self):
+        from PIL import Image, ImageDraw, ImageFont
+        img = Image.new("RGB", (500, 200), "white")
+        d = ImageDraw.Draw(img)
+        font = ImageFont.truetype(str(Path(__file__).resolve().parents[1] / "fonts" / "ComicNeue-Bold.ttf"), 24)
+        boxes = []
+        for row, text in enumerate(["I THOUGHT I'D", "OVERCOME MY FEAR,", "BUT THE WATER", "STILL FREAKS ME OUT!"]):
+            w = int(d.textlength(text, font=font))
+            d.text((250 - w // 2, 20 + 30 * row), text, fill="black", font=font)
+            boxes.append((250 - w // 2, 24 + 30 * row, 250 - w // 2 + w, 48 + 30 * row))
+        self.assertEqual(quality.column_cuts(cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY), boxes), {})
+
+    def test_column_groups(self):
+        self.assertEqual(quality.column_groups([(0, 0, 50, 10), (60, 0, 120, 10), (10, 12, 40, 22), (70, 12, 110, 22)]),
+                         [[0, 2], [1, 3]])
+        self.assertEqual(len(quality.column_groups([(0, 0, 100, 10), (20, 12, 80, 22), (40, 24, 140, 34)])), 1)
+
+    def test_region_over_two_columns_is_split(self):
+        from engine_compat import join_split_blocks
+
+        class Block:
+            def __init__(self, lines, texts, font_size=20, angle=0, prob=1.0, fg_color=None, bg_color=None):
+                self.lines, self.texts = np.asarray(lines), list(texts)
+                self.font_size, self.angle, self.prob = font_size, angle, prob
+                self.fg_colors, self.bg_colors, self.horizontal = fg_color, bg_color, True
+                pts = self.lines.reshape(-1, 2)
+                self.xyxy = (*pts.min(axis=0), *pts.max(axis=0))
+        rows = [(200, 0, 320, 20, "THERE'S NO"), (40, 30, 100, 50, "YOU"), (200, 30, 320, 50, "TO POWER"),
+                (40, 60, 100, 80, "GOTTA"), (200, 60, 320, 80, "THROUGH")]
+        block = Block([quad(*r[:4]) for r in rows], [r[4] for r in rows])
+        out = join_split_blocks([block], np.full((300, 400, 3), 255, np.uint8))
+        self.assertEqual(sorted(b.texts for b in out), [["THERE'S NO", "TO POWER", "THROUGH"], ["YOU", "GOTTA"]])
+
+
+class BrokenWordTest(unittest.TestCase):
+    """Words the letterer split across lines (Grand Blue p25 "ART- ISTRY" became "arte-ístria")."""
+
+    def test_rejoined(self):
+        cases = {"GIVE HIM POINTS FOR ART- ISTRY.": "GIVE HIM POINTS FOR ARTISTRY.",
+                 "TOKITA IS STRAIN- ING?": "TOKITA IS STRAINING?",
+                 "THATS ODDLY CONVINC ING.": "THATS ODDLY CONVINCING.",
+                 "STOP PRETEND ING..": "STOP PRETENDING..",
+                 "I'M SURE AZUSA- SAN APPRE- CIATED THAT!": "I'M SURE AZUSA-SAN APPRECIATED THAT!",
+                 "HIGH- SCHOOL": "HIGH-SCHOOL"}
+        for text, fixed in cases.items():
+            self.assertEqual(quality.fix_ocr_words(text)[0], fixed)
+
+    def test_real_words_kept_apart(self):
+        for text in ("WALK IN TO THE ROOM", "A LOT OF FUN", "THE KING IS DEAD", "I CAN SING", "WAIT-- WHAT"):
+            self.assertEqual(quality.fix_ocr_words(text), (text, 0))
+
+
+class OuroSevenTest(unittest.TestCase):
+    def test_short_ocr_mixups(self):
+        self.assertEqual(quality.fix_ocr_words("IWO BODIES IN PAIN")[0], "TWO BODIES IN PAIN")
+        self.assertEqual(quality.fix_ocr_words("ITLL PASS RIGHI THROUGH--")[0], "ITLL PASS RIGHT THROUGH--")
+        for text in ("A LIL?", "I GOTTA GO", "YOU AND THE"):
+            self.assertEqual(quality.fix_ocr_words(text), (text, 0))
+
+    def test_two_rows_of_letters_are_speech(self):
+        self.assertFalse(quality.reads_as_speech("ASS"))
+        self.assertTrue(quality.reads_as_speech("ASS", several_rows=True))
+        self.assertFalse(quality.reads_as_speech("REEE", several_rows=True))
+
+    def test_scan_follows_rows_below_the_white_area(self):
+        from PIL import Image, ImageDraw, ImageFont
+        img = Image.new("RGB", (400, 500), (150, 150, 150))
+        d = ImageDraw.Draw(img)
+        # The bubble runs off the page; the scan only sees the closed part above the line,
+        # as the letters of the second row closed it off on the page.
+        d.rectangle((100, 200, 300, 520), fill="white", outline="black", width=3)
+        font = ImageFont.truetype(str(Path(__file__).resolve().parents[1] / "fonts" / "ComicNeue-Bold.ttf"), 26)
+        d.text((165, 252), "ASS-", fill="black", font=font)
+        d.rectangle((100, 286, 300, 287), fill="black")
+        d.text((150, 290), "HOLE...", fill="black", font=font)
+        found = quality.bubble_text_lines(np.array(img), [])
+        self.assertEqual([len(rows) for _, rows, _ in found], [2])
