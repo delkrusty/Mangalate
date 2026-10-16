@@ -344,9 +344,10 @@ def is_sound_effect(text):
     Kana or kanji with only a few Latin letters around them is left as drawn.
     """
     import re
+    from quality import english_sound_effect
     text = str(text or "")
     if not re.search(r"[\u3040-\u30ff\u3400-\u9fff\uff66-\uff9f]", text):
-        return False
+        return english_sound_effect(text)
     return len(re.findall(r"[A-Za-z]", text)) < 12
 
 
@@ -789,12 +790,16 @@ def validate_page_translations(original_translate):
         regions = list(ctx.text_regions or [])
         result = await original_translate(self, config, ctx)
         if not legacy_quality() and isinstance(result, list):
+            import re
             from quality import normalize_spacing, page_names, sentence_case, source_names, tidy_start
             texts = [getattr(region, "translation", None) for region in result]
             names = page_names([t for t in texts if isinstance(t, str)])
             names |= {g["target"] for g in (page_context() or {}).get("glossary", [])}
             for region in result:
                 if isinstance(getattr(region, "translation", None), str):
+                    # The (m)/(f) marks belong to the terms line only (memory.TERMS_INSTRUCTION);
+                    # Grand Blue p42 got "Bob (m)" written on the page.
+                    region.translation = re.sub(r"\s*\((?:m|f)\)(?!\w)", "", region.translation)
                     own = names | source_names(getattr(region, "text", ""), region.translation)
                     fixed = sentence_case(region.translation, own)
                     fixed = tidy_start(fixed, getattr(region, "text", ""), own)

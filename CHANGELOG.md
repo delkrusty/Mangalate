@@ -19,7 +19,8 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 - Instruções da IA: o OCR costuma ler U como LI ("LINEAMILIAR" = UNFAMILIAR), e um nome entre vírgulas é com quem se fala ("E, General Arthur, você vai...").
 - Reticências no começo da fala ficam coladas na palavra ("…mas", não "… mas").
 - Letras que o OCR troca nas maiúsculas de quadrinhos são corrigidas antes da tradução, com uma lista de palavras do inglês: "TM LINEAMILIAR" vira "I'M UNFAMILIAR" (antes saía "Estou familiarizado", o contrário), "PULLEO" vira "PULLED", "L/TTLE" vira "LITTLE". Nomes da obra e palavras que a lista não resolve com certeza ficam como estão.
-- Uma segunda leitura pior das mesmas letras ("GOT IT!" lido também como "8E") é descartada, em vez de escrever "Be" por cima de "Entendi!".
+- Uma segunda leitura pior das mesmas letras ("GOT IT!" lido também como "8E") é descartada, em vez de escrever "Be" por cima de "Entendi!"; fica a leitura com mais letras para o espaço que ocupa.
+- Onomatopeia em inglês desenhada na arte ("SPLOOSH", lida como "VLOOSH") fica como está, em vez de ser apagada e trocada por "Vluuuf". A marca de gênero da memória ("Bob (m)") nunca vai para a página.
 - Gagueira mantém a palavra em minúscula ("E-eu tô com medo", não "E-Eu").
 - "Você deve estar preocupada" sem nenhuma mulher na página também pede a tradução de novo.
 

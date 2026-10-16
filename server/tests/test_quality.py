@@ -504,3 +504,16 @@ class OuroTwoTest(unittest.TestCase):
         notes = quality.translation_problems(["YOU MUST BE WORRIED ABOUT EVERYONES SAFETY."],
                                              ["Você deve estar preocupada com a segurança de todos."])
         self.assertTrue(any("feminine" in n for n in notes))
+
+
+class OuroThreeTest(unittest.TestCase):
+    def test_duplicate_keeps_the_denser_reading(self):
+        # Grand Blue p43: "FULL YALL" stretched across two bubbles over "SORRY"; SORRY stays.
+        boxes = [(595, 1583, 690, 1625), (518, 1587, 691, 1687)]
+        self.assertEqual(quality.duplicate_regions(boxes, ["SORRY", "FULL YALL."]), {1})
+
+    def test_english_sound_effects(self):
+        for sfx in ("VLOOSH", "SPLOOSH!", "GRRR", "KONK"):
+            self.assertTrue(quality.english_sound_effect(sfx), sfx)
+        for word in ("BOB", "NO!", "HELLO", "TOKITA", "I JUST CANT GET IT!"):
+            self.assertFalse(quality.english_sound_effect(word), word)

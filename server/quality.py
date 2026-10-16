@@ -549,7 +549,12 @@ def duplicate_regions(boxes, texts):
             smaller = min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))
             if smaller <= 0 or iw * ih < DUPLICATE_OVERLAP * smaller:
                 continue
-            drop.add(i if letters(texts[i]) < letters(texts[j]) else j)
+            # The worse reading has fewer letters for the space it covers: "8E" over both
+            # lines of "GOT IT!", or "FULL YALL" stretched across two bubbles over "SORRY".
+            def density(k):
+                x0, y0, x1, y1 = boxes[k]
+                return letters(texts[k]) / max(1, (x1 - x0) * (y1 - y0))
+            drop.add(i if density(i) < density(j) else j)
     return drop
 
 
@@ -790,3 +795,22 @@ def fix_ocr_words(text, keep=()):
 
     fixed = re.sub(r"[A-Za-z0-9/|']*[A-Za-z][A-Za-z0-9/|']*", repl, text)
     return fixed, changed
+
+
+SFX_SHAPE = re.compile(r"(.)\1\1|(?:OOSH|OOM|OOF|ASH|USH|ANG|ONK|ACK|UNK|RRK|SSH|HH|ZZ|WHAM|THUD|THUMP|SPLA\w*|KR\w+)$")
+
+
+def english_sound_effect(text):
+    """One lettered word that is no English word and looks like an onomatopoeia ("VLOOSH", "SPLOOSH").
+
+    Grand Blue p53: "SPLOOSH", drawn across the art and read "VLOOSH", was erased
+    and written as "Vluuuf".  Real words ("BOB", "NO!") are left to the translator.
+    """
+    words = re.findall(r"[A-Za-z]+", text or "")
+    if len(words) != 1 or len(words[0]) < 4 or words[0] != words[0].upper():
+        return False
+    common, names = english_words()
+    word = words[0].lower()
+    if not common or word in common or word in names:
+        return False
+    return bool(SFX_SHAPE.search(words[0]))
