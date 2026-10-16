@@ -994,7 +994,7 @@ def translation_problems(sources, translations, glossary=(), earlier=""):
 
 # What the OCR read -> what the letterer drew.  Only words the list does not know
 # are touched, and only when exactly one common word comes out.
-OCR_CONFUSIONS = (("LI", "U"), ("LJ", "U"), ("IJ", "U"), ("E", "F"), ("F", "E"), ("O", "D"), ("O", "C"),
+OCR_CONFUSIONS = (("LI", "U"), ("LJ", "U"), ("IJ", "U"), ("E", "F"), ("F", "E"), ("O", "D"), ("O", "C"), ("O", "Q"),
                   ("C", "D"), ("I", "D"), ("I", "L"), ("L", "I"), ("0", "O"), ("1", "I"), ("5", "S"),
                   ("7", "T"), ("8", "B"), ("/", "I"), ("|", "I"), ("VV", "W"), ("RN", "M"))
 _WORDS = None
@@ -1064,6 +1064,28 @@ def fix_ocr_words(text, keep=()):
     keep = {k.lower() for k in keep}
     changed = 0
 
+    # A word the letterer broke across lines: "ART- ISTRY", "STRAIN- ING", "CONVINC ING".
+    parts = re.split(r"(\s+)", text)
+    i = 0
+    while i + 2 < len(parts):
+        head, tail = parts[i], parts[i + 2]
+        dash = head.endswith("-") and not head.endswith("--")
+        h = head[:-1] if dash else head
+        if re.fullmatch(r"[A-Z]{2,}", h) and re.fullmatch(r"[A-Z]{2,}\W*", tail):
+            t = re.match(r"[A-Z]+", tail).group(0)
+            whole = h + t
+            if whole.lower() in common and (dash or t.lower() in SUFFIXES
+                                            or not (_known(h, common, names) and _known(t, common, names))):
+                parts[i:i + 3] = [whole + tail[len(t):]]
+                changed += 1
+                continue
+            if dash and (t.lower() in HONORIFICS or (_known(h, common, names) and _known(t, common, names))):
+                parts[i:i + 3] = [f"{h}-{tail}"]  # "AZUSA- SAN" -> "AZUSA-SAN", "HIGH- SCHOOL" -> "HIGH-SCHOOL"
+                changed += 1
+                continue
+        i += 2
+    text = "".join(parts)
+
     def repl(match):
         nonlocal changed
         word = match.group(0)
@@ -1089,6 +1111,9 @@ def fix_ocr_words(text, keep=()):
     fixed = re.sub(r"[A-Za-z0-9/|']*[A-Za-z][A-Za-z0-9/|']*", repl, text)
     return fixed, changed
 
+
+SUFFIXES = {"ing", "ed", "ly", "er", "ers", "est", "tion", "tions", "ness", "ment", "able", "ful", "less", "ous", "ity"}
+HONORIFICS = {"san", "kun", "chan", "sama", "senpai", "sensei", "dono", "nim", "ssi", "hyung", "noona", "oppa", "unnie", "sunbae"}
 
 SFX_SHAPE = re.compile(r"(.)\1\1|(?:OOSH|OOM|OOF|ASH|USH|ANG|ONK|ACK|UNK|RRK|SSH|HH|ZZ|WHAM|THUD|THUMP|SPLA\w*|KR\w+)$")
 

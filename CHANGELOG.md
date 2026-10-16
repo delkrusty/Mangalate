@@ -30,6 +30,7 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 - Uma linha que a caixa do detector só pegou pela metade ("DON'T / TELL ME") é separada e lida, em vez de ficar meio apagada.
 - Um balão partido em dois pelo detector, com caixas de linha de alturas diferentes, volta a ser uma fala só ("I'M SURE AZUSA-SAN / APPRECIATED THAT!").
 - Uma letra solta de onomatopeia ("R" de "KRRK") fica na arte, em vez de virar "É.".
+- Palavra que o letrista partiu entre linhas é juntada antes da tradução: "ART- ISTRY" vira "ARTISTRY" (antes saía "arte-ístria"), "STRAIN- ING", "CONVINC ING", "BOY- FRIEND". Tratamentos japoneses ficam ligados ao nome ("AZUSA-SAN").
 
 ### IAs
 - Mistral e GitHub Models saíram da lista. Num teste com as chaves reais, o plano grátis da Mistral responde "limite" com zero pedidos permitidos para os modelos small e medium (o único que respondeu foi um modelo pequeno que conversa em vez de traduzir), e o GitHub Models devolveu só "OK" em vez de uma tradução. Nos 7 capítulos de teste nenhum dos dois traduziu uma página. Chaves já salvas deles são ignoradas; as outras IAs continuam.

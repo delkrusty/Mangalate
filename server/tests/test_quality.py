@@ -707,3 +707,21 @@ class ColumnTest(unittest.TestCase):
         block = Block([quad(*r[:4]) for r in rows], [r[4] for r in rows])
         out = join_split_blocks([block], np.full((300, 400, 3), 255, np.uint8))
         self.assertEqual(sorted(b.texts for b in out), [["THERE'S NO", "TO POWER", "THROUGH"], ["YOU", "GOTTA"]])
+
+
+class BrokenWordTest(unittest.TestCase):
+    """Words the letterer split across lines (Grand Blue p25 "ART- ISTRY" became "arte-ístria")."""
+
+    def test_rejoined(self):
+        cases = {"GIVE HIM POINTS FOR ART- ISTRY.": "GIVE HIM POINTS FOR ARTISTRY.",
+                 "TOKITA IS STRAIN- ING?": "TOKITA IS STRAINING?",
+                 "THATS ODDLY CONVINC ING.": "THATS ODDLY CONVINCING.",
+                 "STOP PRETEND ING..": "STOP PRETENDING..",
+                 "I'M SURE AZUSA- SAN APPRE- CIATED THAT!": "I'M SURE AZUSA-SAN APPRECIATED THAT!",
+                 "HIGH- SCHOOL": "HIGH-SCHOOL"}
+        for text, fixed in cases.items():
+            self.assertEqual(quality.fix_ocr_words(text)[0], fixed)
+
+    def test_real_words_kept_apart(self):
+        for text in ("WALK IN TO THE ROOM", "A LOT OF FUN", "THE KING IS DEAD", "I CAN SING", "WAIT-- WHAT"):
+            self.assertEqual(quality.fix_ocr_words(text), (text, 0))
