@@ -26,6 +26,10 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 - Quando a tradução diz "não" e o original não tem negação ("I WANT TO FIGHT IN THE WAR!" virando "Eu não quero lutar na guerra!"), o servidor pede de novo. A checagem de negação também deixou de confundir palavras como "WANT" com "N'T".
 - Balões brancos pequenos que o detector não viu ("MUSCLE?", "I SEE.", "HOW'S THAT?") são achados pelo formato: área branca fechada com linhas de letras no meio. Eles são traduzidos e limpos como os outros. Um som desenhado num contorno fechado ("GRAB") fica na arte.
 
+### IAs
+- Mistral e GitHub Models saíram da lista. Num teste com as chaves reais, o plano grátis da Mistral responde "limite" com zero pedidos permitidos para os modelos small e medium (o único que respondeu foi um modelo pequeno que conversa em vez de traduzir), e o GitHub Models devolveu só "OK" em vez de uma tradução. Nos 7 capítulos de teste nenhum dos dois traduziu uma página. Chaves já salvas deles são ignoradas; as outras IAs continuam.
+- O Groq (GPT-OSS) pensa menos antes de responder: na mesma página, o segundo modelo gastou 290 tokens de resposta em vez de 631, com a mesma tradução ou melhor. O limite grátis do Groq é de 200 mil tokens por dia por modelo, então isso deixa mais páginas por dia.
+
 ## 0.5.6
 
 ### Tradução e balões

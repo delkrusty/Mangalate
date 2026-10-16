@@ -71,11 +71,11 @@ class RotationTest(unittest.TestCase):
         return asyncio.run(p.run(attempt)), calls
 
     def test_pages_take_turns_between_providers(self):
-        mistral = {"name": "mistral", "base": PRESETS["mistral"]["base"], "model": "m", "key": "k" * 32}
-        p = ProviderPool((GROQ, GEMINI, mistral), clock=FakeClock() if "FakeClock" in globals() else time.monotonic,
+        third = {"name": "openrouter", "base": PRESETS["openrouter"]["base"], "model": "m", "key": "k" * 32}
+        p = ProviderPool((GROQ, GEMINI, third), clock=FakeClock() if "FakeClock" in globals() else time.monotonic,
                          log=lambda *a: None, take_turns=True)
         first = [self.run_pool(p, lambda n: ["ok"])[1][0] for _ in range(6)]
-        self.assertEqual(first, ["groq", "gemini", "mistral", "groq", "gemini", "mistral"])
+        self.assertEqual(first, ["groq", "gemini", "openrouter", "groq", "gemini", "openrouter"])
         # A provider at its limit is skipped and the page still gets translated.
         result, calls = self.run_pool(p, lambda n: ProviderError(429) if n == "groq" else ["ok"])
         self.assertEqual((result, calls), (["ok"], ["groq", "gemini"]))

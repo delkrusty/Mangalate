@@ -23,7 +23,7 @@ Para voltar ao original, toque em 文A de novo. O app não traz fontes de conte�
 | | **No celular** (padrão) | **Servidor + IA** |
 |---|---|---|
 | Onde roda | No próprio celular, offline | No seu PC, com Docker |
-| Tradução | Google ML Kit | IA escolhida por você: Groq, Gemini, Mistral e GitHub Models (grátis, se revezando entre as páginas), OpenRouter ou Ollama no PC |
+| Tradução | Google ML Kit | IA escolhida por você: Groq e Gemini (grátis, se revezando entre as páginas), OpenRouter ou Ollama no PC |
 | Qualidade | Boa para entender a história | Português natural, nomes e tom dos personagens respeitados |
 | Precisa de | Baixar os idiomas uma vez | PC ligado, Docker e uma chave grátis de IA |
 
