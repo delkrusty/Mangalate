@@ -49,7 +49,7 @@ PRESETS = {
         "label": "Mistral (grátis no plano Experiment, cota mensal grande)",
         "base": "https://api.mistral.ai/v1",
         "model": "mistral-small-latest",
-        "keys_url": "https://console.mistral.ai/api-keys",
+        "keys_url": "https://admin.mistral.ai/organization/api-keys",
     },
     "groq-llama": {
         "label": "Groq, segundo modelo (mesma chave do Groq, cota separada)",
