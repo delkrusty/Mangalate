@@ -738,3 +738,17 @@ class OuroSevenTest(unittest.TestCase):
         self.assertFalse(quality.reads_as_speech("ASS"))
         self.assertTrue(quality.reads_as_speech("ASS", several_rows=True))
         self.assertFalse(quality.reads_as_speech("REEE", several_rows=True))
+
+    def test_scan_follows_rows_below_the_white_area(self):
+        from PIL import Image, ImageDraw, ImageFont
+        img = Image.new("RGB", (400, 500), (150, 150, 150))
+        d = ImageDraw.Draw(img)
+        # The bubble runs off the page; the scan only sees the closed part above the line,
+        # as the letters of the second row closed it off on the page.
+        d.rectangle((100, 200, 300, 520), fill="white", outline="black", width=3)
+        font = ImageFont.truetype(str(Path(__file__).resolve().parents[1] / "fonts" / "ComicNeue-Bold.ttf"), 26)
+        d.text((165, 252), "ASS-", fill="black", font=font)
+        d.rectangle((100, 286, 300, 287), fill="black")
+        d.text((150, 290), "HOLE...", fill="black", font=font)
+        found = quality.bubble_text_lines(np.array(img), [])
+        self.assertEqual([len(rows) for _, rows, _ in found], [2])

@@ -33,7 +33,7 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 - Palavra que o letrista partiu entre linhas é juntada antes da tradução: "ART- ISTRY" vira "ARTISTRY" (antes saía "arte-ístria"), "STRAIN- ING", "CONVINC ING", "BOY- FRIEND". Tratamentos japoneses ficam ligados ao nome ("AZUSA-SAN").
 - Correção do OCR também em palavras de 3 letras ("IWO BODIES" vira "TWO BODIES", antes saía "Iwo corpos") e com I lido no lugar de T ("RIGHI" vira "RIGHT"). Gírias de quadrinho ("LIL", "GOTTA") não são mexidas.
 - Um pedaço de código da IA que vazava na tradução ("Kouhei: 5 pts. <|10|") é removido antes de ir para a página.
-- Balão achado pelo formato com duas linhas de letras é traduzido mesmo quando o OCR só leu uma palavra ("ASS- / HOLE...").
+- Balão achado pelo formato com duas linhas de letras é traduzido mesmo quando o OCR só leu uma palavra, e a linha de baixo que fechava a área branca também é lida ("ASS- / HOLE...").
 
 ### IAs
 - Mistral e GitHub Models saíram da lista. Num teste com as chaves reais, o plano grátis da Mistral responde "limite" com zero pedidos permitidos para os modelos small e medium (o único que respondeu foi um modelo pequeno que conversa em vez de traduzir), e o GitHub Models devolveu só "OK" em vez de uma tradução. Nos 7 capítulos de teste nenhum dos dois traduziu uma página. Chaves já salvas deles são ignoradas; as outras IAs continuam.

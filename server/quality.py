@@ -874,8 +874,42 @@ def bubble_text_lines(image, boxes):
             continue
         letters = np.zeros((h, w), bool)
         letters[y0:y1, x0:x1] = ink
-        found.append(((x0, y0, x1, y1), [(x0 + a, y0 + b, x0 + c, y0 + d) for a, b, c, d in rows], letters))
+        rows = [(x0 + a, y0 + b, x0 + c, y0 + d) for a, b, c, d in rows]
+        rows, y1 = _rows_below(gray, rows, letters, (x0, x1), y1)
+        found.append(((x0, y0, x1, y1), rows, letters))
     return found
+
+
+def _rows_below(gray, rows, letters, span, bottom):
+    """Rows of letters right under the last one, cut off from the bubble by the white-area opening.
+
+    Grand Blue p23: the letters of "HOLE..." closed the white strip under "ASS-", so the
+    bubble found by the scan ended at that row and only "ASS" was read.
+    """
+    h = gray.shape[0]
+    med = float(np.median([r[3] - r[1] for r in rows]))
+    x0, x1 = span[0] + 4, span[1] - 4
+    while x1 - x0 > med:
+        top = rows[-1][3]
+        band_bottom = min(h, int(top + 2.4 * med))
+        if band_bottom - top < med:
+            break
+        ink = gray[top:band_bottom, x0:x1] < SCAN_INK
+        n, labels, stats, _ = cv2.connectedComponentsWithStats(ink.astype(np.uint8), connectivity=8)
+        for k in range(1, n):  # the bubble outline and the art outside it touch the band's sides
+            if stats[k][0] == 0 or stats[k][0] + stats[k][2] >= x1 - x0:
+                ink[labels == k] = False
+        found = _text_rows(ink)
+        if not found:
+            break
+        a, b, c, d = found[0]
+        if b > 1.2 * med or not 0.6 * med <= d - b <= 1.5 * med:
+            break
+        row = (x0 + a, top + b, x0 + c, top + d)
+        rows.append(row)
+        letters[row[1]:row[3], row[0]:row[2]] |= ink[b:d, a:c]
+        bottom = max(bottom, row[3] + 6)
+    return rows, bottom
 
 
 def reads_as_speech(text, several_rows=False):
