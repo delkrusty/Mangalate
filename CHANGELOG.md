@@ -2,7 +2,7 @@
 
 As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://github.com/mihonapp/mihon/blob/main/CHANGELOG.md).
 
-## Em teste (próxima versão)
+## 0.5.6
 
 ### Tradução e balões
 - Uma fala que o detector partia em dois pedaços no mesmo balão (a última linha separada) volta a ser uma fala só: traduzida inteira e escrita uma vez, sem um texto por cima do outro.
