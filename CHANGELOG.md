@@ -38,6 +38,7 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 ### IAs
 - Mistral e GitHub Models saíram da lista. Num teste com as chaves reais, o plano grátis da Mistral responde "limite" com zero pedidos permitidos para os modelos small e medium (o único que respondeu foi um modelo pequeno que conversa em vez de traduzir), e o GitHub Models devolveu só "OK" em vez de uma tradução. Nos 7 capítulos de teste nenhum dos dois traduziu uma página. Chaves já salvas deles são ignoradas; as outras IAs continuam.
 - O Groq (GPT-OSS) pensa menos antes de responder: na mesma página, o segundo modelo gastou 290 tokens de resposta em vez de 631, com a mesma tradução ou melhor. O limite grátis do Groq é de 200 mil tokens por dia por modelo, então isso deixa mais páginas por dia.
+- Quando Gemini e Groq param só por um minuto (limite por minuto), o servidor espera até 90 segundos por eles em vez de mandar a página para o segundo Groq, que traduz pior ("PERSONALLY I THINK" virava "Pessoal, acho"). O segundo Groq só entra quando a pausa é longa, como a cota do dia acabada.
 
 ## 0.5.6
 
