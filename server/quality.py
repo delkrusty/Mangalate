@@ -527,6 +527,7 @@ def repair_lines(mask, boxes):
 
 
 DUPLICATE_OVERLAP = 0.6  # share of the smaller box inside the other one
+DUPLICATE_SIZE = 0.5     # and the smaller box at least this share of the larger one
 
 
 def duplicate_regions(boxes, texts):
@@ -546,8 +547,11 @@ def duplicate_regions(boxes, texts):
             ih = min(a[3], b[3]) - max(a[1], b[1])
             if iw <= 0 or ih <= 0:
                 continue
-            smaller = min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))
-            if smaller <= 0 or iw * ih < DUPLICATE_OVERLAP * smaller:
+            areas = ((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))
+            smaller, larger = min(areas), max(areas)
+            # Two readings of the same letters cover about the same space; a small bubble
+            # inside a big wrong box is another text (Grand Blue p55 lost "MUSCLE?" and "I SEE.").
+            if smaller <= 0 or iw * ih < DUPLICATE_OVERLAP * smaller or smaller < DUPLICATE_SIZE * larger:
                 continue
             # The worse reading has fewer letters for the space it covers: "8E" over both
             # lines of "GOT IT!", or "FULL YALL" stretched across two bubbles over "SORRY".

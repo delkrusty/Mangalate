@@ -507,10 +507,12 @@ class OuroTwoTest(unittest.TestCase):
 
 
 class OuroThreeTest(unittest.TestCase):
-    def test_duplicate_keeps_the_denser_reading(self):
-        # Grand Blue p43: "FULL YALL" stretched across two bubbles over "SORRY"; SORRY stays.
+    def test_small_text_inside_a_big_box_is_not_a_duplicate(self):
+        # Grand Blue p43/p55: "SORRY" under a "FULL YALL" box four times its size is another text.
         boxes = [(595, 1583, 690, 1625), (518, 1587, 691, 1687)]
-        self.assertEqual(quality.duplicate_regions(boxes, ["SORRY", "FULL YALL."]), {1})
+        self.assertEqual(quality.duplicate_regions(boxes, ["SORRY", "FULL YALL."]), set())
+        same = [(100, 100, 200, 150), (95, 98, 205, 160)]
+        self.assertEqual(quality.duplicate_regions(same, ["GOT IT!", "GOTIT 8E 3"]), {1})
 
     def test_english_sound_effects(self):
         for sfx in ("VLOOSH", "SPLOOSH!", "GRRR", "KONK"):

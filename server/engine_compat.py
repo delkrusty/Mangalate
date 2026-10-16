@@ -469,7 +469,7 @@ def drop_duplicates(regions):
         print(f"Duplicate check skipped: {type(exc).__name__}", flush=True)
         return regions
     if drop:
-        print(f"Duplicate regions: {len(drop)} dropped", flush=True)
+        print(f"Duplicate regions: {len(drop)} dropped at {[boxes[i] for i in sorted(drop)]}", flush=True)
     return [r for i, r in enumerate(regions) if i not in drop]
 
 
