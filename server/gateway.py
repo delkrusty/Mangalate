@@ -115,12 +115,21 @@ def inspect_result(original, result):
     return {"changed_fraction": round(changed, 4), "human_review_required": True}
 
 
+def pages_at_once():
+    """Pages translated at the same time (MANGALATE_PAGES_AT_ONCE, 1 to 4, default 2)."""
+    try:
+        return max(1, min(4, int(os.environ.get("MANGALATE_PAGES_AT_ONCE", "2"))))
+    except ValueError:
+        return 2
+
+
 def create_app(key=None, upstream=None, profile=None, transport=None):
     key = key if key is not None else load_key()
     profile = profile or os.environ.get("MANGALATE_PROFILE", "basic")
     profile_config(profile, {})
     upstream = upstream or os.environ.get("MANGALATE_UPSTREAM", "http://translator:8001")
-    lock = asyncio.Lock()
+    lock = asyncio.Semaphore(pages_at_once())
+    busy = [0]
 
     @asynccontextmanager
     async def lifespan(app):
@@ -172,7 +181,7 @@ def create_app(key=None, upstream=None, profile=None, transport=None):
             count = response.json()
             if not isinstance(count, int):
                 raise ValueError()
-            return count + int(lock.locked())
+            return count + busy[0]
         except (httpx.HTTPError, ValueError):
             raise HTTPException(503, "Motor ainda inicializando ou parado. Confira docker compose logs.")
 
@@ -180,10 +189,14 @@ def create_app(key=None, upstream=None, profile=None, transport=None):
     async def translate(request: Request):
         authorize(request)
         if lock.locked():
-            raise HTTPException(429, "Uma página já está sendo traduzida. Aguarde e tente novamente.",
+            raise HTTPException(429, "O servidor já está traduzindo o máximo de páginas. Aguarde e tente novamente.",
                                 headers={"Retry-After": "5"})
         async with lock:
-            return await process(request)
+            busy[0] += 1
+            try:
+                return await process(request)
+            finally:
+                busy[0] -= 1
 
     async def process(request):
         await worker_ready()

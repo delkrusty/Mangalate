@@ -44,7 +44,9 @@ def create_core(engine=None, config_factory=None):
         yield
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
-    lock = asyncio.Lock()
+    from speed import pages_at_once
+    # Two pages at once: one waits for the AI while the other is detected or cleaned.
+    lock = asyncio.Semaphore(pages_at_once())
 
     @app.get("/healthz")
     async def health():

@@ -47,6 +47,7 @@ object MangalateTranslator {
     private const val CACHE_DIR = "mangalate_translations"
     private const val MAX_CACHE_BYTES = 600L * 1024 * 1024
     private const val ENDPOINT = "/translate/with-form/image"
+    private const val BUSY_RETRIES = 40
 
     @Volatile
     private var prefs: SharedPreferences? = null
@@ -77,7 +78,8 @@ object MangalateTranslator {
         TranslateMode.ON_DEVICE to Semaphore(2),
         TranslateMode.GEMINI to Semaphore(3),
         TranslateMode.DEEPL to Semaphore(3),
-        TranslateMode.SERVER to Semaphore(1),
+        // O servidor traduz 2 páginas ao mesmo tempo (uma usa a IA enquanto a outra limpa).
+        TranslateMode.SERVER to Semaphore(2),
     )
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -294,29 +296,43 @@ object MangalateTranslator {
             .post(body)
             .apply { authHeaders(s).forEach { (k, v) -> header(k, v) } }
             .build()
-        client.newCall(request).execute().use { response ->
-            val bytes = response.body.bytes()
-            if (!response.isSuccessful) {
-                val help = when (response.code) {
-                    401, 403 -> "Chave Mangalate inválida. Copie o conteúdo de server/secrets/mangalate_key.txt; não use a chave da IA."
-                    429 -> "O servidor já está traduzindo uma página. Aguarde antes de tentar de novo."
-                    422 -> "Página bloqueada pela proteção de imagem ou configuração. Confira o original e os logs do seu servidor."
-                    502 -> serverDetail(bytes)?.takeIf { it.startsWith("Limite gratuito") }
-                        ?: "O motor de tradução falhou. Confira a chave e o modelo da IA no servidor (docker compose logs)."
-                    503 -> "O processo de tradução ainda está iniciando ou parou. Aguarde e rode check.py --warmup no computador."
-                    504 -> "A tradução demorou demais. Prepare os modelos com check.py --warmup antes de abrir o capítulo."
-                    else -> null
+        // Servidor antigo (uma página por vez) responde 429 à segunda: espera a vez em vez de falhar.
+        var attempt = 0
+        while (true) {
+            client.newCall(request).execute().use { response ->
+                if (response.code == 429 && attempt < BUSY_RETRIES) {
+                    attempt++
+                    val wait = response.header("Retry-After")?.toLongOrNull()?.coerceIn(1, 10) ?: 3
+                    Thread.sleep(wait * 1000)
+                    return@use
                 }
-                if (help != null) throw app.mangalate.local.FriendlyException(help)
-                val msg = String(bytes.take(300).toByteArray()).ifBlank { response.message }
-                throw IOException("Servidor respondeu ${response.code}: $msg")
+                return readResponse(response)
             }
-            val type = response.header("Content-Type").orEmpty()
-            if (!type.startsWith("image/") && !looksLikeImage(bytes)) {
-                throw IOException("Resposta inesperada do servidor: ${String(bytes.take(200).toByteArray())}")
-            }
-            return bytes
         }
+    }
+
+    private fun readResponse(response: okhttp3.Response): ByteArray {
+        val bytes = response.body.bytes()
+        if (!response.isSuccessful) {
+            val help = when (response.code) {
+                401, 403 -> "Chave Mangalate inválida. Copie o conteúdo de server/secrets/mangalate_key.txt; não use a chave da IA."
+                429 -> "O servidor já está traduzindo uma página. Aguarde antes de tentar de novo."
+                422 -> "Página bloqueada pela proteção de imagem ou configuração. Confira o original e os logs do seu servidor."
+                502 -> serverDetail(bytes)?.takeIf { it.startsWith("Limite gratuito") }
+                    ?: "O motor de tradução falhou. Confira a chave e o modelo da IA no servidor (docker compose logs)."
+                503 -> "O processo de tradução ainda está iniciando ou parou. Aguarde e rode check.py --warmup no computador."
+                504 -> "A tradução demorou demais. Prepare os modelos com check.py --warmup antes de abrir o capítulo."
+                else -> null
+            }
+            if (help != null) throw app.mangalate.local.FriendlyException(help)
+            val msg = String(bytes.take(300).toByteArray()).ifBlank { response.message }
+            throw IOException("Servidor respondeu ${response.code}: $msg")
+        }
+        val type = response.header("Content-Type").orEmpty()
+        if (!type.startsWith("image/") && !looksLikeImage(bytes)) {
+            throw IOException("Resposta inesperada do servidor: ${String(bytes.take(200).toByteArray())}")
+        }
+        return bytes
     }
 
     /** Mensagem "detail" do servidor, sem expor corpos inesperados. */

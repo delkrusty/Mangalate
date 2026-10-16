@@ -252,21 +252,23 @@ class ServerTest(unittest.TestCase):
             self.assertEqual(result.status_code, 502)
             self.assertNotIn("private-api-token", result.text)
 
-    def test_only_one_paid_or_local_page_is_admitted_at_a_time(self):
-        started, release = threading.Event(), threading.Event()
+    def test_two_pages_are_admitted_at_a_time(self):
+        started, release = threading.Semaphore(0), threading.Event()
         async def handler(request):
-            started.set()
+            started.release()
             await asyncio.to_thread(release.wait, 3)
             return httpx.Response(200, content=png())
-        with self.client(handler) as client, ThreadPoolExecutor(max_workers=1) as pool:
+        with self.client(handler) as client, ThreadPoolExecutor(max_workers=2) as pool:
             kwargs = {"headers": self.headers(), "files": {"image": ("page.png", png())}}
             first = pool.submit(client.post, "/translate/with-form/image", **kwargs)
-            self.assertTrue(started.wait(2))
+            second = pool.submit(client.post, "/translate/with-form/image", **kwargs)
+            self.assertTrue(started.acquire(timeout=2) and started.acquire(timeout=2))
             try:
                 self.assertEqual(client.post("/translate/with-form/image", **kwargs).status_code, 429)
             finally:
                 release.set()
             self.assertEqual(first.result(timeout=4).status_code, 200)
+            self.assertEqual(second.result(timeout=4).status_code, 200)
 
     def test_oversized_mask_and_wrong_framing_blocked(self):
         for image in (Image.new("RGB", (100, 100), "black"), Image.new("RGB", (120, 100), "white")):
