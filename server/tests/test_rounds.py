@@ -327,3 +327,34 @@ class ReserveTest(unittest.TestCase):
             return p["name"]
         self.assertEqual(asyncio.run(pool.run(attempt)), "groq-2")
         self.assertGreater(pool.resting["groq"], 1000)  # not a chat API: long pause
+
+
+class ReserveWaitTest(unittest.TestCase):
+    """ouro-8: gpt-oss-20b got 7 of 11 pages while Gemini and Groq were at a per-minute limit."""
+
+    def pool(self, now):
+        from providers import ProviderPool
+        base = "https://api.example.com/v1"
+        providers = [{"name": n, "base": base, "model": "m", "key": "k"} for n in ("groq", "groq-2", "gemini")]
+        slept = []
+
+        async def sleep(seconds):
+            slept.append(seconds)
+            now[0] += seconds
+        return ProviderPool(providers, clock=lambda: now[0], log=lambda m: None, take_turns=True, sleep=sleep), slept
+
+    def test_short_limit_waits_for_the_main_provider(self):
+        import asyncio
+        now = [0.0]
+        pool, slept = self.pool(now)
+        pool.resting.update({"groq": 30.0, "gemini": 50.0})
+        self.assertEqual(asyncio.run(pool.run(lambda p: asyncio.sleep(0, p["name"]))), "groq")
+        self.assertEqual(slept, [30.0])
+
+    def test_daily_quota_still_uses_the_reserve(self):
+        import asyncio
+        now = [0.0]
+        pool, slept = self.pool(now)
+        pool.resting.update({"groq": 3600.0, "gemini": 3600.0})
+        self.assertEqual(asyncio.run(pool.run(lambda p: asyncio.sleep(0, p["name"]))), "groq-2")
+        self.assertEqual(slept, [])
