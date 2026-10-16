@@ -233,22 +233,42 @@ async def translate_byok(self, from_lang, to_lang, queries):
     self.client.max_retries = 0
     from providers import AI_TIMEOUT
     pool = provider_pool()
+    offset = 0
     for prompt, count in self._assemble_prompts(from_lang, to_lang, queries):
+        sources = list(queries[offset:offset + count])
+        offset += count
         if pool:
-            async def attempt(provider, prompt=prompt, count=count):
+            async def ask(provider, prompt):
                 content = await asyncio.wait_for(
                     self._request_translation(to_lang, prompt, provider_client(pool, provider), provider["model"]),
                     timeout=AI_TIMEOUT)
                 answer, terms = strip_terms(content)
                 extracted = (self.extract_capture_groups(answer, rf"{self.rgx_capture}") or "").strip()
+                return content, extracted, terms
+
+            async def attempt(provider, prompt=prompt, count=count, sources=sources):
+                content, extracted, terms = await ask(provider, prompt)
                 try:
                     parsed = parse_marked(extracted, count)
-                    _learned().extend(terms)
-                    return parsed
                 except ValueError:
                     # Kept in memory for the local --diagnostics report only; never logged.
                     pool.__dict__.setdefault("raw", []).append((provider["name"], count, prompt, content))
                     raise
+                notes = answer_problems(sources, parsed)
+                if notes:
+                    # One second try with the problems pointed out; the better answer stays.
+                    print(f"Second try: {len(notes)} problem(s) in the answer", flush=True)
+                    try:
+                        _, again, again_terms = await ask(provider, prompt + "\n\nA previous answer had these problems; "
+                                                          "avoid them and keep every marker:\n" + "\n".join(notes))
+                        retried = parse_marked(again, count)
+                        if len(answer_problems(sources, retried)) < len(notes):
+                            parsed, terms = retried, again_terms
+                    except Exception as exc:
+                        if type(exc).__name__ == "AllProvidersResting":
+                            raise
+                _learned().extend(terms)
+                return parsed
             translations += await pool.run(attempt)
             continue
         content = await asyncio.wait_for(self._request_translation(to_lang, prompt), timeout=180)
@@ -256,6 +276,15 @@ async def translate_byok(self, from_lang, to_lang, queries):
         translations += parse_marked(self.extract_capture_groups(answer, rf"{self.rgx_capture}").strip(), count)
         _learned().extend(terms)
     return translations
+
+
+def answer_problems(sources, translations):
+    """Dropped names and unfounded feminine forms (quality.translation_problems) for this page."""
+    from quality import translation_problems
+    context = page_context() or {}
+    earlier = " ".join(pair.get("original", "") for page in context.get("previous") or []
+                       for pair in (page if isinstance(page, list) else []) if isinstance(pair, dict))
+    return translation_problems(sources, translations, context.get("glossary") or [], earlier)
 
 
 def validate_byok_results(original_translate):

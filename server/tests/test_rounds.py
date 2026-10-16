@@ -137,3 +137,103 @@ class RoundFixesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Round4Test(unittest.TestCase):
+    """Round 4: dropped names, feminine narrator without evidence, "WANT..." -> "EU..."."""
+
+    GLOSSARY = [{"source": "ARTHUR", "target": "Arthur", "gender": "m"},
+                {"source": "ELEANOR", "target": "Eleanor"}, {"source": "SYLVIE", "target": "Sylvie"}]
+
+    def test_dropped_name_and_unfounded_feminine_are_found(self):
+        from quality import translation_problems
+        notes = translation_problems(
+            ["HELLO, GENERAL ARTHUR LEYWIN. ELEANOR. SYLVIE.", "I TOLD MYSELF IT WAS FINE.", "THE SAME THING."],
+            ["Olá, General Arthur Leywin. E Sylvie.", "Eu disse a mim mesma que estava tudo bem.", "A mesma coisa."],
+            self.GLOSSARY)
+        self.assertEqual(len(notes), 2)
+        self.assertIn("<|1|>", notes[0])
+        self.assertIn("Eleanor", notes[0])
+        self.assertIn("<|2|>", notes[1])
+
+    def test_feminine_is_fine_with_a_woman_on_the_page_or_before(self):
+        from quality import translation_problems
+        self.assertEqual(translation_problems(["SHE SAID THANKS.", "THANK YOU."], ["Ela agradeceu.", "Obrigada."]), [])
+        self.assertEqual(translation_problems(["THANK YOU."], ["Obrigada."], earlier="HER SWORD"), [])
+        self.assertEqual(translation_problems(["ELLIE!", "THANK YOU."], ["Ellie!", "Obrigada."],
+                                              [{"source": "ELLIE", "target": "Ellie", "gender": "f"}]), [])
+
+    def test_short_hesitation_in_caps_is_fixed_but_a_shout_is_not(self):
+        from quality import sentence_case
+        self.assertEqual(sentence_case("EU..."), "Eu...")
+        self.assertEqual(sentence_case("NÃO!"), "NÃO!")
+
+    def test_gender_is_learned_with_the_term(self):
+        from memory import WorkMemory, context_block, split_gender
+        self.assertEqual(split_gender("Arthur (m)"), ("Arthur", "m"))
+        self.assertEqual(split_gender("Ellie (f)"), ("Ellie", "f"))
+        self.assertEqual(split_gender("núcleo de mana"), ("núcleo de mana", None))
+        memory = WorkMemory()
+        memory.record("TBATE", "1", 1, [], [("ARTHUR", "Arthur (m)")], "ARTHUR")
+        memory.record("TBATE", "1", 2, [], [("ARTHUR", "Arthur")], "ARTHUR")
+        memory.record("TBATE", "1", 3, [], [("ELLIE", "Ellie")], "ELLIE")
+        memory.record("TBATE", "1", 4, [], [("ELLIE", "Ellie")], "ELLIE")
+        memory.record("TBATE", "1", 5, [], [("ELLIE", "Ellie (f)")], "ELLIE")
+        glossary = {g["source"]: g for g in memory.glossary("TBATE")}
+        self.assertEqual(glossary["ARTHUR"], {"source": "ARTHUR", "target": "Arthur", "gender": "m"})
+        self.assertEqual(glossary["ELLIE"]["gender"], "f")
+        self.assertIn('"gender": "male"', context_block(memory.context("TBATE", "1", 6), "ARTHUR"))
+
+    def test_answer_with_a_dropped_name_is_asked_again(self):
+        import asyncio
+        import engine_compat
+        from test_providers import pool
+        p, _, _ = pool()
+        engine_compat._POOL = p
+        engine_compat.set_page_context({"glossary": self.GLOSSARY, "previous": []})
+        prompts = []
+
+        async def request(to_lang, prompt, client=None, model=None):
+            prompts.append(prompt)
+            if len(prompts) == 1:
+                return "<|1|>Olá, General Arthur Leywin. E Sylvie."
+            return "<|1|>Olá, General Arthur Leywin. Eleanor. Sylvie."
+        engine = SimpleNamespace(
+            client=SimpleNamespace(max_retries=2),
+            _assemble_prompts=lambda source, target, queries: [("prompt", len(queries))],
+            _request_translation=request, rgx_capture="(.*)", extract_capture_groups=lambda text, regex: text)
+        original_client = engine_compat.provider_client
+        engine_compat.provider_client = lambda pool, provider: None
+        try:
+            result = asyncio.run(engine_compat.translate_byok(
+                engine, "ENG", "PTB", ["HELLO, GENERAL ARTHUR LEYWIN. ELEANOR. SYLVIE."]))
+        finally:
+            engine_compat.provider_client = original_client
+            engine_compat._POOL = None
+            engine_compat.set_page_context(None)
+        self.assertEqual(result, ["Olá, General Arthur Leywin. Eleanor. Sylvie."])
+        self.assertEqual(len(prompts), 2)
+        self.assertIn("Eleanor", prompts[1])
+
+
+class StaircaseLineTest(unittest.TestCase):
+    """236 p32: "THAT ENOUGH, GREY" touches "ARTHUR, AND" below it; neither line was read."""
+
+    def test_touching_lines_of_a_staircase_caption_are_both_added(self):
+        from quality import repair_lines
+        mask = np.zeros((300, 600), np.uint8)
+        for x0 in range(40, 300, 22):
+            mask[60:90, x0:x0 + 16] = 255       # "TELL YOURSELF", already a box
+        for x0 in range(10, 330, 22):
+            mask[107:137, x0:x0 + 16] = 255     # "THAT ENOUGH, GREY"
+        for x0 in range(250, 480, 22):
+            mask[126:156, x0:x0 + 16] = 255     # "ARTHUR, AND", touching from below
+        mask[130:140, 250:330] = 255            # the strike over GREY joins them
+        _, changes = repair_lines(mask, [(40, 60, 300, 90)])
+        added = changes[0][2]
+        self.assertEqual(len(added), 2)
+        first, second = sorted(added, key=lambda b: b[1])
+        self.assertLess(first[0], 20)
+        self.assertLessEqual(first[3] - first[1], 32)
+        self.assertGreater(second[0], 240)
+        self.assertGreater(second[1], 110)

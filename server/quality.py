@@ -200,7 +200,10 @@ def sentence_case(text, names=()):
     ("NÃO!", "PARE!") and text with no letters are left alone; "ISSO FOI..." is fixed.
     """
     letters = [c for c in text or "" if c.isalpha()]
-    if len(letters) < 6 or has_cjk(text) or any(c.islower() for c in letters):
+    # A short hesitation ("EU...") is fixed too; a short shout ("NÃO!") is not.
+    trailing = re.search(r"(\.\.|…)\W*$", text or "") and "!" not in (text or "")
+    if (len(letters) < 6 and not (trailing and len(letters) >= 2)) or has_cjk(text) \
+            or any(c.islower() for c in letters):
         return text
     out = text.lower()
     out = re.sub(r"(^|[.!?…]\s+|^[\W_]+)(\w)", lambda m: m.group(1) + m.group(2).upper(), out)
@@ -481,14 +484,94 @@ def repair_lines(mask, boxes):
     current = [b for b, _ in result]
     for label in range(1, count):
         x, y, bw, bh = (int(v) for v in stats[label, :4])
-        if not (0.5 * height <= bh <= SPLIT_FACTOR * height and bw >= height):
+        if not (0.5 * height <= bh <= STAIR_FACTOR * height and bw >= height):
             continue
         pixels = (labels[y:y + bh, x:x + bw] == label) & ink[y:y + bh, x:x + bw]
         if not pixels.any() or known[y:y + bh, x:x + bw][pixels].mean() > ORPHAN_COVERED:
             continue
-        cols = np.flatnonzero(pixels.any(axis=0))
-        box = (x + int(cols[0]), y, x + int(cols[-1]) + 1, y + bh)
-        if _near(box, current, height):
-            result.append((box, None))
-            changes.append(("added", None, [box]))
+        if bh > SPLIT_FACTOR * height:
+            boxes_here = stair_lines(pixels, x, y, height)
+        else:
+            cols = np.flatnonzero(pixels.any(axis=0))
+            boxes_here = [(x + int(cols[0]), y, x + int(cols[-1]) + 1, y + bh)]
+        # The two halves of a staircase stand or fall together.
+        if boxes_here and any(_near(b, current, height) for b in boxes_here):
+            result.extend((box, None) for box in boxes_here)
+            changes.append(("added", None, boxes_here))
     return result, changes
+
+
+STAIR_FACTOR = 2.6  # an orphan this tall may be two touching lines
+
+
+def stair_lines(pixels, x, y, height):
+    """Two lines that touch, as in a staircase caption with a struck-out word.
+
+    TBATE 236 p32: "THAT ENOUGH, GREY" (GREY struck out) touches "ARTHUR, AND"
+    on the line below, shifted right; the mask joins them in one blob two
+    lines tall.  Columns whose ink sits mostly in the top half go to the
+    first line, the others to the second.  Returns [] unless each line gets a fair share of the blob.
+    """
+    h, w = pixels.shape
+    band = int(round(height))
+    total = pixels.sum(axis=0)
+    upper = (total > 0) & (pixels[:h // 2].sum(axis=0) >= 0.5 * total)
+    lower = (total > 0) & ~upper
+    boxes = []
+    for cols, y0, y1 in ((np.flatnonzero(upper), 0, band), (np.flatnonzero(lower), h - band, h)):
+        if len(cols) < height:
+            return []
+        rows = np.flatnonzero(pixels[y0:y1, cols[0]:cols[-1] + 1].any(axis=1))
+        boxes.append((x + int(cols[0]), y + y0 + int(rows[0]), x + int(cols[-1]) + 1, y + y0 + int(rows[-1]) + 1))
+    if boxes[0][2] - boxes[0][0] > 0.95 * w and boxes[1][2] - boxes[1][0] > 0.95 * w:
+        return []  # one tall line or two stacked lines across the whole blob: not a staircase
+    return boxes
+
+
+# Words that show a woman or girl is on the page (speaker or listener).
+FEMALE_EVIDENCE = re.compile(
+    r"\b(?:she|her|hers|herself|girl|girls|woman|women|lady|ladies|queen|princess|sister|sis|mother|mom|"
+    r"mommy|mama|miss|ma'?am|madam|daughter|wife|aunt|auntie|grandma|grandmother|niece|empress|"
+    r"duchess|madame|mrs|ms|missus|bride|girlfriend|heroine|witch|goddess|nun|maid)\b", re.I)
+# Feminine forms a speaker uses about themself or the listener.
+FEMININE_SELF = re.compile(
+    r"\b(?:mim|eu|você|si|te|me)\s+mesma\b|\bobrigada\b|"
+    r"\b(?:estou|tô|sou|estava|fiquei|fico|ando|eu|você|está|tá|ficou)\s+"
+    r"(?:muito\s+|tão\s+|bem\s+|meio\s+|um pouco\s+)?"
+    r"(?:sozinha|cansada|preocupada|pronta|ocupada|grata|perdida|assustada|animada|nervosa|confusa|"
+    r"orgulhosa|curiosa|ansiosa|interessada|convencida|machucada|ferida|arqueira|guerreira|"
+    r"aluna|maga|sozinha)\b", re.I)
+
+
+def _has(name, text):
+    return re.search(rf"(?<![\wÀ-ÿ]){re.escape(name)}(?![\wÀ-ÿ])", text or "", re.I) is not None
+
+
+def translation_problems(sources, translations, glossary=(), earlier=""):
+    """Notes for a second try: names the AI dropped, feminine forms with no woman in sight.
+
+    238 p64: "ARTHUR. ELEANOR. SYLVIE." came back "Arthur. E Sylvie."; 236 p32:
+    "I TOLD MYSELF" became "eu disse a mim mesma" with Arthur narrating.
+    ``earlier`` is the text of the previous pages, also evidence of a woman.
+    Returns one note per problem, keyed by the 1-based region number.
+    """
+    from memory import normalize
+    page = " ".join(str(s) for s in sources)
+    female = bool(FEMALE_EVIDENCE.search(page + " " + earlier)) or any(
+        g.get("gender") == "f" and f" {normalize(g['source'])} " in f" {normalize(page)} " for g in glossary)
+    notes = []
+    for number, (source, text) in enumerate(zip(sources, translations), 1):
+        if not isinstance(text, str):
+            continue
+        here = f" {normalize(source)} "
+        for g in glossary:
+            target = g.get("target", "")
+            key = normalize(g.get("source", ""))
+            if key and target[:1].isupper() and f" {key} " in here and not _has(target, text):
+                notes.append(f"<|{number}|> must keep the name {target}")
+        if not female:
+            word = FEMININE_SELF.search(text)
+            if word:
+                notes.append(f"<|{number}|> uses the feminine \"{word.group(0)}\" but nothing shows a woman "
+                             "here: rephrase without gender, or use the masculine")
+    return notes

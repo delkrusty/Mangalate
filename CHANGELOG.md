@@ -13,6 +13,10 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 - A linha logo abaixo de um crédito ("Original Art by:" / nomes) também fica no original.
 - Página de créditos do fim do capítulo (dois ou mais créditos de equipe) fica inteira no original: logo, selo da plataforma e nomes.
 - Começo da tradução arrumado: "M-ME LIGA assim que" vira "M-me liga assim que", e uma fala que continua com reticências ("..DREAM") começa em minúscula.
+- Quando a IA some com um nome do original ("Arthur. Eleanor. Sylvie." virando "Arthur. E Sylvie.") ou usa feminino sem nenhuma mulher na página nem nas anteriores ("eu disse a mim mesma" com o Arthur narrando), o servidor pede a tradução de novo apontando o problema e fica com a melhor.
+- A memória da obra guarda o gênero de cada personagem quando a página mostra, e a IA usa isso nas páginas seguintes, inclusive quando o personagem narra. No lote, o glossário CSV aceita a coluna `gender` (m ou f).
+- Legenda em escada com uma palavra riscada que encosta na linha de baixo ("THAT ENOUGH, ~~GREY~~" / "ARTHUR, AND") tem as duas linhas lidas e traduzidas.
+- Uma hesitação curta em maiúsculas ("EU...") volta para "Eu...".
 - Instruções da IA: todo nome do original aparece na tradução, sem troca nem sobrenome inventado; gênero só com evidência (pronome, título, nome já conhecido), senão frase neutra; título ou apelido segue o gênero de quem ele nomeia.
 
 ### IAs e velocidade
