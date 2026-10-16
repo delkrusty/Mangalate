@@ -52,10 +52,10 @@ PRESETS = {
         "model": "mistral-small-latest",
         "keys_url": "https://admin.mistral.ai/organization/api-keys",
     },
-    "groq-llama": {
-        "label": "Groq, segundo modelo (mesma chave do Groq, cota separada)",
+    "groq-2": {
+        "label": "Groq, segundo modelo (GPT-OSS 20B, mesma chave do Groq, cota separada)",
         "base": "https://api.groq.com/openai/v1",
-        "model": "llama-3.3-70b-versatile",
+        "model": "openai/gpt-oss-20b",
         "keys_url": "https://console.groq.com/keys",
     },
     "github": {
@@ -65,6 +65,10 @@ PRESETS = {
         "keys_url": "https://github.com/settings/personal-access-tokens/new (permissão Models: leitura)",
     },
 }
+# Models a provider retired, with the replacement used for keys saved before (Groq dropped
+# llama-3.3-70b-versatile in 2026: "modelo recusado" every page).
+RETIRED = {"llama-3.3-70b-versatile": "openai/gpt-oss-20b"}
+RENAMED = {"groq-llama": "groq-2"}
 LOCAL_HOSTS = {"host.docker.internal", "localhost", "127.0.0.1"}
 SHORT_REST = 60
 LONG_REST = 3600
@@ -98,6 +102,7 @@ def parse_secret(text):
             raise ValueError("Provedor incompleto: confira nome, endereço e modelo.")
         if not key and urlparse(base).hostname not in LOCAL_HOSTS:
             raise ValueError(f"Provedor {name} sem chave.")
+        name, model = RENAMED.get(name, name), RETIRED.get(model, model)
         cleaned.append({"name": name, "base": base, "model": model, "key": key or "ollama"})
     return cleaned
 

@@ -469,6 +469,9 @@ def repair_lines(mask, boxes):
             part = (x0 + int(cols[0]), y0 + r0, x0 + int(cols[-1]) + 1, y0 + r1)
             if _covered(part, others) < 0.5:
                 parts.append(part)
+        if len(parts) < 2 and y1 - y0 <= STAIR_FACTOR * height:
+            # One box over two touching lines of a staircase caption (236 p32).
+            parts = stair_lines(ink[y0:y1, x0:x1], x0, y0, height)
         if len(parts) >= 2:
             result.extend((part, index) for part in parts)
             changes.append(("split", (x0, y0, x1, y1), parts))
@@ -512,7 +515,15 @@ def stair_lines(pixels, x, y, height):
     lines tall.  Columns whose ink sits mostly in the top half go to the
     first line, the others to the second.  Returns [] unless each line gets a fair share of the blob.
     """
+    rows = np.flatnonzero(pixels.any(axis=1))
+    if not len(rows):
+        return []
+    # Work on the ink itself: a detector box may have a margin around it.
+    y += int(rows[0])
+    pixels = pixels[rows[0]:rows[-1] + 1]
     h, w = pixels.shape
+    if h <= SPLIT_FACTOR * height:
+        return []
     band = int(round(height))
     total = pixels.sum(axis=0)
     upper = (total > 0) & (pixels[:h // 2].sum(axis=0) >= 0.5 * total)

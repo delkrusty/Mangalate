@@ -237,3 +237,32 @@ class StaircaseLineTest(unittest.TestCase):
         self.assertLessEqual(first[3] - first[1], 32)
         self.assertGreater(second[0], 240)
         self.assertGreater(second[1], 110)
+
+    def test_one_detector_box_over_both_staircase_lines_is_split(self):
+        from quality import repair_lines
+        mask = np.zeros((300, 600), np.uint8)
+        for x0 in range(40, 300, 22):
+            mask[60:90, x0:x0 + 16] = 255
+        for x0 in range(10, 330, 22):
+            mask[107:137, x0:x0 + 16] = 255
+        for x0 in range(250, 480, 22):
+            mask[126:156, x0:x0 + 16] = 255
+        mask[130:140, 250:330] = 255
+        for x0 in range(220, 520, 22):
+            mask[170:200, x0:x0 + 16] = 255     # "YOU MIGHT START"
+        _, changes = repair_lines(mask, [(40, 60, 300, 90), (5, 102, 485, 160), (220, 170, 520, 200)])
+        self.assertEqual(changes[0][0], "split")
+        first, second = sorted(changes[0][2], key=lambda b: b[1])
+        self.assertEqual((first[1], first[3]), (107, 137))
+        self.assertEqual((second[1], second[3]), (126, 156))
+        self.assertGreater(second[0], 240)
+
+
+class RetiredModelTest(unittest.TestCase):
+    def test_saved_second_groq_with_the_retired_llama_moves_to_gpt_oss_20b(self):
+        import json
+        from providers import parse_secret
+        saved = json.dumps({"providers": [{"name": "groq-llama", "base": "https://api.groq.com/openai/v1",
+                                           "model": "llama-3.3-70b-versatile", "key": "gsk_x"}]})
+        self.assertEqual(parse_secret(saved)[0]["name"], "groq-2")
+        self.assertEqual(parse_secret(saved)[0]["model"], "openai/gpt-oss-20b")

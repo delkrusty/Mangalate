@@ -20,7 +20,7 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 - Instruções da IA: todo nome do original aparece na tradução, sem troca nem sobrenome inventado; gênero só com evidência (pronome, título, nome já conhecido), senão frase neutra; título ou apelido segue o gênero de quem ele nomeia.
 
 ### IAs e velocidade
-- Novas IAs gratuitas na instalação: Mistral, um segundo modelo do Groq (Llama 3.3 70B, usa a mesma chave e tem limite separado) e GitHub Models (GPT-4.1 mini, com um token do GitHub).
+- Novas IAs gratuitas na instalação: Mistral, um segundo modelo do Groq (GPT-OSS 20B, usa a mesma chave e tem limite separado) e GitHub Models (GPT-4.1 mini, com um token do GitHub).
 - Com mais de uma IA configurada, as páginas se revezam entre elas (uma página vai para a primeira, a seguinte para a segunda), então o limite gratuito de cada uma demora mais para acabar. MANGALATE_ROTATION=ordem volta ao jeito antigo (sempre a primeira, as outras só de reserva).
 - Uma IA que demora mais de 45 segundos é deixada de lado e a página vai para a próxima.
 - O servidor traduz 2 páginas ao mesmo tempo: enquanto uma espera a IA, a outra é lida e limpa. O app manda 2 páginas por vez e, num servidor antigo que só aceita uma, espera a vez em vez de dar erro. MANGALATE_PAGES_AT_ONCE muda o número (1 a 4).

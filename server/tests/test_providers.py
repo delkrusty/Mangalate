@@ -212,13 +212,13 @@ class InstallerTest(unittest.TestCase):
 
     def test_second_groq_model_reuses_the_groq_key(self):
         names = list(PRESETS)
-        picks = f"1,{names.index('groq-llama') + 1}"
+        picks = f"1,{names.index('groq-2') + 1}"
         answers = iter([picks, "", "", "n"])
         keys = iter([GROQ["key"]])
         providers = choose_providers(ask=lambda prompt: next(answers), secret=lambda prompt: next(keys))
-        self.assertEqual([p["name"] for p in providers], ["groq", "groq-llama"])
+        self.assertEqual([p["name"] for p in providers], ["groq", "groq-2"])
         self.assertEqual(providers[1]["key"], GROQ["key"])
-        self.assertEqual(providers[1]["model"], "llama-3.3-70b-versatile")
+        self.assertEqual(providers[1]["model"], "openai/gpt-oss-20b")
 
     def test_bad_paste_or_half_typed_key_is_retried(self):
         answers = iter(["1", "", "n"])

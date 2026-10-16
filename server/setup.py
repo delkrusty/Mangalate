@@ -69,7 +69,7 @@ def configure(profile, hardware, bind, api_base="", model="", provider_key="", r
     return key_path, hardware
 
 
-KEY_PREFIXES = {"groq": ("gsk_",), "groq-llama": ("gsk_",), "gemini": ("AIza", "AQ."),
+KEY_PREFIXES = {"groq": ("gsk_",), "groq-2": ("gsk_",), "gemini": ("AIza", "AQ."),
                 "openrouter": ("sk-or-",), "github": ("github_pat_", "ghp_")}
 
 
@@ -195,7 +195,7 @@ def configure_one(index, names, providers, ask, secret):
             print("  Digite só o nome exato do modelo, sem espaços (ex.: gpt-oss:20b).")
         if not model:
             raise ValueError(f"Modelo de {name} não informado.")
-    same = next((p["key"] for p in providers if p["name"] == "groq"), "") if name == "groq-llama" else ""
+    same = next((p["key"] for p in providers if p["name"] == "groq"), "") if name == "groq-2" else ""
     if same:
         print("  Usando a mesma chave do Groq já configurada.")
     key = "" if name == "ollama" else same or ask_key(name, secret, ask)
