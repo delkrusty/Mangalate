@@ -13,6 +13,9 @@ class OfflineTextTest {
         assertTrue(OfflineText.isCredit("Read the latest chapters at asurascans.com"))
         assertTrue(OfflineText.isCredit("Join our DISCORD"))
         assertTrue(OfflineText.isCredit("TOWER OF GOD™"))
+        assertTrue(OfflineText.isCredit("Original Art by: YOYO,"))
+        assertTrue(OfflineText.isCredit("Producedby:MGK-story"))
+        assertFalse(OfflineText.isCredit("Stand by me."))
         assertFalse(OfflineText.isCredit("IT SCANS THE AREA."))
         assertFalse(OfflineText.isCredit("Where are you going?"))
     }
@@ -32,6 +35,7 @@ class OfflineTextTest {
         assertEquals("Vamos!", OfflineText.tidy("Vamos,!", "Let's go,!"))
         assertEquals("¿Qué?", OfflineText.tidy("¿ Qué ?", "What?"))
         assertEquals("Hi.", OfflineText.tidy("   ", "Hi."))
+        assertEquals("Eu— eu não sei.", OfflineText.tidy("Eu-- eu não sei.", "I-- I don't know."))
     }
 
     @Test

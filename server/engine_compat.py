@@ -150,26 +150,41 @@ def parse_marked(content, count):
 
 
 # Work memory for the page being translated (memory.WorkMemory.context), set by the
-# caller before each page like PAGE_ROWS; terms the AI listed are collected here.
-PAGE_CONTEXT = None
-LEARNED_TERMS = []
+# caller before each page like the page rows; terms the AI listed are collected here.
+# Context variables: two pages can be in flight at once (core.py), each with its own.
+import contextvars
+
+_PAGE_CONTEXT = contextvars.ContextVar("mangalate_page_context", default=None)
+_LEARNED_TERMS = contextvars.ContextVar("mangalate_learned_terms", default=None)
+_PAGE_ROWS = contextvars.ContextVar("mangalate_page_rows", default=None)
+
+
+def page_context():
+    return _PAGE_CONTEXT.get()
+
+
+def _learned():
+    terms = _LEARNED_TERMS.get()
+    if terms is None:
+        terms = []
+        _LEARNED_TERMS.set(terms)
+    return terms
 
 
 def set_page_context(context):
-    global PAGE_CONTEXT
-    PAGE_CONTEXT = context
-    LEARNED_TERMS.clear()
+    _PAGE_CONTEXT.set(context)
+    _LEARNED_TERMS.set([])
 
 
 def take_learned_terms():
-    terms = list(LEARNED_TERMS)
-    LEARNED_TERMS.clear()
+    terms = list(_learned())
+    _LEARNED_TERMS.set([])
     return terms
 
 
 def strip_terms(content):
     """(answer without the optional <|termos|> line, terms); kept only if the answer parses."""
-    if PAGE_CONTEXT is None:
+    if page_context() is None:
         return content, []
     from memory import split_terms
     return split_terms(content)
@@ -177,9 +192,9 @@ def strip_terms(content):
 
 async def request_byok_translation(self, to_lang, prompt, client=None, model=None):
     system = self.chat_system_template.format(to_lang=to_lang)
-    if PAGE_CONTEXT is not None:
+    if page_context() is not None:
         from memory import context_block
-        system += context_block(PAGE_CONTEXT, prompt)
+        system += context_block(page_context(), prompt)
     messages = [{"role": "system", "content": system}]
     sample = self.get_chat_sample(to_lang)
     if sample:
@@ -197,13 +212,16 @@ async def request_byok_translation(self, to_lang, prompt, client=None, model=Non
         temperature=self.temperature,
         top_p=self.top_p,
     )
-    if not response.choices:
+    if isinstance(response, (str, bytes)):
+        from providers import NotAnAnswer
+        raise NotAnAnswer("BYOK address did not answer as a chat API")
+    if not getattr(response, "choices", None):
         raise ValueError("BYOK returned no choices")
     choice = response.choices[0]
-    content = choice.message.content
+    content = getattr(getattr(choice, "message", None), "content", None)
     if not isinstance(content, str) or not content.strip():
         raise ValueError("BYOK returned empty content")
-    if choice.finish_reason == "length":
+    if getattr(choice, "finish_reason", None) == "length":
         raise ValueError("BYOK answer cut by max_tokens")
     usage = response.usage
     self.token_count_last = (getattr(usage, "total_tokens", 0) or 0) if usage else 0
@@ -216,30 +234,60 @@ async def translate_byok(self, from_lang, to_lang, queries):
     translations = []
     # Avoid the upstream loop which restarts still-running paid requests.
     self.client.max_retries = 0
+    from providers import AI_TIMEOUT
     pool = provider_pool()
+    offset = 0
     for prompt, count in self._assemble_prompts(from_lang, to_lang, queries):
+        sources = list(queries[offset:offset + count])
+        offset += count
         if pool:
-            async def attempt(provider, prompt=prompt, count=count):
+            async def ask(provider, prompt):
                 content = await asyncio.wait_for(
                     self._request_translation(to_lang, prompt, provider_client(pool, provider), provider["model"]),
-                    timeout=180)
+                    timeout=AI_TIMEOUT)
                 answer, terms = strip_terms(content)
                 extracted = (self.extract_capture_groups(answer, rf"{self.rgx_capture}") or "").strip()
+                return content, extracted, terms
+
+            async def attempt(provider, prompt=prompt, count=count, sources=sources):
+                content, extracted, terms = await ask(provider, prompt)
                 try:
                     parsed = parse_marked(extracted, count)
-                    LEARNED_TERMS.extend(terms)
-                    return parsed
                 except ValueError:
                     # Kept in memory for the local --diagnostics report only; never logged.
                     pool.__dict__.setdefault("raw", []).append((provider["name"], count, prompt, content))
                     raise
+                notes = answer_problems(sources, parsed)
+                if notes:
+                    # One second try with the problems pointed out; the better answer stays.
+                    print(f"Second try: {len(notes)} problem(s) in the answer", flush=True)
+                    try:
+                        _, again, again_terms = await ask(provider, prompt + "\n\nA previous answer had these problems; "
+                                                          "avoid them and keep every marker:\n" + "\n".join(notes))
+                        retried = parse_marked(again, count)
+                        if len(answer_problems(sources, retried)) < len(notes):
+                            parsed, terms = retried, again_terms
+                    except Exception as exc:
+                        if type(exc).__name__ == "AllProvidersResting":
+                            raise
+                _learned().extend(terms)
+                return parsed
             translations += await pool.run(attempt)
             continue
         content = await asyncio.wait_for(self._request_translation(to_lang, prompt), timeout=180)
         answer, terms = strip_terms(content)
         translations += parse_marked(self.extract_capture_groups(answer, rf"{self.rgx_capture}").strip(), count)
-        LEARNED_TERMS.extend(terms)
+        _learned().extend(terms)
     return translations
+
+
+def answer_problems(sources, translations):
+    """Dropped names and unfounded feminine forms (quality.translation_problems) for this page."""
+    from quality import translation_problems
+    context = page_context() or {}
+    earlier = " ".join(pair.get("original", "") for page in context.get("previous") or []
+                       for pair in (page if isinstance(page, list) else []) if isinstance(pair, dict))
+    return translation_problems(sources, translations, context.get("glossary") or [], earlier)
 
 
 def validate_byok_results(original_translate):
@@ -265,13 +313,9 @@ def protect_art(config):
 
 
 # Rows of the page inside the strip being translated (seams.Strip), set by the
-# caller before each page; pages are translated one at a time.
-PAGE_ROWS = None
-
-
+# caller before each page (a context variable, see the page context above).
 def set_page_rows(top, bottom):
-    global PAGE_ROWS
-    PAGE_ROWS = (int(top), int(bottom))
+    _PAGE_ROWS.set((int(top), int(bottom)))
 
 
 def on_page(regions, rows):
@@ -313,15 +357,87 @@ def is_credit(text):
     """Title, credit and scan-group lettering stays as drawn.
 
     TBATE new p84 "THE BEGINNING AFTER™END"; TBATE 236 p27 the "thunderscans"
-    watermark was translated.
+    watermark was translated; TBATE 240 p68 "Original Art by: YOYO" became "Arte original por: YOY".
     """
     import re
     global CREDIT
     if CREDIT is None:
         CREDIT = re.compile(r"[™©®]|\b\w{3,}scans?\b|discord|patreon|ko-?fi|www\.|\.(?:com|net|org|gg)\b"
+                            r"|by\s*:|\b(?:tl|pr|ts|qc|raws?|editor|proofreader|typesetter|translator|cleaner|redrawer)\s*:"
+                            r"|\btapa\w*\W{0,3}origin"
                             r"|read (?:the |this |more |latest )?chapters? (?:at|on)|support us|our (?:web)?site",
                             re.I)
     return bool(CREDIT.search(str(text or "")))
+
+
+CREDIT_ROLE = None
+
+
+def credits_page(regions):
+    """Two or more staff credits ("Story and adaptation by:", "Original Art by:") make a credits page."""
+    import re
+    global CREDIT_ROLE
+    if CREDIT_ROLE is None:
+        CREDIT_ROLE = re.compile(r"by\s*:|adaptation|original art|story and|produced\s*by", re.I)
+    return sum(bool(CREDIT_ROLE.search(str(getattr(r, "text", "") or ""))) for r in regions) >= 2
+
+
+def credit_followers(regions):
+    """Ids of the lines right below a credit: "Original Art by:" / "EternalUwU, chacha" (TBATE 240 p68)."""
+    from quality import same_block
+    credits = [r for r in regions if is_credit(getattr(r, "text", ""))]
+    follow = set()
+    for region in regions:
+        if any(c is region for c in credits):
+            continue
+        try:
+            if any(same_block(c, region) for c in credits):
+                follow.add(id(region))
+        except (AttributeError, TypeError, ValueError):
+            pass
+    return follow
+
+
+def join_split_blocks(regions, image):
+    """One speech the detector split in two stacked regions becomes one region again.
+
+    Otherwise each piece is translated alone ("o de verdade" / "Treino") and
+    both translations are fitted to the same bubble, one over the other.
+    """
+    import cv2
+    import numpy as np
+    import lettering
+    from quality import join_blocks
+
+    def inside(a, b):
+        found = lettering.bubble_mask(image, tuple(int(v) for v in a.xyxy))
+        if found is None:
+            return False
+        mask, wx0, wy0 = found
+        # The letters are holes in the flat interior; fill them so a point on a glyph counts.
+        contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        mask = cv2.drawContours(np.zeros(mask.shape, np.uint8), contours, -1, 1, -1) > 0
+        bx0, by0, bx1, by1 = (int(v) for v in b.xyxy)
+        cx, cy = (bx0 + bx1) // 2 - wx0, (by0 + by1) // 2 - wy0
+        return 0 <= cy < mask.shape[0] and 0 <= cx < mask.shape[1] and bool(mask[cy, cx])
+
+    def make(a, b):
+        return type(a)(np.concatenate([np.asarray(a.lines), np.asarray(b.lines)]), list(a.texts) + list(b.texts),
+                       font_size=max(a.font_size, b.font_size), angle=a.angle, prob=min(a.prob, b.prob),
+                       fg_color=a.fg_colors, bg_color=a.bg_colors)
+
+    if image is None or not all(hasattr(r, "xyxy") and hasattr(r, "lines") for r in regions):
+        return regions
+    horizontal = [r for r in regions if getattr(r, "horizontal", True)]
+    others = [r for r in regions if not getattr(r, "horizontal", True)]
+    try:
+        joined = join_blocks(horizontal, make, inside)
+    except Exception as exc:  # never lose a page over this
+        print(f"Region join skipped: {type(exc).__name__}", flush=True)
+        return regions
+    if len(joined) < len(horizontal):
+        print(f"Region join: {len(horizontal) - len(joined)} split speech(es) joined", flush=True)
+    return joined + others
 
 
 def classify_regions(original_merge):
@@ -337,18 +453,28 @@ def classify_regions(original_merge):
         regions = await original_merge(self, config, ctx)
         ctx.mangalate_preserved = []
         if regions:
-            regions, context_only = on_page(regions, PAGE_ROWS)
+            regions, context_only = on_page(regions, _PAGE_ROWS.get())
             if context_only:
                 print(f"Region check: {len(context_only)} only in the neighbouring pages, skipped", flush=True)
+            regions = join_split_blocks(regions, ctx.img_rgb)
         if not regions or not protect_art(config):
             return regions
         image, raw = ctx.img_rgb, ctx.mask_raw
         if raw is not None and raw.shape[:2] != image.shape[:2]:
             raw = cv2.resize(raw, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
+        follow = credit_followers(regions)
+        if credits_page(regions):
+            # End-of-chapter credits: the logo, the platform seal and every name stay as drawn
+            # (TBATE 240 p68: the logo read as "FTERTHEEND" became "After the end").
+            follow |= {id(r) for r in regions}
         kept = []
         for region in regions:
             text = getattr(region, "text", "")
-            if is_sound_effect(text) or is_credit(text):
+            if is_sound_effect(text) or is_credit(text) or id(region) in follow:
+                if id(region) in follow and not is_sound_effect(text):
+                    region.mangalate_background = {"kind": "creditos"}
+                    ctx.mangalate_preserved.append(region)
+                    continue
                 region.mangalate_background = {"kind": "efeito_sonoro" if is_sound_effect(text) else "creditos"}
                 ctx.mangalate_preserved.append(region)
                 continue
@@ -609,13 +735,16 @@ def validate_page_translations(original_translate):
         regions = list(ctx.text_regions or [])
         result = await original_translate(self, config, ctx)
         if not legacy_quality() and isinstance(result, list):
-            from quality import normalize_spacing, page_names, sentence_case
+            from quality import normalize_spacing, page_names, sentence_case, source_names, tidy_start
             texts = [getattr(region, "translation", None) for region in result]
             names = page_names([t for t in texts if isinstance(t, str)])
-            names |= {g["target"] for g in (PAGE_CONTEXT or {}).get("glossary", [])}
+            names |= {g["target"] for g in (page_context() or {}).get("glossary", [])}
             for region in result:
                 if isinstance(getattr(region, "translation", None), str):
-                    region.translation = normalize_spacing(sentence_case(region.translation, names))
+                    own = names | source_names(getattr(region, "text", ""), region.translation)
+                    fixed = sentence_case(region.translation, own)
+                    fixed = tidy_start(fixed, getattr(region, "text", ""), own)
+                    region.translation = normalize_spacing(fixed)
         blank = sum(not getattr(region, "translation", "").strip() for region in regions)
         unchanged = sum(getattr(region, "translation", "").strip().lower() == region.text.strip().lower()
                         for region in regions)

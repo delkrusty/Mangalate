@@ -1,0 +1,23 @@
+name: Verify NVIDIA image
+on:
+  push:
+    branches: [main, 'melhoria/**']
+    paths: ['server/Dockerfile.worker', '.github/workflows/gpu-image.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  gpu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
+      - name: Build the NVIDIA worker
+        working-directory: server
+        run: docker build -f Dockerfile.worker --target gpu -t mangalate-gpu .
+      - name: Engine imports and CUDA torch kept (no card on the runner)
+        run: |
+          docker run --rm --entrypoint python mangalate-gpu -m pip check || true
+          docker run --rm --entrypoint python mangalate-gpu -c "import torch; assert torch.version.cuda, torch.__version__; from manga_translator import MangaTranslator, Config; print('torch', torch.__version__, 'cuda', torch.version.cuda)"

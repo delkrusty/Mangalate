@@ -11,6 +11,8 @@ object OfflineText {
     /** Créditos e marcas d'água de scan: ficam como estão, sem tradução. */
     private val credit = Regex(
         "[™©®]|\\b\\w{3,}scans?\\b|discord|patreon|ko-?fi|www\\.|\\.(?:com|net|org|gg)\\b" +
+            "|by\\s*:|\\b(?:tl|pr|ts|qc|raws?|editor|proofreader|typesetter|translator|cleaner|redrawer)\\s*:" +
+            "|\\btapa\\w*\\W{0,3}origin" +
             "|read (?:the |this |more |latest )?chapters? (?:at|on)|support us|our (?:web)?site",
         RegexOption.IGNORE_CASE,
     )
@@ -28,6 +30,7 @@ object OfflineText {
     fun tidy(translation: String, original: String): String {
         val text = translation
             .replace(Regex("\\s+"), " ")
+            .replace(Regex("(?<!-)--(?!-)"), "—")
             .replace(Regex(" +([,.!?;:…])"), "$1")
             .replace(Regex("[,;:]+(?=[.!?…])"), "")
             .replace(Regex("([¿¡]) +"), "$1")

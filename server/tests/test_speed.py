@@ -83,6 +83,35 @@ class OverlapTest(unittest.TestCase):
             del os.environ["MANGALATE_OVERLAP"]
 
 
+class TwoPagesTest(unittest.TestCase):
+    def test_two_pages_share_the_wait_and_heavy_steps_take_turns(self):
+        engine, calls = fake_engine()
+
+        async def both():
+            return await asyncio.gather(run_page(engine, page()), run_page(engine, page()))
+
+        started = time.monotonic()
+        self.assertEqual(asyncio.run(both()), ["clean", "clean"])
+        elapsed = time.monotonic() - started
+        self.assertLess(elapsed, 0.85)  # one page after the other would be 1.2 s
+        starts = sorted(c[1] for c in calls if c[0] == "inpaint-start")
+        ends = sorted(c[1] for c in calls if c[0] == "inpaint-end")
+        self.assertEqual(len(starts), 2)
+        self.assertGreaterEqual(starts[1], ends[0] - 0.01)  # never two cleanings at once
+
+    def test_one_page_at_a_time_keeps_the_steps_in_place(self):
+        import os
+        os.environ["MANGALATE_PAGES_AT_ONCE"] = "1"
+        try:
+            self.assertEqual(speed.pages_at_once(), 1)
+            engine, calls = fake_engine()
+            asyncio.run(run_page(engine, page()))
+            masks = [c for c in calls if c[0] == "mask"]
+            self.assertTrue(masks)
+        finally:
+            del os.environ["MANGALATE_PAGES_AT_ONCE"]
+
+
 class FlatFillTest(unittest.TestCase):
     """Text in a plain bubble is covered with the bubble colour; text over art goes to the model."""
 

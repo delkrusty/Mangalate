@@ -1,5 +1,6 @@
 """BYOK provider presets, secret format, rotation and installer menu (no network)."""
 import asyncio
+import time
 import json
 import sys
 import tempfile
@@ -34,7 +35,7 @@ class ProviderError(Exception):
 
 def pool(*providers):
     clock, logs = Clock(), []
-    return ProviderPool(providers or (GROQ, GEMINI), clock=clock, log=logs.append), clock, logs
+    return ProviderPool(providers or (GROQ, GEMINI), clock=clock, log=logs.append, take_turns=False), clock, logs
 
 
 class SecretTest(unittest.TestCase):
@@ -68,6 +69,16 @@ class RotationTest(unittest.TestCase):
                 raise outcome
             return outcome
         return asyncio.run(p.run(attempt)), calls
+
+    def test_pages_take_turns_between_providers(self):
+        mistral = {"name": "mistral", "base": PRESETS["mistral"]["base"], "model": "m", "key": "k" * 32}
+        p = ProviderPool((GROQ, GEMINI, mistral), clock=FakeClock() if "FakeClock" in globals() else time.monotonic,
+                         log=lambda *a: None, take_turns=True)
+        first = [self.run_pool(p, lambda n: ["ok"])[1][0] for _ in range(6)]
+        self.assertEqual(first, ["groq", "gemini", "mistral", "groq", "gemini", "mistral"])
+        # A provider at its limit is skipped and the page still gets translated.
+        result, calls = self.run_pool(p, lambda n: ProviderError(429) if n == "groq" else ["ok"])
+        self.assertEqual((result, calls), (["ok"], ["groq", "gemini"]))
 
     def test_limit_moves_to_next_provider_and_rests_the_first(self):
         p, clock, logs = pool()
@@ -192,12 +203,22 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(providers, [GROQ, GEMINI])
 
     def test_ollama_needs_no_key_and_custom_provider_is_manual(self):
-        answers = iter(["4,5", "qwen3:8b", "https://api.example.com/v1", "my-model", "n"])
+        answers = iter([f"4,{len(PRESETS) + 1}", "qwen3:8b", "https://api.example.com/v1", "my-model", "n"])
         keys = iter(["custom-provider-key-123456"])
         providers = choose_providers(ask=lambda prompt: next(answers), secret=lambda prompt: next(keys))
         self.assertEqual(providers[0], {"name": "ollama", "base": PRESETS["ollama"]["base"],
                                         "model": "qwen3:8b", "key": ""})
         self.assertEqual(providers[1]["base"], "https://api.example.com/v1")
+
+    def test_second_groq_model_reuses_the_groq_key(self):
+        names = list(PRESETS)
+        picks = f"1,{names.index('groq-2') + 1}"
+        answers = iter([picks, "", "", "n"])
+        keys = iter([GROQ["key"]])
+        providers = choose_providers(ask=lambda prompt: next(answers), secret=lambda prompt: next(keys))
+        self.assertEqual([p["name"] for p in providers], ["groq", "groq-2"])
+        self.assertEqual(providers[1]["key"], GROQ["key"])
+        self.assertEqual(providers[1]["model"], "openai/gpt-oss-20b")
 
     def test_bad_paste_or_half_typed_key_is_retried(self):
         answers = iter(["1", "", "n"])

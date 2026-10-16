@@ -96,7 +96,10 @@ def classify_region(image, text_mask, quads, line_height=None):
     inner = cv2.erode(lines, np.ones((3, 3), np.uint8))
     sample = np.zeros((h, w), bool)
     sample[y0:y1, x0:x1] = True
-    sample &= (text == 0) & (inner == 0)
+    # Only the margin of the lines themselves: a block shaped like a staircase
+    # (236 p32) has page or art in the empty corners of its bounding box.
+    near = cv2.dilate(lines, np.ones((2 * pad + 1, 2 * pad + 1), np.uint8))
+    sample &= (text == 0) & (inner == 0) & (near > 0)
     ys, xs = np.nonzero(sample)
     if len(xs) < MIN_SAMPLES:
         return {"kind": "art", "interior_share": 0.0, "samples": int(len(xs))}
@@ -129,6 +132,7 @@ def normalize_spacing(text):
     if not text or has_cjk(text):
         return text
     text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"(?<!-)--(?!-)", "—", text)  # "Eu--" -> "Eu—" (TBATE 199 p22)
     text = re.sub(r"[,;:]\s*(?=[.!?…—])", "", text)  # "da muralha,." (TBATE new p108)
     text = re.sub(r" +([,;:!?…])", r"\1", text)
     text = re.sub(r"(?<!\.) +\.(?!\.)", ".", text)
@@ -136,6 +140,57 @@ def normalize_spacing(text):
     text = re.sub(rf"([!?…]+)(?={_LETTER})", r"\1 ", text)
     text = re.sub(rf"(?<={_LETTER}{{2}})\.(?=[A-ZÀ-Ý])", ". ", text)
     return text.strip()
+
+
+def _median_line(region):
+    lines = np.asarray(region.lines, dtype=float)
+    heights = [np.linalg.norm(q[3] - q[0]) for q in lines]
+    return float(np.median(heights)) if heights else 0.0
+
+
+def same_block(a, b, inside=None):
+    """True when ``b`` is the next line(s) of ``a``'s speech, split off by the detector.
+
+    The two pieces must be stacked (b right below a, at most about one line
+    apart), overlap horizontally, have lettering of the same size, and, when
+    ``inside`` is given, sit in the same bubble: ``inside(a, b)`` checks that
+    on the page (OF 237 p62: "ALRIGHT, LET'S START THE REAL" / "TRAINING.").
+    """
+    ax0, ay0, ax1, ay1 = (float(v) for v in a.xyxy)
+    bx0, by0, bx1, by1 = (float(v) for v in b.xyxy)
+    ha, hb = _median_line(a), _median_line(b)
+    if min(ha, hb) <= 0 or max(ha, hb) / min(ha, hb) > 1.6:
+        return False
+    line = min(ha, hb)
+    stacked = -0.5 * line <= by0 - ay1 <= 0.9 * line and \
+        min(ax1, bx1) - max(ax0, bx0) >= 0.5 * min(ax1 - ax0, bx1 - bx0)
+    if not (stacked or same_row(a, b, line)):
+        return False
+    return inside is None or bool(inside(a, b))
+
+
+def same_row(a, b, line):
+    """``b`` continues ``a``'s last line to the right: "THE REAL" | "TRAINING" (OF 237 p62)."""
+    bx0, by0, bx1, by1 = (float(v) for v in b.xyxy)
+    last = max(np.asarray(a.lines, dtype=float), key=lambda q: q[:, 1].mean())
+    lx0, ly0, lx1, ly1 = last[:, 0].min(), last[:, 1].min(), last[:, 0].max(), last[:, 1].max()
+    shared = min(ly1, by1) - max(ly0, by0)
+    gap = bx0 - lx1
+    return shared >= 0.6 * line and -0.5 * line <= gap <= 1.2 * line
+
+
+def join_blocks(regions, make, inside=None):
+    """Merge stacked pieces of the same speech; ``make(a, b)`` builds the merged region."""
+    regions = sorted(regions, key=lambda r: float(r.xyxy[1]))
+    out = []
+    for region in regions:
+        for i, previous in enumerate(out):
+            if same_block(previous, region, inside):
+                out[i] = make(previous, region)
+                break
+        else:
+            out.append(region)
+    return out
 
 
 def sentence_case(text, names=()):
@@ -148,13 +203,59 @@ def sentence_case(text, names=()):
     ("NÃO!", "PARE!") and text with no letters are left alone; "ISSO FOI..." is fixed.
     """
     letters = [c for c in text or "" if c.isalpha()]
-    if len(letters) < 6 or has_cjk(text) or any(c.islower() for c in letters):
+    # A short hesitation ("EU...") is fixed too; a short shout ("NÃO!") is not.
+    trailing = re.search(r"(\.\.|…)\W*$", text or "") and "!" not in (text or "")
+    if (len(letters) < 6 and not (trailing and len(letters) >= 2)) or has_cjk(text) \
+            or any(c.islower() for c in letters):
         return text
     out = text.lower()
     out = re.sub(r"(^|[.!?…]\s+|^[\W_]+)(\w)", lambda m: m.group(1) + m.group(2).upper(), out)
     for name in sorted({n for n in names if n and n[:1].isupper()}, key=len, reverse=True):
         out = re.sub(rf"(?<!\w){re.escape(name.lower())}(?!\w)", name, out)
     return out
+
+
+# Words English and Portuguese share that are not names (kept lowercase when a caps answer is fixed).
+COGNATES = {"real", "normal", "total", "final", "animal", "hotel", "mental", "natural", "legal",
+            "general", "capital", "plan", "drama", "mana", "area", "idea", "radio", "virus", "zero",
+            "super", "hobby", "show", "status", "chef", "bacon", "game", "online", "sexy", "sofa"}
+
+
+def source_names(original, translation):
+    """Words of the source the translation kept as they are: names ("QUEEN MERIAL!" -> "RAINHA MERIAL!").
+
+    Used only to fix an answer written in capitals, where a name cannot be told
+    from the other words by its capital letter (OF 238 p63 became "Rainha merial!").
+    """
+    words = set(re.findall(r"[A-Za-zÀ-ÿ]{4,}", original or ""))
+    kept = (translation or "").lower()
+    return {w[:1].upper() + w[1:].lower() for w in words
+            if w.lower() not in COGNATES and re.search(rf"(?<![\wÀ-ÿ]){re.escape(w.lower())}(?![\wÀ-ÿ])", kept)}
+
+
+def tidy_start(text, original="", names=()):
+    """Fix how a translation starts.
+
+    "M-ME LIGA assim que..." (TBATE 236 p30): a run of capitals at the start of
+    an otherwise sentence-case answer becomes sentence case.  "...Sendo sonho ou
+    não." (236 p34): when the source continues a sentence ("..DREAM OR NO DREAM"),
+    the first word after the dots stays lowercase.
+    """
+    if not text or has_cjk(text):
+        return text
+    keep = {n for n in names if n and n[:1].isupper()}
+    run = re.match(r"^([\W_]*)((?:[A-ZÀ-Ý]{1,3}-)?[A-ZÀ-Ý]{2,}(?:\s+[A-ZÀ-Ý]{2,})*)(?=\s+[a-zà-ÿ])", text)
+    if run and any(c.islower() for c in text):
+        words = run.group(2).split()
+        fixed = [w.title() if w.title() in keep else w.lower() for w in words]
+        first = fixed[0]
+        fixed[0] = first[:1].upper() + first[1:]
+        text = run.group(1) + " ".join(fixed) + text[run.end():]
+    if re.match(r"^\s*(?:\.{2,}|…)", original or ""):
+        cont = re.match(r"^(\s*(?:\.{2,}|…)\s*)([A-ZÀ-Ý])([a-zà-ÿ]+)", text)
+        if cont and (cont.group(2) + cont.group(3)) not in keep:
+            text = cont.group(1) + cont.group(2).lower() + cont.group(3) + text[cont.end():]
+    return text
 
 
 def page_names(translations):
@@ -371,6 +472,16 @@ def repair_lines(mask, boxes):
             part = (x0 + int(cols[0]), y0 + r0, x0 + int(cols[-1]) + 1, y0 + r1)
             if _covered(part, others) < 0.5:
                 parts.append(part)
+        if len(parts) < 2 and y1 - y0 <= STAIR_FACTOR * height:
+            # One box over two touching lines of a staircase caption (236 p32);
+            # ink of the lines above and below, already boxed, is left out.
+            own = ink[y0:y1, x0:x1].copy()
+            # Their letters overflow the boxes a little, mostly sideways.
+            side, edge = int(round(0.5 * height)), 2
+            for ox0, oy0, ox1, oy1 in others:
+                own[max(0, oy0 - edge - y0):max(0, oy1 + edge - y0),
+                    max(0, ox0 - side - x0):max(0, ox1 + side - x0)] = False
+            parts = stair_lines(own, x0, y0, height)
         if len(parts) >= 2:
             result.extend((part, index) for part in parts)
             changes.append(("split", (x0, y0, x1, y1), parts))
@@ -386,14 +497,102 @@ def repair_lines(mask, boxes):
     current = [b for b, _ in result]
     for label in range(1, count):
         x, y, bw, bh = (int(v) for v in stats[label, :4])
-        if not (0.5 * height <= bh <= SPLIT_FACTOR * height and bw >= height):
+        if not (0.5 * height <= bh <= STAIR_FACTOR * height and bw >= height):
             continue
         pixels = (labels[y:y + bh, x:x + bw] == label) & ink[y:y + bh, x:x + bw]
         if not pixels.any() or known[y:y + bh, x:x + bw][pixels].mean() > ORPHAN_COVERED:
             continue
-        cols = np.flatnonzero(pixels.any(axis=0))
-        box = (x + int(cols[0]), y, x + int(cols[-1]) + 1, y + bh)
-        if _near(box, current, height):
-            result.append((box, None))
-            changes.append(("added", None, [box]))
+        if bh > SPLIT_FACTOR * height:
+            boxes_here = stair_lines(pixels, x, y, height)
+        else:
+            cols = np.flatnonzero(pixels.any(axis=0))
+            boxes_here = [(x + int(cols[0]), y, x + int(cols[-1]) + 1, y + bh)]
+        # The two halves of a staircase stand or fall together.
+        if boxes_here and any(_near(b, current, height) for b in boxes_here):
+            result.extend((box, None) for box in boxes_here)
+            changes.append(("added", None, boxes_here))
     return result, changes
+
+
+STAIR_FACTOR = 2.6  # an orphan this tall may be two touching lines
+
+
+def stair_lines(pixels, x, y, height):
+    """Two lines that touch, as in a staircase caption with a struck-out word.
+
+    TBATE 236 p32: "THAT ENOUGH, GREY" (GREY struck out) touches "ARTHUR, AND"
+    on the line below, shifted right; the mask joins them in one blob two
+    lines tall.  Columns whose ink sits mostly in the top half go to the
+    first line, the others to the second.  Returns [] unless each line gets a fair share of the blob.
+    """
+    rows = np.flatnonzero(pixels.any(axis=1))
+    if not len(rows):
+        return []
+    # Work on the ink itself: a detector box may have a margin around it.
+    y += int(rows[0])
+    pixels = pixels[rows[0]:rows[-1] + 1]
+    h, w = pixels.shape
+    if h <= SPLIT_FACTOR * height:
+        return []
+    band = int(round(height))
+    total = pixels.sum(axis=0)
+    upper = (total > 0) & (pixels[:h // 2].sum(axis=0) >= 0.5 * total)
+    lower = (total > 0) & ~upper
+    boxes = []
+    for cols, y0, y1 in ((np.flatnonzero(upper), 0, band), (np.flatnonzero(lower), h - band, h)):
+        if len(cols) < height:
+            return []
+        rows = np.flatnonzero(pixels[y0:y1, cols[0]:cols[-1] + 1].any(axis=1))
+        boxes.append((x + int(cols[0]), y + y0 + int(rows[0]), x + int(cols[-1]) + 1, y + y0 + int(rows[-1]) + 1))
+    if boxes[0][2] - boxes[0][0] > 0.95 * w and boxes[1][2] - boxes[1][0] > 0.95 * w:
+        return []  # one tall line or two stacked lines across the whole blob: not a staircase
+    return boxes
+
+
+# Words that show a woman or girl is on the page (speaker or listener).
+FEMALE_EVIDENCE = re.compile(
+    r"\b(?:she|her|hers|herself|girl|girls|woman|women|lady|ladies|queen|princess|sister|sis|mother|mom|"
+    r"mommy|mama|miss|ma'?am|madam|daughter|wife|aunt|auntie|grandma|grandmother|niece|empress|"
+    r"duchess|madame|mrs|ms|missus|bride|girlfriend|heroine|witch|goddess|nun|maid)\b", re.I)
+# Feminine forms a speaker uses about themself or the listener.
+FEMININE_SELF = re.compile(
+    r"\b(?:mim|eu|você|si|te|me)\s+mesma\b|\bobrigada\b|"
+    r"\b(?:estou|tô|sou|estava|fiquei|fico|ando|eu|você|está|tá|ficou)\s+"
+    r"(?:muito\s+|tão\s+|bem\s+|meio\s+|um pouco\s+)?"
+    r"(?:sozinha|cansada|preocupada|pronta|ocupada|grata|perdida|assustada|animada|nervosa|confusa|"
+    r"orgulhosa|curiosa|ansiosa|interessada|convencida|machucada|ferida|arqueira|guerreira|"
+    r"aluna|maga|sozinha)\b", re.I)
+
+
+def _has(name, text):
+    return re.search(rf"(?<![\wÀ-ÿ]){re.escape(name)}(?![\wÀ-ÿ])", text or "", re.I) is not None
+
+
+def translation_problems(sources, translations, glossary=(), earlier=""):
+    """Notes for a second try: names the AI dropped, feminine forms with no woman in sight.
+
+    238 p64: "ARTHUR. ELEANOR. SYLVIE." came back "Arthur. E Sylvie."; 236 p32:
+    "I TOLD MYSELF" became "eu disse a mim mesma" with Arthur narrating.
+    ``earlier`` is the text of the previous pages, also evidence of a woman.
+    Returns one note per problem, keyed by the 1-based region number.
+    """
+    from memory import normalize
+    page = " ".join(str(s) for s in sources)
+    female = bool(FEMALE_EVIDENCE.search(page + " " + earlier)) or any(
+        g.get("gender") == "f" and f" {normalize(g['source'])} " in f" {normalize(page)} " for g in glossary)
+    notes = []
+    for number, (source, text) in enumerate(zip(sources, translations), 1):
+        if not isinstance(text, str):
+            continue
+        here = f" {normalize(source)} "
+        for g in glossary:
+            target = g.get("target", "")
+            key = normalize(g.get("source", ""))
+            if key and target[:1].isupper() and f" {key} " in here and not _has(target, text):
+                notes.append(f"<|{number}|> must keep the name {target}")
+        if not female:
+            word = FEMININE_SELF.search(text)
+            if word:
+                notes.append(f"<|{number}|> uses the feminine \"{word.group(0)}\" but nothing shows a woman "
+                             "here: rephrase without gender, or use the masculine")
+    return notes

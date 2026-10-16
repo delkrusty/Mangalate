@@ -18,9 +18,15 @@ Most text sits in plain bubbles. There the cleaning does not need the
 inpainting model: the letters are covered with the bubble's own colour, taken
 from the pixels around them. The model runs only for text over art, and only
 on the part of the page around it. MANGALATE_FLAT_FILL=false turns this off.
+
+Two pages can be in the engine at once (MANGALATE_PAGES_AT_ONCE, default 2).
+Their heavy steps (detection, reading, cleaning, lettering) take turns in a
+worker thread, so while one page waits for the AI the other uses the
+processor or the card, and the event loop stays free to receive the answer.
 """
 import asyncio
 import os
+import threading
 import time
 from types import SimpleNamespace
 
@@ -39,6 +45,31 @@ STEPS = {
 
 def overlap_enabled():
     return os.environ.get("MANGALATE_OVERLAP", "true").lower() != "false"
+
+
+HEAVY_STEPS = ("_run_detection", "_run_ocr", "_run_textline_merge", "_run_mask_refinement",
+               "_run_inpainting", "_run_text_rendering")
+_HEAVY = threading.Lock()
+
+
+def pages_at_once():
+    try:
+        return max(1, min(4, int(os.environ.get("MANGALATE_PAGES_AT_ONCE", "2"))))
+    except ValueError:
+        return 2
+
+
+def take_turns(original):
+    """Run a heavy step in a worker thread, one page at a time."""
+    async def run(self, config, ctx):
+        if pages_at_once() == 1:
+            return await original(self, config, ctx)
+
+        def work():
+            with _HEAVY:
+                return asyncio.run(original(self, config, ctx))
+        return await asyncio.to_thread(work)
+    return run
 
 
 def timed(name, original):
@@ -196,6 +227,8 @@ def install(MangaTranslator):
     MangaTranslator._run_inpainting = flat_first(MangaTranslator._run_inpainting)
     for method, name in STEPS.items():
         setattr(MangaTranslator, method, timed(name, getattr(MangaTranslator, method)))
+    for method in HEAVY_STEPS:
+        setattr(MangaTranslator, method, take_turns(getattr(MangaTranslator, method)))
     MangaTranslator._run_text_translation = prepare_cleaning(MangaTranslator._run_text_translation)
     MangaTranslator._run_mask_refinement = reuse_mask(MangaTranslator._run_mask_refinement)
     MangaTranslator._run_inpainting = reuse_cleaning(MangaTranslator._run_inpainting)

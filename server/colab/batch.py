@@ -155,7 +155,11 @@ async def run(args):
             for row in csv.DictReader(handle):
                 if not row.get("source") or not row.get("target"):
                     raise ValueError("Glossário CSV precisa das colunas source,target.")
-                glossary.append({"source": row["source"], "target": row["target"]})
+                term = {"source": row["source"], "target": row["target"]}
+                gender = (row.get("gender") or "").strip().lower()[:1]
+                if gender in ("m", "f"):
+                    term["gender"] = gender  # m/f: a character's gender, also when narrating
+                glossary.append(term)
         if len(glossary) > 100:
             raise ValueError("Use no máximo 100 termos no glossário.")
     from memory import WorkMemory, remember
@@ -248,7 +252,8 @@ async def run(args):
     if args.profile == "byok":
         # Pinned + learned terms, ready to correct and pass back with --glossary.
         with (output / "glossario.csv").open("w", encoding="utf-8", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=["source", "target"])
+            writer = csv.DictWriter(handle, fieldnames=["source", "target", "gender"], restval="",
+                                    extrasaction="ignore")
             writer.writeheader()
             writer.writerows(memory.glossary(work_name))
     (output / "review.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
