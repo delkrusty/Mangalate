@@ -252,6 +252,10 @@ def tidy_start(text, original="", names=()):
         first = fixed[0]
         fixed[0] = first[:1].upper() + first[1:]
         text = run.group(1) + " ".join(fixed) + text[run.end():]
+    # A stutter keeps the word's own case: "E-Eu tô com medo" -> "E-eu" (TBATE 236 p12), "A-Arthur" stays.
+    text = re.sub(r"(?<![\wÀ-ÿ])([A-ZÀ-Ý])-([A-ZÀ-Ý])([a-zà-ÿ][\wà-ÿ]*)",
+                  lambda m: m.group(0) if (m.group(2) + m.group(3)) in keep or m.group(1).lower() != m.group(2).lower()
+                  else f"{m.group(1)}-{m.group(2).lower()}{m.group(3)}", text)
     if re.match(r"^\s*(?:\.{2,}|…)", original or ""):
         cont = re.match(r"^(\s*(?:\.{2,}|…)\s*)([A-ZÀ-Ý])([a-zà-ÿ]+)", text)
         if cont and (cont.group(2) + cont.group(3)) not in keep:
@@ -522,6 +526,33 @@ def repair_lines(mask, boxes):
     return result, changes
 
 
+DUPLICATE_OVERLAP = 0.6  # share of the smaller box inside the other one
+
+
+def duplicate_regions(boxes, texts):
+    """Indices of regions that repeat another one over the same letters, worse read.
+
+    Grand Blue 87 p45: the two lines of "GOT IT!" were also read as one box, OCR
+    "8E"; both were translated and "Be" was written over "Entendi!".  Of two
+    regions whose boxes mostly overlap, the one with fewer letters is dropped.
+    """
+    def letters(text):
+        return len(re.findall(r"[^\W\d_]", text or ""))
+    drop = set()
+    for i, a in enumerate(boxes):
+        for j in range(i + 1, len(boxes)):
+            b = boxes[j]
+            iw = min(a[2], b[2]) - max(a[0], b[0])
+            ih = min(a[3], b[3]) - max(a[1], b[1])
+            if iw <= 0 or ih <= 0:
+                continue
+            smaller = min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))
+            if smaller <= 0 or iw * ih < DUPLICATE_OVERLAP * smaller:
+                continue
+            drop.add(i if letters(texts[i]) < letters(texts[j]) else j)
+    return drop
+
+
 def paragraph_lines(boxes, height):
     """Orphan lines that stack into a paragraph of two or more lines.
 
@@ -591,7 +622,7 @@ FEMALE_EVIDENCE = re.compile(
 # Feminine forms a speaker uses about themself or the listener.
 FEMININE_SELF = re.compile(
     r"\b(?:mim|eu|você|si|te|me)\s+mesma\b|\bobrigada\b|"
-    r"\b(?:estou|tô|sou|estava|fiquei|fico|ando|eu|você|está|tá|ficou)\s+"
+    r"\b(?:estou|tô|sou|estava|fiquei|fico|ando|eu|você|está|tá|ficou|estar|ficar|parece)\s+"
     r"(?:muito\s+|tão\s+|bem\s+|meio\s+|um pouco\s+)?"
     r"(?:sozinha|cansada|preocupada|pronta|ocupada|grata|perdida|assustada|animada|nervosa|confusa|"
     r"orgulhosa|curiosa|ansiosa|interessada|convencida|machucada|ferida|arqueira|guerreira|"
@@ -659,3 +690,103 @@ def translation_problems(sources, translations, glossary=(), earlier=""):
                 notes.append(f"<|{number}|> uses the feminine \"{word.group(0)}\" but nothing shows a woman "
                              "here: rephrase without gender, or use the masculine")
     return notes
+
+
+# OCR letter mix-ups in comic capitals -------------------------------------------
+
+# What the OCR read -> what the letterer drew.  Only words the list does not know
+# are touched, and only when exactly one common word comes out.
+OCR_CONFUSIONS = (("LI", "U"), ("LJ", "U"), ("IJ", "U"), ("E", "F"), ("F", "E"), ("O", "D"), ("O", "C"),
+                  ("C", "D"), ("I", "D"), ("I", "L"), ("L", "I"), ("0", "O"), ("1", "I"), ("5", "S"),
+                  ("7", "T"), ("8", "B"), ("/", "I"), ("|", "I"), ("VV", "W"), ("RN", "M"))
+_WORDS = None
+
+
+def english_words():
+    """(common words, names) from the bundled SCOWL list (server/words); empty sets when missing."""
+    global _WORDS
+    if _WORDS is None:
+        import gzip
+        from pathlib import Path
+        common, names, target = set(), set(), None
+        try:
+            with gzip.open(Path(__file__).resolve().parent / "words" / "en.txt.gz", "rt", encoding="utf-8") as f:
+                target = common
+                for line in f:
+                    word = line.strip()
+                    if word == "#names":
+                        target = names
+                    elif word:
+                        target.add(word)
+        except OSError:
+            pass
+        _WORDS = (common, names)
+    return _WORDS
+
+
+def _known(word, common, names):
+    w = word.lower()
+    return w in common or w in names or w in _contractions(common)
+
+
+def _contractions(common, cache={}):
+    if "set" not in cache:
+        cache["set"] = {w.replace("'", "") for w in common if "'" in w}
+    return cache["set"]
+
+
+def _ocr_candidates(word, depth):
+    found, frontier = set(), {word}
+    for _ in range(depth):
+        nxt = set()
+        for w in frontier:
+            for wrong, right in OCR_CONFUSIONS:
+                start = w.find(wrong)
+                while start >= 0:
+                    nxt.add(w[:start] + right + w[start + len(wrong):])
+                    start = w.find(wrong, start + 1)
+        found |= nxt
+        frontier = nxt
+    return found
+
+
+def fix_ocr_words(text, keep=()):
+    """Undo letter mix-ups the OCR makes in comic capitals, word by word.
+
+    TBATE 240 p32: "I'M UNFAMILIAR" was read "TM LINEAMILIAR" and translated
+    "Estou familiarizado", the meaning reversed; Grand Blue p45 "PULLEO",
+    TBATE 240 p34 "L/TTLE", "ANC".  A word is changed only when it is not an
+    English word or a known name, is not in ``keep`` (the work's glossary), and
+    exactly one common word comes out of one mix-up (two for words of 6+ letters).
+    Returns (text, number of words changed).
+    """
+    common, names = english_words()
+    if not text or not common:
+        return text, 0
+    keep = {k.lower() for k in keep}
+    changed = 0
+
+    def repl(match):
+        nonlocal changed
+        word = match.group(0)
+        letters = re.sub(r"[^A-Za-z]", "", word)
+        noisy = re.search(r"[0-9/|]", word)  # "AC7", "/T": a digit or slash inside a word is the OCR's
+        if word != word.upper() or len(letters) < (1 if noisy else 2) or word.lower() in keep:
+            return word
+        if word == "TM" and re.match(r"\s+[A-Z]", text[match.end():]):
+            changed += 1
+            return "I'M"
+        core = word.strip("'")
+        if len(core) < (2 if noisy else 4) or _known(core.replace("'", ""), common, names):
+            return word
+        for depth in (1, 2) if len(core) >= 6 else (1,):
+            hits = {c for c in _ocr_candidates(core, depth) if c.lower() in common}
+            if len(hits) == 1:
+                changed += 1
+                return word.replace(core, hits.pop())
+            if hits:
+                return word  # more than one word fits: leave it to the translator
+        return word
+
+    fixed = re.sub(r"[A-Za-z0-9/|']*[A-Za-z][A-Za-z0-9/|']*", repl, text)
+    return fixed, changed

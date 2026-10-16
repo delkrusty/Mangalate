@@ -51,6 +51,33 @@ def _fill(image, box, g):
     return mask, (wx0, wy0, wx1, wy1), open_sides
 
 
+LEAK_RADII = (3, 6, 10)   # the widest gap in an outline (px) that still closes a bubble
+
+
+def _close_leak(mask, box, open_sides):
+    """The bubble alone when its fill leaked out through a thin gap; else the mask unchanged.
+
+    Grand Blue 87 p45: a bubble that breaks the panel frame joins the white
+    gutter through a gap a few pixels wide; the fill then touched every side
+    and the text kept to its own small box ("Parece bem simples." at half size).
+    """
+    x0, y0, x1, y1 = box
+    cy, cx = (y0 + y1) // 2, (x0 + x1) // 2
+    for r in LEAK_RADII:
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
+        opened = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_OPEN, k)
+        _, labels = cv2.connectedComponents(opened, connectivity=4)
+        label = labels[cy, cx] if 0 <= cy < labels.shape[0] and 0 <= cx < labels.shape[1] else 0
+        if not label:
+            continue
+        part = labels == label
+        if part[:, 0].any() or part[:, -1].any() or part[0, :].any() or part[-1, :].any():
+            continue
+        part = (cv2.dilate(part.astype(np.uint8), k) > 0) & mask
+        return part, {side: False for side in open_sides}
+    return mask, open_sides
+
+
 def bubble_mask(image, box, others=(), grow=GROW):
     """Interior of the bubble around ``box`` in the cleaned image, as (mask, x0, y0).
 
@@ -70,6 +97,8 @@ def bubble_mask(image, box, others=(), grow=GROW):
     if found is None:
         return None
     mask, (wx0, wy0, wx1, wy1), open_sides = found
+    if any(open_sides.values()):
+        mask, open_sides = _close_leak(mask, (x0 - wx0, y0 - wy0, x1 - wx0, y1 - wy0), open_sides)
     if mask[y0 - wy0:y1 - wy0, x0 - wx0:x1 - wx0].mean() < MIN_INTERIOR:
         return None
     # Close small holes (leftover specks after cleaning) without crossing the outline.
@@ -251,6 +280,10 @@ SHAPED_MAX_SCALE = 1.45
 REFERENCE = "ÉÇÃgjpq"   # tallest accents and deepest descenders: the height of a line slot
 MAX_LINES = 12
 BALANCE_STEPS = 7
+DANGLING_COST = 0.8      # a dangling word is accepted when avoiding it shrinks the letters below this share
+SENTENCE_COST = 0.9      # likewise for a sentence that ends mid-line
+SHAPED_MARGIN = 0.3      # air between the letters and the outline, share of the line height (TBATE 237 p20:
+                         # with 0.1 the caption text touched the box on both sides)
 
 
 def half_widths(mask, cx):
@@ -271,12 +304,19 @@ def half_widths(mask, cx):
     return half
 
 
-def wrap(words, widths, measure):
-    """Greedy wrap into lines of the given widths; None when a word does not fit or lines run out."""
-    lines, current = [], ""
+def wrap(words, widths, measure, strict=True, sentences=False):
+    """Greedy wrap into lines of the given widths; None when a word does not fit or lines run out.
+
+    ``strict`` also refuses a layout with a dangling word alone on a line (see dangling);
+    ``sentences`` starts a new line after each sentence of two words or more.
+    """
+    lines, current, sentence = [], "", 0
     for word in words:
         trial = f"{current} {word}" if current else word
-        if measure(trial) <= widths[len(lines)]:
+        if sentences and current and sentence >= 2 and SENTENCE_END.search(current):
+            trial = None  # "...levarem ela?" ends its line; a one-word "Sim." may share one
+        sentence = 1 if SENTENCE_END.search(current or ".") else sentence + 1
+        if trial and measure(trial) <= widths[len(lines)]:
             current = trial
             continue
         if not current:
@@ -287,9 +327,20 @@ def wrap(words, widths, measure):
         current = word
     if current:
         lines.append(current)
-    if len(lines) > 1 and any(re.sub(r"[^\w]", "", line).lower() in DANGLING for line in lines):
+    if strict and len(lines) > 1 and any(dangling(line) for line in lines):
         return None  # a lone "um" or "de" on its own line reads as a mistake (Grand Blue p44)
     return lines
+
+
+SENTENCE_END = re.compile(r"[.!?…]$")
+
+
+def dangling(line):
+    """A line that is one short word leaning on its neighbour: "um", "de", "qual / é.", but not "mas..."."""
+    core = re.sub(r"[^\w]", "", line).lower()
+    if " " in line.strip() or core not in DANGLING:
+        return False
+    return len(core) == 1 or not re.search(r"[.,!?…—-]$", line.strip())
 
 
 # Short words that lean on their neighbour: alone on a line they read as a mistake.
@@ -297,7 +348,7 @@ DANGLING = set("a o as os à ao um uma e é de da do das dos em no na nos nas qu
                "com sem mas ou nem".split())
 
 
-def shaped(half, centre_x, rows, text, font, spacing=LINE_SPACING):
+def shaped(half, centre_x, rows, text, font, spacing=LINE_SPACING, strict=True, sentences=False):
     """Fewest balanced lines of ``text`` that follow the interior; (lines, top, slot, advance) or None.
 
     ``half`` comes from half_widths, ``rows`` = (top, bottom) of the interior
@@ -320,17 +371,17 @@ def shaped(half, centre_x, rows, text, font, spacing=LINE_SPACING):
             y1 = int(round(top + i * advance + slot))
             span = half[max(0, y0):max(0, y1)]
             widths.append(2 * int(span.min()) if len(span) and span.min() > 0 else 0)
-        if min(widths) <= 0 or wrap(words, widths, font) is None:
+        if min(widths) <= 0 or wrap(words, widths, font, strict, sentences) is None:
             continue
         # Balance: the narrowest widths that still hold the text in n lines.
         lo, hi = 0.3, 1.0
         for _ in range(BALANCE_STEPS):
             mid = (lo + hi) / 2
-            if wrap(words, [w * mid for w in widths], font) is not None:
+            if wrap(words, [w * mid for w in widths], font, strict, sentences) is not None:
                 hi = mid
             else:
                 lo = mid
-        lines = wrap(words, [w * hi for w in widths], font) or wrap(words, widths, font)
+        lines = wrap(words, [w * hi for w in widths], font, strict, sentences) or wrap(words, widths, font, strict, sentences)
         if len(lines) < n:
             continue  # fewer lines would sit elsewhere; the smaller n already failed there
         return lines, top, slot, advance
@@ -364,7 +415,7 @@ def plan_shaped(image, region_box, others, text, font_path, original_size, minim
         return None
     mask, wx0, wy0 = found
     x0, y0, x1, y1 = region_box
-    margin = max(MIN_MARGIN, int(round(original_size * MARGIN)))
+    margin = max(MIN_MARGIN, int(round(original_size * SHAPED_MARGIN)))
     inner = cv2.erode(mask.astype(np.uint8), np.ones((2 * margin + 1, 2 * margin + 1), np.uint8)) > 0
     cx = int(round((x0 + x1) / 2 - wx0))
     cy = int(round((y0 + y1) / 2 - wy0))
@@ -380,19 +431,34 @@ def plan_shaped(image, region_box, others, text, font_path, original_size, minim
     floor = max(1, int(minimum))
     cap = max(floor, int(round(original_size * SHAPED_MAX_SCALE)) + int(offset))
 
-    def attempt(size):
-        return shaped(half, cx, (top, bottom), text, Measure(font_path, size))
+    def largest(strict, sentences=False):
+        def attempt(size):
+            return shaped(half, cx, (top, bottom), text, Measure(font_path, size), strict=strict, sentences=sentences)
+        if attempt(floor) is None:
+            return None
+        lo, hi = floor, cap
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if attempt(mid) is not None:
+                lo = mid
+            else:
+                hi = mid - 1
+        return lo, attempt(lo)
 
-    if attempt(floor) is None:
+    # Preferences, each kept while it costs little size or the letters stay as big as
+    # the original: a new line for each
+    # sentence (TBATE 236 p13: "levarem ela? Por / favor, vem."), then no dangling
+    # word (236 p15: "Ela tava / bem, mas..." would otherwise shrink to one tiny line).
+    loose = largest(False)
+    if loose is None:
         return None
-    lo, hi = floor, cap
-    while lo < hi:
-        mid = (lo + hi + 1) // 2
-        if attempt(mid) is not None:
-            lo = mid
-        else:
-            hi = mid - 1
-    lines, block_top, slot, advance = attempt(lo)
+    best = loose
+    for (strict, sentences), cost in (((True, True), SENTENCE_COST), ((True, False), DANGLING_COST)):
+        found = largest(strict, sentences)
+        if found is not None and found[0] >= min(cost * loose[0], original_size):
+            best = found
+            break
+    lo, (lines, block_top, slot, advance) = best
     width = max(Measure(font_path, lo)(line) for line in lines)
     x, top = cx + wx0, block_top + wy0
     box = (int(x - width / 2), int(top), int(x + width / 2) + 1, int(top + slot + advance * (len(lines) - 1)) + 1)

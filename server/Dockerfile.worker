@@ -19,6 +19,7 @@ COPY memory.py /mangalate/memory.py
 COPY speed.py /mangalate/speed.py
 COPY profiles /mangalate/profiles
 COPY fonts /mangalate/fonts
+COPY words /mangalate/words
 COPY gateway.py /mangalate/gateway.py
 COPY colab/batch.py /mangalate/batch.py
 ENV PYTHONPATH=/app
@@ -44,6 +45,7 @@ COPY memory.py /mangalate/memory.py
 COPY speed.py /mangalate/speed.py
 COPY profiles /mangalate/profiles
 COPY fonts /mangalate/fonts
+COPY words /mangalate/words
 COPY gateway.py /mangalate/gateway.py
 COPY colab/batch.py /mangalate/batch.py
 ENV PYTHONPATH=/app
@@ -70,6 +72,7 @@ COPY memory.py /mangalate/memory.py
 COPY speed.py /mangalate/speed.py
 COPY profiles /mangalate/profiles
 COPY fonts /mangalate/fonts
+COPY words /mangalate/words
 COPY gateway.py /mangalate/gateway.py
 COPY colab/batch.py /mangalate/batch.py
 ENV PYTHONPATH=/app

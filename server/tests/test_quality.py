@@ -471,3 +471,36 @@ class GoldStandardTextTest(unittest.TestCase):
         kept = quality.paragraph_lines(para + stray, h)
         self.assertEqual(sorted(kept), sorted(para))
         self.assertEqual(quality.paragraph_lines(stray, h), [])
+
+
+class OuroTwoTest(unittest.TestCase):
+    """What the second gold-standard round showed."""
+
+    def test_ocr_mixups_are_undone(self):
+        cases = {
+            "TM LINEAMILIAR WITH THE WALL": "I'M UNFAMILIAR WITH THE WALL",  # TBATE 240 p32
+            "YOUR ARMS BEING PULLEO": "YOUR ARMS BEING PULLED",             # Grand Blue p45
+            "I BORE L/TTLE FONDNESS": "I BORE LITTLE FONDNESS",
+            "PRAISEO YOUR STRATEGIO ACUMEN": "PRAISED YOUR STRATEGIC ACUMEN",
+            "THEY COVERED /T UP.": "THEY COVERED IT UP.",
+        }
+        for source, expected in cases.items():
+            self.assertEqual(quality.fix_ocr_words(source)[0], expected)
+        for kept in ("OOH! CARIA LOVES THOSE.", "THATS OKAY. SHOULDNT YOU", "COMMANDER VIRION",
+                     "ALBOLD, BACK TO ELSHIRE", "Mixed case words like Pulleo", "HUH?"):
+            self.assertEqual(quality.fix_ocr_words(kept)[0], kept)
+        self.assertEqual(quality.fix_ocr_words("THE PULLEO", keep=["PULLEO"])[0], "THE PULLEO")
+
+    def test_second_reading_of_the_same_letters_is_dropped(self):
+        boxes = [(181, 478, 240, 527), (177, 469, 239, 535), (600, 100, 700, 200)]
+        self.assertEqual(quality.duplicate_regions(boxes, ["GOT IT!", "8E", "SORRY"]), {1})
+        self.assertEqual(quality.duplicate_regions(boxes[:1] + boxes[2:], ["GOT IT!", "SORRY"]), set())
+
+    def test_stutter_keeps_the_word_lowercase(self):
+        self.assertEqual(quality.tidy_start("E-Eu tô com medo, Grey."), "E-eu tô com medo, Grey.")
+        self.assertEqual(quality.tidy_start("A-Arthur, espera", names={"Arthur"}), "A-Arthur, espera")
+
+    def test_feminine_after_estar_needs_a_woman(self):
+        notes = quality.translation_problems(["YOU MUST BE WORRIED ABOUT EVERYONES SAFETY."],
+                                             ["Você deve estar preocupada com a segurança de todos."])
+        self.assertTrue(any("feminine" in n for n in notes))

@@ -200,3 +200,28 @@ class ShapedLetteringTest(unittest.TestCase):
         self.assertLessEqual(changed[:, 1].max(), x1 + pad)
         self.assertGreaterEqual(changed[:, 0].min(), y0 - pad)
         self.assertLessEqual(changed[:, 0].max(), y1 + pad)
+
+
+class OuroTwoLetteringTest(unittest.TestCase):
+    def test_sentence_ends_its_line_when_the_size_allows(self):
+        image = page_with_bubble(axes=(170, 120))
+        plan = lettering.plan_shaped(image, (220, 260, 380, 340), [], "E se eles levarem ela? Por favor, vem.",
+                                     FONT, 30, 10)
+        self.assertTrue(any(line.endswith("ela?") for line in plan["lines"]), plan["lines"])
+
+    def test_dangling_word_only_when_avoiding_it_costs_too_much(self):
+        self.assertTrue(lettering.dangling("é."))
+        self.assertTrue(lettering.dangling("um"))
+        self.assertFalse(lettering.dangling("mas..."))
+        self.assertFalse(lettering.dangling("Ah,"))
+
+    def test_bubble_leaking_through_a_thin_gap_is_closed(self):
+        # Grand Blue p45: a bubble that breaks the panel frame joins the gutter through a gap.
+        image = page_with_bubble(axes=(110, 150))
+        image[0:40, :] = 255                            # white gutter above the panel
+        cv2.rectangle(image, (296, 0), (304, 160), (255, 255, 255), -1)  # 9 px channel to the gutter
+        found = lettering.bubble_mask(image, (250, 250, 350, 350))
+        mask, x0, y0 = found
+        ys, xs = np.nonzero(mask)
+        self.assertGreater(y0 + ys.min(), 140)          # the gutter is not part of the bubble
+        self.assertLess(x0 + xs.min(), 220)             # and the bubble is not cut to the text box

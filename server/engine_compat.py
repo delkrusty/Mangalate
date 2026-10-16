@@ -440,6 +440,38 @@ def join_split_blocks(regions, image):
     return joined + others
 
 
+def fix_ocr(regions):
+    """OCR letter mix-ups ("TM LINEAMILIAR" -> "I'M UNFAMILIAR") fixed before translation."""
+    from quality import fix_ocr_words
+    keep = [g.get("source", "") for g in (page_context() or {}).get("glossary") or [] if isinstance(g, dict)]
+    total = 0
+    for region in regions:
+        try:
+            text, changed = fix_ocr_words(getattr(region, "text", ""), keep)
+        except Exception as exc:  # never lose a page over this
+            print(f"OCR fix skipped: {type(exc).__name__}", flush=True)
+            return
+        if changed:
+            region.text = text
+            total += changed
+    if total:
+        print(f"OCR fix: {total} word(s)", flush=True)
+
+
+def drop_duplicates(regions):
+    """A second, worse reading of the same letters is dropped (quality.duplicate_regions)."""
+    from quality import duplicate_regions
+    try:
+        boxes = [tuple(int(v) for v in r.xyxy) for r in regions]
+        drop = duplicate_regions(boxes, [getattr(r, "text", "") for r in regions])
+    except Exception as exc:  # never lose a page over this
+        print(f"Duplicate check skipped: {type(exc).__name__}", flush=True)
+        return regions
+    if drop:
+        print(f"Duplicate regions: {len(drop)} dropped", flush=True)
+    return [r for i, r in enumerate(regions) if i not in drop]
+
+
 def classify_regions(original_merge):
     """Decide once, before translation, which blocks are cleaned and translated.
 
@@ -457,7 +489,9 @@ def classify_regions(original_merge):
             if context_only:
                 print(f"Region check: {len(context_only)} only in the neighbouring pages, skipped", flush=True)
             regions = join_split_blocks(regions, ctx.img_rgb)
+            regions = drop_duplicates(regions)
         if not regions or not protect_art(config):
+            fix_ocr(regions or [])
             return regions
         image, raw = ctx.img_rgb, ctx.mask_raw
         if raw is not None and raw.shape[:2] != image.shape[:2]:
@@ -484,6 +518,7 @@ def classify_regions(original_merge):
             else:
                 ctx.mangalate_preserved.append(region)
         print(f"Region check: kept={len(kept)} preserved_original={len(ctx.mangalate_preserved)}", flush=True)
+        fix_ocr(kept)
         return kept
     return merge
 

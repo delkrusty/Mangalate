@@ -8,6 +8,9 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 - A tradução é escrita numa fonte de quadrinhos (Comic Neue Bold, licença livre) em vez da Arial, com contorno branco fino.
 - As linhas seguem o formato do balão: curtas no topo e no pé de um balão oval, largas no meio, o bloco centrado no balão e sem encostar na borda. As linhas ficam equilibradas, sem uma linha comprida seguida de uma palavra sozinha, e um "um", "de" ou "que" nunca fica sozinho numa linha.
 - Quando o balão tem espaço, a letra pode ficar um pouco maior que a original, porque minúsculas no tamanho das maiúsculas do inglês parecem menores.
+- Uma frase que termina no meio de uma linha passa para a linha seguinte quando a letra continua do tamanho do original ("E se eles / levarem ela? / Por favor, vem.").
+- Mais espaço entre o texto e a borda de legendas e balões.
+- Balão que fura a borda do quadro e encosta na margem branca da página é reconhecido inteiro, em vez de o texto ficar espremido no tamanho da caixa original.
 - MANGALATE_FONT=simples volta para a Arial do motor.
 
 ### Tradução e balões
@@ -15,6 +18,10 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 - Quando a tradução perde o "não" do original ("I'm not..." virando afirmação), o servidor pede de novo apontando o problema.
 - Instruções da IA: o OCR costuma ler U como LI ("LINEAMILIAR" = UNFAMILIAR), e um nome entre vírgulas é com quem se fala ("E, General Arthur, você vai...").
 - Reticências no começo da fala ficam coladas na palavra ("…mas", não "… mas").
+- Letras que o OCR troca nas maiúsculas de quadrinhos são corrigidas antes da tradução, com uma lista de palavras do inglês: "TM LINEAMILIAR" vira "I'M UNFAMILIAR" (antes saía "Estou familiarizado", o contrário), "PULLEO" vira "PULLED", "L/TTLE" vira "LITTLE". Nomes da obra e palavras que a lista não resolve com certeza ficam como estão.
+- Uma segunda leitura pior das mesmas letras ("GOT IT!" lido também como "8E") é descartada, em vez de escrever "Be" por cima de "Entendi!".
+- Gagueira mantém a palavra em minúscula ("E-eu tô com medo", não "E-Eu").
+- "Você deve estar preocupada" sem nenhuma mulher na página também pede a tradução de novo.
 
 ## 0.5.6
 
