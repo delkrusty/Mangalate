@@ -403,7 +403,12 @@ def credit_followers(regions):
     return follow
 
 
-def join_split_blocks(regions, image):
+# A bubble's interior is at least this many times the text box's area; the search clips
+# open sides to the box, so a fill no larger than the box is open page around the text, not a bubble.
+BUBBLE_BEYOND_BOX = 1.1
+
+
+def join_split_blocks(regions, image, text_mask=None):
     """One speech the detector split in two stacked regions becomes one region again.
 
     Otherwise each piece is translated alone ("o de verdade" / "Treino") and
@@ -412,16 +417,35 @@ def join_split_blocks(regions, image):
     import cv2
     import numpy as np
     import lettering
-    from quality import join_blocks, absorb_contained, column_groups, _box
+    from quality import join_blocks, absorb_contained, column_groups, block_groups, paragraph_of, text_blocks, _box
+
+    page_blocks = None
+    if text_mask is not None:
+        try:
+            page_blocks = text_blocks(np.asarray(text_mask),
+                                      [_box(q) for r in regions for q in np.asarray(getattr(r, "lines", []))])
+        except Exception:  # never lose a page over this
+            page_blocks = None
 
     def inside(a, b):
-        found = lettering.bubble_mask(image, tuple(int(v) for v in a.xyxy))
-        if found is None:
+        # Two paragraphs side by side, separated below, are two speeches even in one open bubble.
+        if getattr(a, "mangalate_block", None) is not None and getattr(b, "mangalate_block", None) is not None                 and a.mangalate_block[0] == b.mangalate_block[0] and a.mangalate_block[1] != b.mangalate_block[1]:
             return False
-        mask, wx0, wy0 = found
-        # The letters are holes in the flat interior; fill them so a point on a glyph counts.
-        contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        mask = cv2.drawContours(np.zeros(mask.shape, np.uint8), contours, -1, 1, -1) > 0
+        ax0, ay0, ax1, ay1 = (int(v) for v in a.xyxy)
+        found = lettering.bubble_mask(image, (ax0, ay0, ax1, ay1))
+        if found is not None:
+            mask, wx0, wy0 = found
+            # The letters are holes in the flat interior; fill them so a point on a glyph counts.
+            contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            mask = cv2.drawContours(np.zeros(mask.shape, np.uint8), contours, -1, 1, -1) > 0
+            if mask.sum() < BUBBLE_BEYOND_BOX * (ax1 - ax0) * (ay1 - ay0):
+                found = None
+        if found is None:
+            # Text written on the page, no bubble: the pieces of one paragraph are one speech.
+            if page_blocks is None:
+                return False
+            pa = paragraph_of(page_blocks, [_box(q) for q in np.asarray(a.lines)])
+            return pa is not None and pa == paragraph_of(page_blocks, [_box(q) for q in np.asarray(b.lines)])
         bx0, by0, bx1, by1 = (int(v) for v in b.xyxy)
         cx, cy = (bx0 + bx1) // 2 - wx0, (by0 + by1) // 2 - wy0
         return 0 <= cy < mask.shape[0] and 0 <= cx < mask.shape[1] and bool(mask[cy, cx])
@@ -448,12 +472,21 @@ def join_split_blocks(regions, image):
         boxes = [_box(q) for q in np.asarray(region.lines)]
         groups = column_groups(boxes)
         gaps = [min(boxes[i][0] for i in b) - max(boxes[i][2] for i in a) for a, b in zip(groups, groups[1:])]
+        paragraphs = False
+        if (len(groups) < 2 or min(gaps) <= 0) and text_mask is not None and len(region.texts) == len(boxes):
+            groups, paragraphs = block_groups(np.asarray(text_mask), boxes), True
+            groups = sorted(groups, key=lambda g: min(boxes[i][0] for i in g))
+            gaps = [1] * (len(groups) - 1) or [0]
         if len(groups) < 2 or min(gaps) <= 0 or max(len(g) for g in groups) < 2 or len(region.texts) != len(boxes):
             return [region]
         lines, texts = np.asarray(region.lines), list(region.texts)
-        return [type(region)(lines[g], [texts[i] for i in g], font_size=region.font_size, angle=region.angle,
-                             prob=region.prob, fg_color=region.fg_colors, bg_color=region.bg_colors)
-                for g in (sorted(g, key=lambda i: boxes[i][1]) for g in groups)]
+        parts = [type(region)(lines[g], [texts[i] for i in g], font_size=region.font_size, angle=region.angle,
+                              prob=region.prob, fg_color=region.fg_colors, bg_color=region.bg_colors)
+                 for g in (sorted(g, key=lambda i: boxes[i][1]) for g in groups)]
+        if paragraphs:
+            for k, part in enumerate(parts):
+                part.mangalate_block = (id(region), k)
+        return parts
 
     try:
         split = [part for region in horizontal for part in columns(region)]
@@ -542,6 +575,7 @@ def classify_regions(original_merge):
     """
     async def merge(self, config, ctx):
         import cv2
+        import numpy as np
         from quality import classify_region
         regions = await original_merge(self, config, ctx)
         ctx.mangalate_preserved = []
@@ -549,7 +583,7 @@ def classify_regions(original_merge):
             regions, context_only = on_page(regions, _PAGE_ROWS.get())
             if context_only:
                 print(f"Region check: {len(context_only)} only in the neighbouring pages, skipped", flush=True)
-            regions = join_split_blocks(regions, ctx.img_rgb)
+            regions = join_split_blocks(regions, ctx.img_rgb, getattr(ctx, "mask_raw", None))
             regions = drop_duplicates(regions)
             regions, drawn = scanned_sounds(regions, getattr(ctx, "mangalate_scanned", []),
                                             getattr(ctx, "mangalate_scanned_rows", None))
@@ -577,7 +611,17 @@ def classify_regions(original_merge):
                 ctx.mangalate_preserved.append(region)
                 continue
             region.mangalate_background = classify_region(image, raw, region.lines)
-            if region.mangalate_background["kind"] == "interior":
+            # Outlined lettering over the art is translated; only the letters and their outline are cleaned.
+            if region.mangalate_background["kind"] == "contorno":
+                from quality import outlined_area, outlined_colours
+                if not outlined_area(image, region.lines).any():
+                    # Nothing to clean: the translation would be written over the English.
+                    region.mangalate_background["kind"] = "art"
+                    ctx.mangalate_preserved.append(region)
+                    continue
+                fg, bg = outlined_colours(image, region.lines)
+                region.fg_colors, region.bg_colors = np.array(fg), np.array(bg)
+            if region.mangalate_background["kind"] in ("interior", "contorno"):
                 kept.append(region)
             else:
                 ctx.mangalate_preserved.append(region)
@@ -629,13 +673,15 @@ def repair_textlines(original_detect):
             return result
         horizontal = [i for i, line in enumerate(textlines) if getattr(line, "direction", "h") == "h"]
         boxes = [_box(textlines[i].pts) for i in horizontal]
+        ctx.mangalate_detector_lines = [list(_box(line.pts)) for line in textlines]  # --diagnostics only
         # Letters inside a flat interior count even where the detector mask missed them.
         from quality import bubble_glyphs, NEAR_LINES
         seen = np.asarray(mask_raw) > 127
         if image is not None:
             for box in boxes:
                 seen = seen | bubble_glyphs(np.asarray(image), box, box[3] - box[1], near=NEAR_LINES)
-        repaired, changes = repair_lines(seen.astype(np.uint8) * 255, boxes)
+        gray = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2GRAY) if image is not None else None
+        repaired, changes = repair_lines(seen.astype(np.uint8) * 255, boxes, gray)
         ctx.mangalate_line_repairs = [{"tipo": kind, "antes": before, "depois": after} for kind, before, after in changes]
         # One box across two columns of text in the same bubble is cut at the gutter.
         if image is not None:
@@ -650,6 +696,18 @@ def repair_textlines(original_detect):
                 (x0, y0, x1, y1), source = repaired[i]
                 gx0, gx1 = cuts[i]
                 parts = [(x0, y0, gx0, y1), (gx1, y0, x1, y1)]
+                repaired[i:i + 1] = [(part, source) for part in parts]
+                changes.append(("column", (x0, y0, x1, y1), parts))
+            # One box across two paragraphs side by side (a bubble and the text on the page beside it).
+            from quality import block_cuts
+            try:
+                cuts = block_cuts(np.asarray(mask_raw), [box for box, _ in repaired])
+            except Exception as exc:  # never lose a page over this
+                print(f"Block check skipped: {type(exc).__name__}", flush=True)
+                cuts = {}
+            for i in sorted(cuts, reverse=True):
+                (x0, y0, x1, y1), source = repaired[i]
+                parts = [(a, y0, b, y1) for a, b in cuts[i]]
                 repaired[i:i + 1] = [(part, source) for part in parts]
                 changes.append(("column", (x0, y0, x1, y1), parts))
         # Small white bubbles the detector did not see at all.
@@ -687,8 +745,9 @@ def repair_textlines(original_detect):
         split = sum(1 for kind, _, _ in changes if kind == "split")
         scan = sum(1 for kind, _, _ in changes if kind == "bubble")
         column = sum(1 for kind, _, _ in changes if kind == "column")
-        print(f"Line repair: split={split} added={len(changes) - split - scan - column} scanned={scan} "
-              f"column_cuts={column}", flush=True)
+        fit = sum(1 for kind, _, _ in changes if kind in ("fit", "refit"))
+        print(f"Line repair: split={split} added={len(changes) - split - scan - column - fit} scanned={scan} "
+              f"column_cuts={column} fitted={fit}", flush=True)
         return (lines, mask_raw, mask) + tuple(result[3:])
     return detect
 
@@ -804,7 +863,26 @@ def keep_clean_copy(original_render):
     async def render(self, config, ctx):
         image = getattr(ctx, "img_inpainted", None)
         ctx.mangalate_clean = image.copy() if image is not None else None
-        return await original_render(self, config, ctx)
+        lines = []
+        try:  # a panel border the cleaning cut where it crossed the text is drawn back after the lettering
+            import numpy as np
+            from quality import through_lines
+            for region in ctx.text_regions or []:
+                heights = [float(np.linalg.norm(np.asarray(l[3]) - np.asarray(l[0]))) for l in region.lines]
+                lines += through_lines(ctx.img_rgb, ctx.mask, region.xyxy,
+                                       float(np.median(heights)) if heights else float(region.font_size))
+        except Exception as exc:  # never lose a page over this
+            print(f"Line redraw skipped: {type(exc).__name__}", flush=True)
+            lines = []
+        result = await original_render(self, config, ctx)
+        if lines and ctx.mangalate_clean is not None:
+            try:
+                from quality import redraw_lines
+                result = redraw_lines(result, ctx.mangalate_clean, ctx.mask, lines)
+                print(f"Line redraw: {len(lines)} line(s) through the text drawn back", flush=True)
+            except Exception as exc:  # never lose a page over this
+                print(f"Line redraw skipped: {type(exc).__name__}", flush=True)
+        return result
     return render
 
 
@@ -824,9 +902,14 @@ def rescue_ocr(original_ocr):
         result = await original_ocr(self, config, ctx)
         kept = {id(line) for line in result}
         lost = [line for line in before if id(line) not in kept and getattr(line, "direction", "h") == "h"]
+        from quality import _box
+        # --diagnostics only: what the OCR read on each line, and the lines it dropped.
+        ctx.mangalate_ocr_lines = [{"caixa": list(_box(l.pts)), "texto": str(getattr(l, "text", "")),
+                                    "prob": round(float(getattr(l, "prob", 0) or 0), 3)} for l in result]
+        ctx.mangalate_ocr_lost = [list(_box(l.pts)) for l in lost]
         if not lost:
             return result
-        from quality import near_lines, _box
+        from quality import near_lines
         candidates = [lost[i] for i in near_lines([_box(l.pts) for l in lost],
                                                    [_box(l.pts) for l in result if getattr(l, "direction", "h") == "h"])]
         if not candidates:
@@ -858,33 +941,36 @@ async def refine_mask_consistently(self, config, ctx):
     import cv2
     import numpy as np
     from manga_translator.mask_refinement import dispatch
-    from quality import bubble_glyphs
+    from quality import glyphs_to_clean
     mask = await dispatch(ctx.text_regions, ctx.img_rgb, ctx.mask_raw, "fit_text",
                           config.mask_dilation_offset, 0, self.verbose, self.kernel_size)
-    # Pieces of letters the detector mask missed (italic overhangs) would stay
-    # on the page as stray marks: add every letter inside the bubble interior.
-    # Grown like the detector's own mask (about a quarter of the line height): with a
-    # thin margin the cleaner left a grey ghost of the anti-aliased letter edges
-    # (TBATE new episode p12, "OF US.").  The growth stays near the text box, never
-    # reaching the bubble outline.
+    # Pieces of letters the detector mask missed (italic overhangs, the last dots of
+    # "...") would stay on the page as stray marks: add the letters of the text inside
+    # the bubble interior (quality.glyphs_to_clean).
     h, w = mask.shape[:2]
     grown = np.zeros((h, w), bool)
     for region in ctx.text_regions or []:
         heights = [float(np.linalg.norm(np.asarray(l[3]) - np.asarray(l[0]))) for l in region.lines]
         line = float(np.median(heights)) if heights else float(region.font_size)
-        glyphs = bubble_glyphs(ctx.img_rgb, region.xyxy, line)
-        if not glyphs.any():
-            continue
-        size = max(5, int(round(line * 0.25)) | 1)
-        near = cv2.dilate(glyphs.astype(np.uint8), np.ones((size, size), np.uint8)) > 0
-        x0, y0, x1, y1 = (int(v) for v in region.xyxy)
-        pad = size
-        limit = np.zeros((h, w), bool)
-        limit[max(0, y0 - pad):min(h, y1 + pad), max(0, x0 - pad):min(w, x1 + pad)] = True
-        grown |= near & limit
+        grown |= glyphs_to_clean(ctx.img_rgb, region.xyxy, line)
     if grown.any():
         mask = mask.copy()
         mask[grown] = 255
+    # Outlined lettering over the art: the cleaning stays on the letters and their outline.
+    from quality import outlined_area
+    for region in ctx.text_regions or []:
+        if (getattr(region, "mangalate_background", None) or {}).get("kind") != "contorno":
+            continue
+        x0, y0, x1, y1 = (int(v) for v in region.xyxy)
+        pad = int(max(8, region.font_size))
+        x0, y0, x1, y1 = max(0, x0 - pad), max(0, y0 - pad), min(w, x1 + pad), min(h, y1 + pad)
+        allowed = outlined_area(ctx.img_rgb, region.lines)
+        for other in ctx.text_regions:  # the cleaning of a bubble next to it stays
+            if other is not region:
+                ox0, oy0, ox1, oy1 = (int(v) for v in other.xyxy)
+                allowed[max(0, oy0):oy1, max(0, ox0):ox1] = True
+        mask = mask.copy()
+        mask[y0:y1, x0:x1][~allowed[y0:y1, x0:x1]] = 0
     return mask
 
 

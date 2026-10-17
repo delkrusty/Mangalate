@@ -94,6 +94,10 @@ def save_diagnostics(folder, ctx, original):
         (folder / "ocr-resgatado.json").write_text(json.dumps(ctx.mangalate_ocr_rescued), encoding="utf-8")
     if getattr(ctx, "mangalate_line_repairs", None):
         (folder / "linhas-reparadas.json").write_text(json.dumps(ctx.mangalate_line_repairs), encoding="utf-8")
+    for name, attr in (("linhas-detector.json", "mangalate_detector_lines"), ("ocr-linhas.json", "mangalate_ocr_lines"),
+                       ("ocr-descartadas.json", "mangalate_ocr_lost")):
+        if getattr(ctx, attr, None):
+            (folder / name).write_text(json.dumps(getattr(ctx, attr), ensure_ascii=False), encoding="utf-8")
     overlay.save(folder / "3-regioes.png")
     (folder / "regioes.json").write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding="utf-8")
     return rows

@@ -2,6 +2,18 @@
 
 As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://github.com/mihonapp/mihon/blob/main/CHANGELOG.md).
 
+## Em teste
+
+### Tradução e balões
+- Um balão com letra pequena, numa página em que outro balão tem letras bem maiores (um grito em itálico), agora é lido e traduzido em vez de ficar em inglês. O detector marcava o texto, mas as linhas pequenas eram descartadas por terem menos da metade da altura de linha da página. Agora elas valem quando formam um parágrafo de duas linhas ou mais, medidas pela própria altura. Letra solta empilhada (onomatopeia vertical) continua de fora.
+- A caixa de cada linha é ajustada às letras antes da leitura. Uma caixa mais baixa que as letras, ou que começava depois da primeira letra ("MOUN" no lugar de "AMOUNT"), fazia a linha sumir ou ser lida errado, e a fala saía partida ou com sentido trocado. Caixas sobrepostas que pegavam uma linha e meia são recortadas linha a linha, e uma linha recortada mantém as palavras que passavam da caixa ("ISN'T IT?" não perde mais o "IT?").
+- Um balão alto e estreito com uma fala curta e espaçada ("Desculpa..."), que nem o detector nem a varredura de balões achavam porque o branco dele vaza por uma abertura do contorno, agora é encontrado.
+- Letreiro claro com contorno escuro grosso desenhado sobre um fundo escuro ou retícula agora é traduzido. A limpeza fica só nas letras e no contorno delas, e a arte em volta não é tocada. Na área repintada a retícula vira cinza liso. Vale só para frases de duas linhas ou mais: uma palavra sozinha com contorno (efeito sonoro) continua no original.
+- Uma fala dentro do balão e outra escrita na página ao lado dele, sem contorno entre as duas (balão aberto para a margem), não são mais lidas como uma fala só. O detector às vezes desenha uma caixa que atravessa as duas falas na mesma altura; agora as letras de cada parágrafo são agrupadas e a caixa é cortada entre eles, desde que cada lado tenha duas linhas ou mais. Palavras espaçadas de uma fala e uma palavra solta ao lado não são separadas.
+- Um texto escrito na página, fora de balão, que o detector partia em dois pedaços agora sai como uma fala só. Quando o pedaço de cima ficava num fundo liso e aberto, a busca de balão devolvia a própria caixa do texto como se fosse um balão, e o resto do parágrafo não era juntado. Agora só conta como balão um interior maior que a caixa do texto; balões de verdade, mesmo justos, continuam como antes.
+- A limpeza do balão apaga a letra inteira quando a margem da caixa a cortava ao meio, e também os pontos de reticências que ficavam logo depois da linha ou na fileira de baixo. Antes ficava um borrão cinza no lugar do último ponto.
+- Uma borda reta de quadro que passa pelo meio de um texto escrito na página não some mais na limpeza. Antes ela era apagada junto com as letras e a sarjeta se juntava ao quadro vizinho. Agora a borda é redesenhada depois do letreiramento, com a espessura e o tom medidos nela, e com um respiro em volta das letras novas, como no original. Linhas curvas, como o contorno de um balão, ainda não são refeitas.
+
 ## 0.5.7
 
 ### Letreiramento

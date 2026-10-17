@@ -11,7 +11,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import quality
-from quality import (broken_words, bubble_glyphs, classify_region, compact_symbols, normalize_spacing,
+from quality import (broken_words, bubble_glyphs, glyphs_to_clean, classify_region, compact_symbols, normalize_spacing,
                      repair_lines, whole_word_breaker)
 
 RNG = np.random.default_rng(65)
@@ -52,6 +52,50 @@ class BackgroundTest(unittest.TestCase):
         verdict = classify_region(image, mask, [quad(*box)])
         self.assertEqual(verdict["kind"], expected, verdict)
         return verdict
+
+    def outlined(self, outline=True, colour=(255, 255, 255)):
+        image = noisy_art((420, 200))
+        letters = np.zeros(image.shape[:2], np.uint8)
+        for text, y in (("SO THIS", 80), ("IS IT?", 140)):
+            cv2.putText(letters, text, (60, y), cv2.FONT_HERSHEY_SIMPLEX, 1.6, 255, 4)
+        if outline:
+            image[cv2.dilate(letters, np.ones((9, 9), np.uint8)) > 0] = (0, 0, 0)
+        image[letters > 0] = colour
+        mask = np.zeros(image.shape[:2], np.uint8)
+        mask[40:155, 50:330] = 255
+        return image, mask, [quad(55, 45, 320, 90), quad(55, 105, 270, 150)]
+
+    def test_outlined_lettering_over_art_is_its_own_interior(self):
+        # Grand Blue 102 p31: white letters with a thick black outline over a dark,
+        # toned background.  The outline belongs to the lettering, not to the art.
+        image, mask, quads = self.outlined()
+        self.assertEqual(classify_region(image, mask, quads)["kind"], "contorno")
+
+    def test_one_outlined_word_over_art_stays_art(self):
+        # The usual sound effect: one word, white with a black outline, drawn over the art.
+        image = noisy_art((420, 200))
+        letters = np.zeros(image.shape[:2], np.uint8)
+        cv2.putText(letters, "BAM", (60, 110), cv2.FONT_HERSHEY_SIMPLEX, 1.6, 255, 4)
+        image[cv2.dilate(letters, np.ones((9, 9), np.uint8)) > 0] = (0, 0, 0)
+        image[letters > 0] = (255, 255, 255)
+        mask = np.zeros(image.shape[:2], np.uint8)
+        mask[60:125, 50:200] = 255
+        self.assertEqual(classify_region(image, mask, [quad(55, 65, 190, 120)])["kind"], "art")
+
+    def test_dark_letters_in_a_white_bubble_are_not_outlined_lettering(self):
+        image = noisy_art((420, 200))
+        image[30:165, 45:335] = 255  # a narrow white bubble; the art comes right up to it
+        letters = np.zeros(image.shape[:2], np.uint8)
+        for text, y in (("SO THIS", 80), ("IS IT?", 140)):
+            cv2.putText(letters, text, (60, y), cv2.FONT_HERSHEY_SIMPLEX, 1.6, 255, 6)
+        image[letters > 0] = 0
+        self.assertNotEqual(classify_region(image, letters, [quad(55, 45, 320, 90), quad(55, 105, 270, 150)])["kind"],
+                            "contorno")
+
+    def test_plain_lettering_over_art_stays_art(self):
+        for outline, colour in ((False, (255, 255, 255)), (False, (0, 0, 0))):
+            image, mask, quads = self.outlined(outline, colour)
+            self.assertEqual(classify_region(image, mask, quads)["kind"], "art", (outline, colour))
 
     def test_white_bubble_black_text_is_cleaned(self):
         image = bubble(page((90, 140, 200)), (200, 150), (150, 80), (255, 255, 255))
@@ -298,6 +342,167 @@ class LineRepairTest(unittest.TestCase):
         _, changes = repair_lines(mask, boxes)
         self.assertEqual(changes, [])
 
+    def big_and_small(self, small_lines):
+        # Big shouted lettering sets the page line height; a small bubble far from it has no box.
+        mask = np.zeros((520, 640), np.uint8)
+        boxes = []
+        for i, text in enumerate(["HOW CAN", "THIS BE", "SO HARD"]):
+            (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.6, 4)
+            x, y = 600 - w, 80 + i * 70
+            cv2.putText(mask, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1.6, 255, 4)
+            boxes.append((x - 2, y - h - 3, x + w + 2, y + 4))
+        small = []
+        for i, text in enumerate(small_lines):
+            (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2)
+            x, y = 90 - w // 2, 350 + i * 34
+            cv2.putText(mask, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1.0, 255, 2)
+            small.append((x, y - h, x + w, y))
+        return mask, boxes, small
+
+    def test_small_paragraph_on_a_page_of_big_lettering_is_added(self):
+        # Grand Blue 102 p39: a three-line bubble in small letters next to a bubble
+        # of big italic shouting was in the mask, but under half the page line height.
+        mask, boxes, small = self.big_and_small(["DONT", "SAY", "MORE!"])
+        repaired, changes = repair_lines(mask, boxes)
+        added = sorted((box for box, source in repaired if source is None), key=lambda b: b[1])
+        self.assertEqual(len(added), 3)
+        for box, line in zip(added, small):
+            self.assertTrue(line[1] - 2 <= box[1] < box[3] <= line[3] + 3, (box, line))
+
+    def test_single_small_line_on_a_page_of_big_lettering_is_left(self):
+        mask, boxes, _ = self.big_and_small(["SAY"])
+        _, changes = repair_lines(mask, boxes)
+        self.assertEqual(changes, [])
+
+    def test_stacked_single_letters_on_a_page_of_big_lettering_are_left(self):
+        # Letters stacked one per row (a vertical sound effect) are not a paragraph of lines.
+        mask, boxes, _ = self.big_and_small([])
+        for i, letter in enumerate("ABCD"):
+            cv2.putText(mask, letter, (300, 300 + i * 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, 255, 2)
+        _, changes = repair_lines(mask, boxes)
+        self.assertEqual(changes, [])
+
+    def lettered(self, lines, step=34):
+        # Black letters on white, and the detector mask of the same letters.
+        gray = np.full((320, 420), 255, np.uint8)
+        ink = []
+        for i, text in enumerate(lines):
+            (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
+            x, y = 210 - w // 2, 60 + i * step
+            alone = np.full_like(gray, 255)
+            if not text:
+                ink.append(None)
+                continue
+            cv2.putText(alone, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.9, 0, 2)
+            gray = np.minimum(gray, alone)
+            rows, cols = np.flatnonzero((alone < 128).any(axis=1)), np.flatnonzero((alone < 128).any(axis=0))
+            ink.append((int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1))
+        mask = np.where(gray < 128, 255, 0).astype(np.uint8)
+        return gray, mask, ink
+
+    def test_box_clipping_the_letters_is_fitted(self):
+        # Grand Blue 102 pp. 27/47: a box a row or more short of the letters made the OCR drop the line.
+        gray, mask, ink = self.lettered(["THE KI", "RESTRAINER", "FUNCTIONED."])
+        x0, y0, x1, y1 = ink[1]
+        boxes = [ink[0], (x0, y0 + 2, x1, y1 - 3), ink[2]]
+        repaired, changes = repair_lines(mask, boxes)
+        self.assertEqual([kind for kind, _, _ in changes], ["fit"])
+        fitted = repaired[1][0]
+        self.assertTrue(fitted[1] <= y0 and fitted[3] >= y1, fitted)
+        self.assertLess(fitted[3] - fitted[1], (y1 - y0) + 4)  # still one line, not two
+
+    def test_box_missing_the_first_letter_grows_over_the_page(self):
+        # Grand Blue 102 p42: the mask missed the "A" of "AMOUNT" and the OCR read "MOUN".
+        gray, mask, ink = self.lettered(["THE KI", "RESTRAINER", "FUNCTIONED."])
+        x0, y0, x1, y1 = ink[1]
+        mask[:, :x0 + 18] = 0  # the detector lost the first letter
+        boxes = [ink[0], (x0 + 18, y0 - 1, x1 + 1, y1 + 1), ink[2]]
+        repaired, _ = repair_lines(mask, boxes, gray)
+        self.assertLessEqual(repaired[1][0][0], x0)
+        unchanged, _ = repair_lines(mask, boxes)  # without the page, the mask alone decides
+        self.assertEqual(unchanged[1][0][0], x0 + 18)
+
+    def test_outline_next_to_the_line_is_not_a_letter(self):
+        gray, mask, ink = self.lettered(["THE KI", "RESTRAINER", "FUNCTIONED."])
+        x0, y0, x1, y1 = ink[1]
+        cv2.line(gray, (x0 - 8, 10), (x0 - 8, 300), 0, 3)  # bubble outline, taller than any line
+        boxes = [ink[0], (x0 - 1, y0 - 1, x1 + 1, y1 + 1), ink[2]]
+        repaired, changes = repair_lines(mask, boxes, gray)
+        self.assertEqual(changes, [])
+        self.assertEqual([box for box, _ in repaired], boxes)
+
+    def test_overlapping_boxes_are_cut_line_by_line(self):
+        # Grand Blue 102 p20: one box over "NOW," and half the next line, another over the
+        # next two lines; the OCR dropped the second and the bubble stayed half in English.
+        gray, mask, ink = self.lettered(["NOW,", "HOLD", "ON.", "", "", "", "ANOTHER LINE", "AND ONE MORE"], step=26)
+        ink = ink[:3] + ink[6:]
+        first = (ink[0][0], ink[0][1], ink[0][2], ink[1][1] + 14)  # takes most of "HOLD" too
+        second = (min(ink[1][0], ink[2][0]) - 4, ink[0][3] - 6, max(ink[1][2], ink[2][2]) + 4, ink[2][3] + 12)
+        others = [(x0 - 1, y0 - 1, x1 + 1, y1 + 1) for x0, y0, x1, y1 in ink[3:]]  # one-line boxes elsewhere
+        repaired, changes = repair_lines(mask, [first, second] + others)
+        self.assertIn("refit", [kind for kind, _, _ in changes])
+        boxes = sorted((box for box, _ in repaired if box[1] < ink[3][1] - 10), key=lambda b: b[1])
+        self.assertEqual(len(boxes), 3)
+        for box, line in zip(boxes, ink):
+            self.assertTrue(box[1] <= line[1] + 1 and box[3] >= line[3] - 1 and box[3] - box[1] < 1.5 * (line[3] - line[1]),
+                            (box, line))
+
+    def test_tilted_paragraph_boxes_are_left_alone(self):
+        # Grand Blue 102 p3: boxes of a tilted paragraph overlap a little; none holds two lines.
+        gray, mask, ink = self.lettered(["I JUST KNOW", "IT WILL COME", "BACK TO US"], step=24)
+        boxes = [(x0 - 2, y0 - 2, x1 + 2, y1 + 8) for x0, y0, x1, y1 in ink]  # each reaches into the next line
+        _, changes = repair_lines(mask, boxes)
+        self.assertNotIn("refit", [kind for kind, _, _ in changes])
+
+    def big_lines(self):
+        # Small lettering elsewhere sets the page line height; two big lines touch through a few pixels.
+        mask = np.zeros((420, 640), np.uint8)
+        small = []
+        for i in range(4):
+            cv2.putText(mask, "SMALL TEXT", (20, 40 + i * 26), cv2.FONT_HERSHEY_SIMPLEX, 0.7, 255, 2)
+            small.append((18, 40 + i * 26 - 18, 170, 40 + i * 26 + 4))
+        cv2.putText(mask, "STUFF", (300, 220), cv2.FONT_HERSHEY_SIMPLEX, 2.4, 255, 12)
+        cv2.putText(mask, "IS IT", (300, 290), cv2.FONT_HERSHEY_SIMPLEX, 2.4, 255, 12)
+        rows = np.flatnonzero(mask[150:, 280:].any(axis=1)) + 150
+        return mask, small, rows
+
+    def test_touching_big_lines_are_cut_at_the_valley(self):
+        # Grand Blue 102 p31: "96%," and "ISN'T IT?" touch through their outlines; one box held both.
+        mask, small, rows = self.big_lines()
+        gap = rows[0] + int(np.argmin([mask[y, 280:].sum() for y in range(rows[0] + 30, rows[-1] - 30)])) + 30
+        mask[gap - 1:gap + 1, 400:404] = 255  # the lines touch at a few pixels
+        top, bottom = (296, rows[0] - 2, 520, gap + 6), (296, gap - 6, 520, rows[-1] + 2)
+        repaired, changes = repair_lines(mask, small + [top, bottom])
+        big = sorted((b for b, _ in repaired if b[1] > 140), key=lambda b: b[1])
+        self.assertEqual(len(big), 2, big)
+        self.assertLessEqual(big[0][3], gap + 1)
+        self.assertGreaterEqual(big[1][1], gap - 1)
+
+    def test_line_cut_again_keeps_its_letters_past_the_boxes(self):
+        # Grand Blue 102 p31: the boxes stopped before the last word of "ISN'T IT?"; cut again
+        # inside them, the line lost the word and the translation lost its tag question.
+        mask, small, rows = self.big_lines()
+        gap = rows[0] + int(np.argmin([mask[y, 280:].sum() for y in range(rows[0] + 30, rows[-1] - 30)])) + 30
+        mask[gap - 1:gap + 1, 400:404] = 255
+        end = int(np.flatnonzero(mask[gap:rows[-1] + 1, :].any(axis=0))[-1]) + 1
+        # The boxes end inside the last word, past a word gap.
+        top, bottom = (296, rows[0] - 2, end - 30, gap + 6), (296, gap - 6, end - 30, rows[-1] + 2)
+        repaired, _ = repair_lines(mask, small + [top, bottom])
+        big = sorted((b for b, _ in repaired if b[1] > 140), key=lambda b: b[1])
+        self.assertEqual(len(big), 2, big)
+        self.assertGreaterEqual(big[1][2], end - 1)
+
+    def test_one_big_line_is_not_a_staircase(self):
+        # Grand Blue 102 p31: "...THIS" in letters twice the page line height was cut into
+        # "THIS" and "..." as if it were two offset lines.
+        mask, small, rows = self.big_lines()
+        mask[230:, :] = 0  # only "STUFF"
+        cv2.circle(mask, (292, 214), 5, 255, -1)  # a dot at the bottom left, like "..."
+        line = np.flatnonzero(mask[150:, 280:].any(axis=1)) + 150
+        box = (284, int(line[0]) - 2, 520, int(line[-1]) + 3)
+        repaired, changes = repair_lines(mask, small + [box])
+        self.assertNotIn("split", [kind for kind, _, _ in changes])
+
     def test_hook_replaces_textlines_before_ocr(self):
         import asyncio
         import types
@@ -424,6 +629,53 @@ class BubbleGlyphTest(unittest.TestCase):
             seen |= bubble_glyphs(image, box, box[3] - box[1], near=1.6)
         _, changes = repair_lines(seen.astype(np.uint8) * 255, boxes)
         self.assertEqual([kind for kind, _, _ in changes], ["added"])
+
+    def dotted(self):
+        # A line ending in "..." whose last dots sit just past the box, and a row of dots under it.
+        image = self.page()
+        image[100:300, 120:400] = 250
+        cv2.putText(image, "THE WORD", (150, 170), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (10, 10, 10), 3)
+        dots = [(318, 166), (330, 166), (342, 166), (200, 200), (212, 200), (224, 200)]
+        for x, y in dots:
+            cv2.circle(image, (x, y), 3, (10, 10, 10), -1)
+        return image, (148, 146, 322, 172), dots
+
+    def test_letters_cut_by_the_box_are_cleaned_whole(self):
+        # Grand Blue 102 p42/p20: the last dot of "...", or a row of dots under the word,
+        # was cleaned only up to the box margin and left a grey half dot.
+        image, box, dots = self.dotted()
+        clean = glyphs_to_clean(image, box, 26)
+        for x, y in dots:
+            self.assertTrue(clean[y - 3:y + 4, x - 3:x + 4].all(), (x, y))
+        self.assertFalse(clean[:, :60].any())          # the bubble outline stays
+
+    def test_word_past_the_box_is_not_cleaned(self):
+        # A word the box left out (printed text running on past what was read) was not
+        # translated: erasing it would lose it.  Only the dots of punctuation follow the line.
+        image = self.page()
+        image[100:300, 120:400] = 250
+        cv2.putText(image, "THE", (150, 170), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (10, 10, 10), 3)
+        cols = np.flatnonzero((image[140:175, 120:400, 0] < 128).any(axis=0)) + 120
+        end = int(cols[-1]) + 1
+        cv2.putText(image, "IT", (end + 2, 170), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (10, 10, 10), 3)
+        clean = glyphs_to_clean(image, (148, 146, end, 172), 26)
+        self.assertFalse(clean[150:172, end + 6:end + 8].all(axis=1).any())  # only the margin touches the "I"
+        self.assertFalse(clean[150:172, end + 18:end + 28].any())            # the next letter stays
+
+    def test_small_letters_of_the_line_below_are_not_dots(self):
+        # A line in lower case under the box that was not read: its small letters are not punctuation.
+        image = self.page()
+        image[100:300, 120:400] = 250
+        cv2.putText(image, "THE WORD", (150, 170), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (10, 10, 10), 3)
+        cv2.putText(image, "one more line", (160, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (10, 10, 10), 2)
+        clean = glyphs_to_clean(image, (148, 146, 322, 172), 26)
+        self.assertFalse(clean[186:202, 150:330].any())
+
+    def test_cleaning_stays_off_the_outline(self):
+        image, _, _ = self.dotted()
+        cv2.putText(image, "EDGE", (60, 210), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (10, 10, 10), 3)  # touches the outline
+        clean = glyphs_to_clean(image, (148, 146, 322, 172), 26)
+        self.assertFalse(clean[190:215, 40:58].any())
 
 
 class PageRowsTest(unittest.TestCase):
@@ -679,6 +931,192 @@ class LeakingBubbleScanTest(unittest.TestCase):
         self.assertEqual(quality.bubble_text_lines(self.page(content=None), [self.SOUND]), [])
 
 
+class GrazedBubbleScanTest(unittest.TestCase):
+    """Grand Blue 102 p20: "S... / SORRY / ..." in a bubble whose white leaks out of a gap in
+    the outline and only grazes the line boxes of the bubble next to it."""
+
+    NEIGHBOUR = (306, 100, 400, 130)
+
+    def page(self, mark=True):
+        from PIL import Image, ImageDraw
+        img = Image.new("RGB", (900, 1200), (120, 120, 120))
+        d = ImageDraw.Draw(img)
+        d.ellipse((100, 100, 260, 460), fill="white", outline="black", width=4)
+        d.rectangle((215, 70, 300, 140), fill="white")  # the gap in the outline, open to a light patch
+        font = LeakingBubbleScanTest.font(26)
+        d.text((200, 150), "S", fill="black", font=font)  # stutter letter on its own, near the gap
+        w = d.textlength("SORRY", font=font)
+        d.text((180 - w / 2, 270), "SORRY", fill="black", font=font)
+        d.text((165, 290), "...", fill="black", font=font)
+        if mark:  # a stroke of the art inside the white
+            d.line((235, 360, 238, 395), fill="black", width=3)
+        return np.array(img)
+
+    def test_bubble_that_only_grazes_a_neighbour_box_is_found(self):
+        found = quality.bubble_text_lines(self.page(), [self.NEIGHBOUR])
+        self.assertEqual(len(found), 1)
+        _, rows, letters = found[0]
+        self.assertEqual(len(rows), 2, rows)  # the word, then its dots: two rows of lettering
+        (x0, y0, x1, y1), dots = rows
+        self.assertTrue(130 < x0 < x1 < 230 and 270 < y0 < y1 < 305, rows)
+        self.assertTrue(y1 <= dots[1] and x0 <= dots[0] < dots[2] <= x1, rows)
+        self.assertTrue(letters[dots[1]:dots[3], dots[0]:dots[2]].any())  # the dots are cleaned too
+        self.assertFalse(letters[355:400, 228:245].any())  # the art stroke stays
+
+    def test_box_reaching_into_the_bubble_still_means_seen(self):
+        self.assertEqual(quality.bubble_text_lines(self.page(), [(240, 90, 330, 130)]), [])
+
+
+class TextBlockTest(unittest.TestCase):
+    """Grand Blue 102 p3: a paragraph on the page beside a bubble's paragraph; the detector drew
+    boxes across both ("I JUST  AS HE") and the two speeches were read and translated as one."""
+
+    @staticmethod
+    def lines(mask, texts, x, y, step=24, centre=False):
+        boxes = []
+        for i, text in enumerate(texts):
+            (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+            left = x - w // 2 if centre else x
+            cv2.putText(mask, text, (left, y + i * step), cv2.FONT_HERSHEY_SIMPLEX, 0.7, 255, 2)
+            boxes.append((left - 1, y + i * step - h - 1, left + w + 1, y + i * step + 5))
+        return boxes
+
+    def page(self):
+        mask = np.zeros((400, 520), np.uint8)
+        # The last line of the page's paragraph runs under the bubble's: no straight gutter between them.
+        left = self.lines(mask, ["I JUST", "KNOW IT", "COME BACK", "TO BITE", "IF WE GO AWAY"], 40, 140)
+        right = self.lines(mask, ["LETS", "JUST DO", "AS HE", "SAYS."], 230, 92, centre=True)
+        # The detector's boxes over the two rows the paragraphs share.
+        merged = [(left[0][0], min(left[0][1], right[2][1]), right[2][2], max(left[0][3], right[2][3])),
+                  (left[1][0], min(left[1][1], right[3][1]), right[3][2], max(left[1][3], right[3][3]))]
+        return mask, left, right, [right[0], right[1]] + merged + left[2:]
+
+    def test_box_across_two_paragraphs_is_cut(self):
+        mask, left, right, boxes = self.page()
+        cuts = quality.block_cuts(mask, boxes)
+        self.assertEqual(sorted(cuts), [2, 3], cuts)
+        for i, (l, r) in zip((2, 3), ((left[0], right[2]), (left[1], right[3]))):
+            (a0, a1), (b0, b1) = cuts[i]
+            self.assertTrue(abs(a0 - l[0]) <= 4 and abs(a1 - l[2]) <= 4 and abs(b0 - r[0]) <= 4 and abs(b1 - r[2]) <= 4,
+                            (cuts[i], l, r))
+
+    def test_lines_are_grouped_by_paragraph(self):
+        mask, left, right, _ = self.page()
+        groups = quality.block_groups(mask, left + right)
+        self.assertEqual(sorted(sorted(g) for g in groups), [[0, 1, 2, 3, 4], [5, 6, 7, 8]])
+
+    def test_wide_gap_in_one_paragraph_is_not_cut(self):
+        # Spaced-out words in one bubble ("WAIT    WHAT"): one speech.
+        mask = np.zeros((300, 520), np.uint8)
+        boxes = self.lines(mask, ["HOLD ON,", "WAIT", "THIS IS", "TOO MUCH"], 200, 80, centre=True)
+        (w, h), _ = cv2.getTextSize("WAIT", cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+        cv2.putText(mask, "WHAT", (boxes[1][2] + 30, 104), cv2.FONT_HERSHEY_SIMPLEX, 0.7, 255, 2)
+        boxes[1] = (boxes[1][0], boxes[1][1], boxes[1][2] + 32 + w, boxes[1][3])
+        self.assertEqual(quality.block_cuts(mask, boxes), {})
+        self.assertEqual(len(quality.block_groups(mask, boxes)), 1)
+
+    def test_lone_line_beside_a_paragraph_is_not_cut(self):
+        # One short line next to a paragraph (a name tag, a stray word): never split off on its own.
+        mask = np.zeros((300, 520), np.uint8)
+        boxes = self.lines(mask, ["THIS IS", "ONE SPEECH", "HERE."], 230, 80, centre=True)
+        cv2.putText(mask, "OH", (60, 104), cv2.FONT_HERSHEY_SIMPLEX, 0.7, 255, 2)
+        boxes[1] = (58, boxes[1][1], boxes[1][2], boxes[1][3])
+        self.assertEqual(quality.block_cuts(mask, boxes), {})
+
+
+class TextBlockRegionTest(unittest.TestCase):
+    """The region the merge built over both paragraphs is split, and stays split, even in an open bubble."""
+
+    class Block:
+        def __init__(self, lines, texts, font_size=20, angle=0, prob=1.0, fg_color=None, bg_color=None):
+            self.lines, self.texts = np.asarray(lines), list(texts)
+            self.font_size, self.angle, self.prob = font_size, angle, prob
+            self.fg_colors, self.bg_colors, self.horizontal = fg_color, bg_color, True
+            pts = self.lines.reshape(-1, 2)
+            self.xyxy = (*pts.min(axis=0), *pts.max(axis=0))
+
+    def test_two_paragraphs_in_one_region_are_split(self):
+        from engine_compat import join_split_blocks
+        mask, left, right, _ = TextBlockTest().page()
+        boxes = sorted(left + right, key=lambda b: b[1])
+        texts = [f"L{i}" if b in left else f"R{i}" for i, b in enumerate(boxes)]
+        block = self.Block([quad(*b) for b in boxes], texts)
+        page = np.full((400, 520, 3), 255, np.uint8)  # one white page: the bubble is open to it
+        out = join_split_blocks([block], page, mask)
+        self.assertEqual(sorted(sorted(t[0] for t in b.texts) for b in out), [["L"] * 5, ["R"] * 4])
+        self.assertEqual(len(join_split_blocks([block], page)), 1)  # without the mask: as before
+
+    def test_pieces_of_one_paragraph_on_the_page_are_joined(self):
+        # Grand Blue 102 p3: the text beside the bubble, written on the page (no bubble around it),
+        # came out as "I JUST / KNOW IT'LL" and "COME BACK...", translated as two half sentences.
+        from engine_compat import join_split_blocks
+        mask, left, _, _ = TextBlockTest().page()
+        mask[:, 200:] = 0
+        page = noisy_art((520, 400))
+        top = self.Block([quad(*b) for b in left[:2]], ["L0", "L1"])
+        bottom = self.Block([quad(*b) for b in left[2:]], ["L2", "L3", "L4"])
+        out = join_split_blocks([top, bottom], page, mask)
+        self.assertEqual([b.texts for b in out], [["L0", "L1", "L2", "L3", "L4"]])
+        self.assertEqual(len(join_split_blocks([top, bottom], page)), 2)  # without the mask: as before
+
+    def test_pieces_of_one_paragraph_on_open_flat_page_are_joined(self):
+        # Grand Blue 102 p3: the top piece sat on a flat, open gutter; the bubble search came back
+        # with the piece's own box as if it were a bubble, so the rest of the paragraph stayed apart.
+        from engine_compat import join_split_blocks
+        mask, left, _, _ = TextBlockTest().page()
+        mask[:, 200:] = 0
+        page = np.full((400, 520, 3), 255, np.uint8)
+        top = self.Block([quad(*b) for b in left[:2]], ["L0", "L1"])
+        bottom = self.Block([quad(*b) for b in left[2:]], ["L2", "L3", "L4"])
+        out = join_split_blocks([top, bottom], page, mask)
+        self.assertEqual([b.texts for b in out], [["L0", "L1", "L2", "L3", "L4"]])
+
+    def test_piece_in_a_closed_bubble_stays_apart_from_the_paragraph_outside(self):
+        # The neighbour: a real bubble around the top piece still keeps the text below it apart.
+        from engine_compat import join_split_blocks
+        mask, left, _, _ = TextBlockTest().page()
+        mask[:, 200:] = 0
+        page = noisy_art((520, 400))
+        cv2.ellipse(page, (90, 147), (85, 36), 0, 0, 360, (255, 255, 255), -1)
+        cv2.ellipse(page, (90, 147), (85, 36), 0, 0, 360, (0, 0, 0), 3)
+        top = self.Block([quad(*b) for b in left[:2]], ["L0", "L1"])
+        bottom = self.Block([quad(*b) for b in left[2:]], ["L2", "L3", "L4"])
+        self.assertEqual(len(join_split_blocks([top, bottom], page, mask)), 2)
+
+    def test_pieces_in_a_tight_caption_box_stay_joined(self):
+        # A narration box drawn close around its text: the bubble barely exceeds the lines, still one speech.
+        from engine_compat import join_split_blocks
+        mask, left, _, _ = TextBlockTest().page()
+        mask[:, 200:] = 0
+        page = noisy_art((520, 400))
+        x0, y0 = min(b[0] for b in left) - 6, min(b[1] for b in left) - 6
+        x1, y1 = max(b[2] for b in left) + 6, max(b[3] for b in left) + 6
+        cv2.rectangle(page, (x0, y0), (x1, y1), (255, 255, 255), -1)
+        cv2.rectangle(page, (x0, y0), (x1, y1), (0, 0, 0), 3)
+        top = self.Block([quad(*b) for b in left[:2]], ["L0", "L1"])
+        bottom = self.Block([quad(*b) for b in left[2:]], ["L2", "L3", "L4"])
+        out = join_split_blocks([top, bottom], page, mask)
+        self.assertEqual([b.texts for b in out], [["L0", "L1", "L2", "L3", "L4"]])
+        self.assertEqual(len(join_split_blocks([top, bottom], page)), 1)  # the box alone joins them, as before
+
+    def test_two_paragraphs_on_the_page_stay_apart(self):
+        from engine_compat import join_split_blocks
+        mask = np.zeros((400, 520), np.uint8)
+        upper = TextBlockTest.lines(mask, ["ONE TEXT", "UP HERE"], 40, 100)
+        lower = TextBlockTest.lines(mask, ["ANOTHER", "DOWN HERE"], 40, 178)  # a blank line and a half below
+        a = self.Block([quad(*b) for b in upper], ["U0", "U1"])
+        b = self.Block([quad(*b) for b in lower], ["D0", "D1"])
+        self.assertEqual(len(join_split_blocks([a, b], noisy_art((520, 400)), mask)), 2)
+
+    def test_one_paragraph_stays_one_region(self):
+        from engine_compat import join_split_blocks
+        mask, left, _, _ = TextBlockTest().page()
+        mask[:, 200:] = 0
+        block = self.Block([quad(*b) for b in left], [f"L{i}" for i in range(len(left))])
+        out = join_split_blocks([block], np.full((400, 520, 3), 255, np.uint8), mask)
+        self.assertEqual(len(out), 1)
+
+
 class ContainedRegionTest(unittest.TestCase):
     """Grand Blue p25: the tilted "LIKE" had its own region inside "LOOKS / IORI SCORED..."."""
 
@@ -813,3 +1251,84 @@ class OuroSevenTest(unittest.TestCase):
         d.text((150, 290), "HOLE...", fill="black", font=font)
         found = quality.bubble_text_lines(np.array(img), [])
         self.assertEqual([len(rows) for _, rows, _ in found], [2])
+
+
+class ThroughLineTest(unittest.TestCase):
+    """Grand Blue 102 p3: text written on the page ran over the panel border and the outline of the
+    bubble beside it; the cleaning erased both lines and the two panels ran into each other."""
+
+    TEXTS = ["I JUST", "KNOW IT'LL", "COME BACK", "TO BITE US"]
+
+    def page(self, border=True, outline=True, border_end=None):
+        image = np.full((400, 300, 3), 255, np.uint8)
+        art = np.zeros((400, 300), np.uint8)
+        if border:
+            cv2.line(art, (149, 0), (149, 399 if border_end is None else border_end), 255, 3)
+        if outline:
+            cv2.ellipse(art, (330, 200), (150, 260), 0, 0, 360, 255, 2)
+        letters = np.zeros((400, 300), np.uint8)
+        boxes = TextBlockTest.lines(letters, self.TEXTS, 100, 150)
+        image[(art > 0) | (letters > 0)] = 0
+        # The cleaning mask covers the letters and the bits of line between them, as the detector's does.
+        mask = cv2.dilate(letters, np.ones((11, 11), np.uint8))
+        box = (min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes))
+        return image, mask, art > 0, letters > 0, box
+
+    def test_border_through_the_text_is_found(self):
+        image, mask, _, _, box = self.page()
+        lines = quality.through_lines(image, mask, box, 18)
+        self.assertEqual(len(lines), 1, lines)
+        (xa, ya), (xb, yb), thick, grey = lines[0]
+        self.assertTrue(abs(xa - 149) <= 1 and abs(xb - 149) <= 1, lines)
+        rows = np.nonzero((mask > 0).any(axis=1))[0]
+        self.assertTrue(min(ya, yb) <= rows.min() and max(ya, yb) >= rows.max(), (lines, rows.min(), rows.max()))
+        self.assertTrue(4 <= thick <= 6 and grey < 60, lines)  # cv2 draws thickness 3 five pixels wide
+
+    def test_border_is_drawn_back_beside_the_new_letters(self):
+        image, mask, _, _, box = self.page()
+        lines = quality.through_lines(image, mask, box, 18)
+        clean = image.copy()
+        clean[mask > 0] = 255
+        rendered = clean.copy()
+        cv2.putText(rendered, "NOVO", (120, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+        out = quality.redraw_lines(rendered, clean, mask, lines)
+        changed = np.any(out != rendered, axis=2)
+        self.assertTrue(changed[150:250, 147:152].mean() > 0.4)   # the border is back across the text
+        self.assertFalse(changed[:, :140].any() or changed[:, 158:].any())
+        letters = np.any(rendered != clean, axis=2)
+        self.assertTrue(np.array_equal(out[letters], rendered[letters]))  # the new letters stay on top
+        near = cv2.dilate(letters.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+        self.assertFalse((changed & near).any())  # with a little paper around them, as around the original letters
+        self.assertFalse((changed & (mask == 0)).any())  # only where the cleaning erased
+        widths = [int(changed[y].sum()) for y in range(150, 250) if changed[y].any()]
+        self.assertTrue(widths and max(widths) <= 5, widths)  # as wide as the border, not wider
+
+    def test_each_line_keeps_its_own_grey(self):
+        page = np.full((200, 200, 3), 255, np.uint8)
+        clean, mask = page.copy(), np.full((200, 200), 255, np.uint8)
+        lines = [((50, 10), (50, 190), 3, 0), ((150, 10), (150, 190), 3, 120)]
+        out = quality.redraw_lines(page, clean, mask, lines)
+        self.assertEqual((int(out[100, 50, 0]), int(out[100, 150, 0])), (0, 120))
+
+    def test_parallel_hatching_across_the_text_is_not_rebuilt(self):
+        # Hatching under the text: strokes on each side, but offset, never one line carried across.
+        image, mask, _, _, box = self.page(border=False, outline=False)
+        for x in range(60, 260, 12):
+            cv2.line(image, (x, 60), (x, 134), (0, 0, 0), 1)
+            cv2.line(image, (x + 5, 226), (x + 5, 300), (0, 0, 0), 1)
+        image[mask > 0] = np.where(image[mask > 0] == 0, 0, 255)
+        self.assertEqual(quality.through_lines(image, mask, box, 18), [])
+
+    def test_text_without_lines_is_untouched(self):
+        image, mask, _, _, box = self.page(border=False, outline=False)
+        self.assertEqual(quality.through_lines(image, mask, box, 18), [])
+
+    def test_curved_outline_is_not_rebuilt(self):
+        # A curve is not rebuilt under the letters: a straight line would cut through them.
+        image, mask, _, _, box = self.page(border=False)
+        self.assertEqual(quality.through_lines(image, mask, box, 18), [])
+
+    def test_stroke_ending_inside_the_text_is_not_rebuilt(self):
+        # A line that stops among the letters may be part of them: nothing to draw back.
+        image, mask, _, _, box = self.page(outline=False, border_end=175)
+        self.assertEqual(quality.through_lines(image, mask, box, 18), [])

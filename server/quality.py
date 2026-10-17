@@ -108,7 +108,84 @@ def classify_region(image, text_mask, quads, line_height=None):
     residual = _fit_background(coords, values)
     share = float(np.mean(residual <= BACKGROUND_TOLERANCE))
     kind = "interior" if share >= MIN_INTERIOR_SHARE else "art"
+    # A sound effect is usually one outlined word over the art: it stays art (and goes to review).
+    if kind == "art" and len(quads) >= OUTLINE_LINES and outlined_lettering(image, lines, line_height):
+        kind = "contorno"
     return {"kind": kind, "interior_share": round(share, 4), "samples": int(len(xs))}
+
+
+OUTLINE_LIGHT = 190    # letter fill of outlined lettering is lighter than this
+OUTLINE_DARK = 130     # and its outline darker than this (black, or black over a screentone)
+OUTLINE_RING = 0.85    # share of the ring around a letter that is outline
+OUTLINE_WIDTH = 0.06   # outline thickness checked, in line heights (at least 2 px)
+OUTLINE_REACH = 0.6    # the letters and their outline are looked for this far around the lines, in line heights
+OUTLINE_SHARE = 0.6    # share of the light pixels on the lines that are outlined letters
+OUTLINE_AROUND = 0.5   # at most this share of the page around them is light
+OUTLINE_LINES = 2      # outlined lettering is translated only as a sentence of this many lines or more
+
+
+def outlined_colours(image, quads):
+    """(letter colour, outline colour) of outlined lettering, measured on the page."""
+    quads = [np.asarray(q, np.float32).reshape(4, 2) for q in quads]
+    lines = _line_mask(image.shape, quads) > 0
+    gray = cv2.cvtColor(np.asarray(image)[:, :, :3], cv2.COLOR_RGB2GRAY)
+    near = cv2.dilate(lines.astype(np.uint8), np.ones((9, 9), np.uint8)) > 0
+    fill, edge = lines & (gray > OUTLINE_LIGHT), near & (gray < OUTLINE_DARK)
+    if not fill.any() or not edge.any():
+        return (255, 255, 255), (0, 0, 0)
+    return (tuple(int(v) for v in np.median(image[fill][:, :3], axis=0)),
+            tuple(int(v) for v in np.median(image[edge][:, :3], axis=0)))
+
+
+def outlined_area(image, quads, line_height=None):
+    """Pixels of outlined lettering and its outline, the only part of the page cleaned for it."""
+    quads = [np.asarray(q, np.float32).reshape(4, 2) for q in quads]
+    if line_height is None:
+        line_height = float(np.median([max(np.ptp(q[:, 1]), 1.0) for q in quads]))
+    found = outlined_lettering(image, _line_mask(image.shape, quads), line_height, area_only=True)
+    return found if found is not None else np.zeros(image.shape[:2], bool)
+
+
+def outlined_lettering(image, lines, line_height, area_only=False):
+    """True for light letters wrapped in their own dark outline (a shout lettered over the art).
+
+    Grand Blue 102 p31: white letters with a thick black outline over a dark, toned
+    background.  Every letter, with its outline, is its own interior: cleaning the
+    letter and the outline only leaves the art around them as drawn.  Dark letters
+    drawn straight on the art have no such outline and stay art.
+    """
+    gray = cv2.cvtColor(np.asarray(image)[:, :, :3], cv2.COLOR_RGB2GRAY) if image.ndim == 3 else np.asarray(image)
+    on_lines = lines > 0
+    if not on_lines.any():
+        return None if area_only else False
+    lh = max(4.0, float(line_height))
+    width = max(2, int(round(OUTLINE_WIDTH * lh)))
+    reach = max(width + 2, int(round(OUTLINE_REACH * lh)))
+    area = cv2.dilate(lines, np.ones((2 * reach + 1, 2 * reach + 1), np.uint8)) > 0
+    edge = area & ~(cv2.erode(area.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0)
+    light = gray > OUTLINE_LIGHT
+    count, labels, stats, _ = cv2.connectedComponentsWithStats((light & area).astype(np.uint8), connectivity=8)
+    # The page between dark letters, or a light background, runs out to the edge of the area.
+    open_labels = set(np.unique(labels[edge & light]).tolist())
+    kernel = np.ones((2 * width + 1, 2 * width + 1), np.uint8)
+    letters = np.zeros_like(light)
+    for k in range(1, count):
+        if k in open_labels or stats[k, 4] < (0.1 * lh) ** 2:
+            continue
+        x, y, w, h = (int(v) for v in stats[k, :4])
+        x0, y0 = max(0, x - width - 1), max(0, y - width - 1)
+        piece = labels[y0:y + h + width + 1, x0:x + w + width + 1] == k
+        ring = (cv2.dilate(piece.astype(np.uint8), kernel) > 0) & ~light[y0:y + h + width + 1, x0:x + w + width + 1]
+        if ring.any() and np.mean(gray[y0:y + h + width + 1, x0:x + w + width + 1][ring] < OUTLINE_DARK) >= OUTLINE_RING:
+            letters[y0:y + h + width + 1, x0:x + w + width + 1] |= piece
+    if area_only:  # the letters and their outline, grown like the outline itself
+        return cv2.dilate(letters.astype(np.uint8), np.ones((4 * width + 1, 4 * width + 1), np.uint8)) > 0
+    lit = (light & on_lines).sum()
+    if not lit or (letters & on_lines).sum() < OUTLINE_SHARE * lit:
+        return False
+    # Light letters over a light page are the holes of dark letters in a white bubble, not outlined lettering.
+    around = area & ~(cv2.dilate(letters.astype(np.uint8), np.ones((4 * width + 1, 4 * width + 1), np.uint8)) > 0)
+    return bool(around.any()) and float(light[around].mean()) < OUTLINE_AROUND
 
 
 # Text spacing ---------------------------------------------------------------
@@ -356,6 +433,7 @@ def broken_words(text, lines):
 GLYPH_TOLERANCE = 40     # antialiased letter edges still differ this much from the interior
 GLYPH_REACH = 1.5        # search window around the text, in line heights
 GLYPH_NEAR = 0.8         # letters kept only this close to the text box, in line heights
+CLEAN_MARK = 0.4         # a punctuation dot is smaller than this, in line heights (a lower-case letter is not)
 
 
 def bubble_glyphs(image, box, line_height, near=GLYPH_NEAR):
@@ -423,6 +501,163 @@ def bubble_glyphs(image, box, line_height, near=GLYPH_NEAR):
     return out
 
 
+def glyphs_to_clean(image, box, line_height):
+    """Letters around a text box to add to the cleaning mask, grown like the detector's own mask.
+
+    Grown by about a quarter of the line height: with a thin margin the cleaner left a
+    grey ghost of the anti-aliased letter edges (TBATE new episode p12, "OF US.").  The
+    growth stays near the text box, never reaching the bubble outline, but a letter of the
+    box (its centre inside) that the margin cuts is taken whole, and so are the dots of
+    punctuation that follow the line or sit on the row under it: the dots of "..." past the box stayed as a grey
+    smudge (Grand Blue 102 p42/p20).  A word past the box, or another line, is never
+    taken: it was not read, and erasing it would lose the speech.
+    """
+    h, w = image.shape[:2]
+    lh = max(4.0, float(line_height))
+    glyphs = bubble_glyphs(image, box, lh, near=NEAR_LINES)
+    if not glyphs.any():
+        return glyphs
+    size = max(5, int(round(lh * 0.25)) | 1)
+    x0, y0, x1, y1 = (int(v) for v in box)
+    limit = np.zeros((h, w), bool)
+    limit[max(0, y0 - size):min(h, y1 + size), max(0, x0 - size):min(w, x1 + size)] = True
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(glyphs.astype(np.uint8), connectivity=8)
+    def belongs(label, near_taken, grow=False):
+        gx, gy, gw, gh = (int(v) for v in stats[label, :4])
+        mark = gh < CLEAN_MARK * lh and gw < CLEAN_MARK * lh
+        if near_taken and y0 <= gy + gh / 2 <= y1 and (mark or (not grow and x0 <= gx + gw / 2 <= x1)):
+            return True  # a letter of the box the margin cuts, or a dot of punctuation within a letter gap
+        # A dot of punctuation on the row just under the line ("SORRY / ...").
+        return mark and 0 <= gy - y1 <= lh and x0 <= gx and gx + gw <= x1
+    box_limit = limit.copy()
+    queue = [k for k in set(np.unique(labels[limit & glyphs]).tolist()) - {0} if belongs(k, True)]
+    below = [k for k in range(1, count) if k not in queue and belongs(k, False)]
+    if below:
+        # Only a row of dots alone: a letter on the same row makes it a line of text that was not read.
+        r0, r1 = min(stats[k, 1] for k in below), max(stats[k, 1] + stats[k, 3] for k in below)
+        if any(stats[k, 1] < r1 and stats[k, 1] + stats[k, 3] > r0 and k not in below and k not in queue
+               for k in range(1, count)):
+            below = []
+    queue += below
+    taken = set(queue)
+    while queue:
+        k = queue.pop()
+        gx, gy, gw, gh = (int(v) for v in stats[k, :4])
+        limit[max(0, gy - size):min(h, gy + gh + size), max(0, gx - size):min(w, gx + gw + size)] = True
+        for label in set(np.unique(labels[limit & glyphs]).tolist()) - taken - {0}:
+            if belongs(label, True, grow=True):
+                taken.add(label)
+                queue.append(label)
+    kernel = np.ones((size, size), np.uint8)
+    whole = cv2.dilate(np.isin(labels, list(taken)).astype(np.uint8), kernel) > 0
+    # Letters of the lines above and below: only what reaches into the box margin, as before.
+    return (whole & limit) | ((cv2.dilate(glyphs.astype(np.uint8), kernel) > 0) & box_limit)
+
+
+THROUGH_DARK = 135    # line art is darker than this (0-255; thin anti-aliased lines reach ~130)
+THROUGH_REACH = 1.5   # a line is followed this far outside the mask, in line heights
+THROUGH_RUN = 1.0     # and must continue at least this far on each side of the text, in line heights
+THROUGH_THIN = 0.3    # at most this thick, in line heights (a panel border)
+THROUGH_AIM = 0.15    # each side, carried straight across the text, meets the other within this, in line heights
+
+
+def through_lines(image, mask, box, line_height):
+    """Straight art lines, like a panel border, that the cleaning mask cuts where they cross the text.
+
+    Text written on the page often runs over the border of a panel; the detector marks the
+    bits of line between the letters, and the cleaning erased the border and joined the two
+    panels (Grand Blue 102 p3).  A thin dark line that leaves the mask on two opposite sides,
+    both sides on one straight line, is art.  Returns ``[((xa, ya), (xb, yb), thickness, grey)]``
+    in page coordinates, to draw back with ``redraw_lines`` after the lettering.  A stroke
+    that ends among the letters may be part of them, and a curved line (a bubble outline)
+    is not rebuilt under the letters.
+    """
+    lh = max(4.0, float(line_height))
+    h, w = mask.shape[:2]
+    reach = int(round(THROUGH_REACH * lh)) + 2
+    x0, y0, x1, y1 = (int(v) for v in box)
+    wx0, wy0, wx1, wy1 = max(0, x0 - reach), max(0, y0 - reach), min(w, x1 + reach), min(h, y1 + reach)
+    if wx1 <= wx0 or wy1 <= wy0:
+        return []
+    m = np.asarray(mask)[wy0:wy1, wx0:wx1] > 0
+    if not m.any():
+        return []
+    gray = cv2.cvtColor(np.ascontiguousarray(np.asarray(image)[wy0:wy1, wx0:wx1, :3]), cv2.COLOR_RGB2GRAY)
+    near = cv2.dilate(m.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+    dist = cv2.distanceTransform((~m).astype(np.uint8), cv2.DIST_L2, 3)
+    outside = (gray < THROUGH_DARK) & ~m & (dist <= reach)
+    count, labels = cv2.connectedComponents(outside.astype(np.uint8), connectivity=8)
+    ends = []
+    for k in range(1, count):
+        ys, xs = np.nonzero(labels == k)
+        touch = near[ys, xs]
+        if not touch.any() or len(xs) < 3:
+            continue
+        pts = np.stack([xs, ys], 1).astype(np.float64)
+        axis = np.linalg.svd(pts - pts.mean(0), full_matrices=False)[2][0]
+        along = (pts - pts.mean(0)) @ axis
+        length = float(along.max() - along.min() + 1)
+        thick = len(pts) / length
+        if length >= THROUGH_RUN * lh and thick <= THROUGH_THIN * lh:
+            ends.append((pts, axis, pts[touch].mean(0), thick, float(np.median(gray[ys, xs]))))
+    def miss(end, point):
+        # Distance from ``point`` to the end's own line, carried straight on.
+        offset = point - end[0].mean(0)
+        return abs(offset[0] * end[1][1] - offset[1] * end[1][0])
+    pairs = []
+    for i in range(len(ends)):
+        for j in range(i + 1, len(ends)):
+            a, b = ends[i][2], ends[j][2]
+            chord = b - a
+            if np.linalg.norm(chord) < lh:
+                continue
+            steps = np.linspace(0, 1, max(2, int(np.linalg.norm(chord))))
+            xs, ys = np.round(a[None] + steps[:, None] * chord[None]).astype(int).T
+            if m[ys, xs].mean() < 0.5:
+                continue  # both ends on the same side of the text
+            err = max(miss(ends[i], b), miss(ends[j], a))
+            if err <= THROUGH_AIM * lh:
+                pairs.append((err, i, j))
+    lines, used = [], set()
+    for _, i, j in sorted(pairs):  # the straightest first
+        if i in used or j in used:
+            continue
+        used |= {i, j}
+        pts = np.concatenate([ends[i][0], ends[j][0]])
+        centre = pts.mean(0)
+        axis = np.linalg.svd(pts - centre, full_matrices=False)[2][0]
+        # From one contact to the other, on the line fitted to both sides, overlapping them a little.
+        ta, tb = sorted(float((ends[k][2] - centre) @ axis) for k in (i, j))
+        pa, pb = centre + (ta - 2) * axis, centre + (tb + 2) * axis
+        lines.append(((pa[0] + wx0, pa[1] + wy0), (pb[0] + wx0, pb[1] + wy0),
+                      (ends[i][3] + ends[j][3]) / 2, (ends[i][4] + ends[j][4]) / 2))
+    return lines
+
+
+REDRAW_GAP = 2        # px of paper left between a line drawn back and the new letters, as around the original ones
+
+
+def redraw_lines(rendered, clean, mask, lines):
+    """Draw ``through_lines`` back on the finished page, inside the cleaned area and a little apart from the new letters."""
+    if not lines:
+        return rendered
+    draw = np.zeros(rendered.shape[:2], bool)
+    shade = np.zeros(rendered.shape[:2], np.uint8)
+    for (xa, ya), (xb, yb), thick, grey in lines:
+        axis = np.zeros(rendered.shape[:2], np.uint8)
+        cv2.line(axis, (int(round(xa)), int(round(ya))), (int(round(xb)), int(round(yb))), 255, 1)
+        # As wide as measured: cv2's own thickness draws wider than asked.
+        band = cv2.distanceTransform((axis == 0).astype(np.uint8), cv2.DIST_L2, 3) <= (max(1, round(thick)) - 1) / 2
+        shade[band] = int(round(grey))
+        draw |= band
+    lettered = np.any(rendered[:, :, :3] != clean[:, :, :3], axis=2).astype(np.uint8)
+    gap = 2 * REDRAW_GAP + 1
+    draw &= (np.asarray(mask) > 0) & (cv2.dilate(lettered, np.ones((gap, gap), np.uint8)) == 0)
+    out = rendered.copy()
+    out[draw, :3] = shade[draw][:, None]
+    return out
+
+
 # Line boxes from the detector mask -----------------------------------------
 
 INK = 127
@@ -434,6 +669,15 @@ SPLIT_INSIDE = 0.25   # a row run must reach this far into the box to be one of 
 MIN_PART = 0.45       # a split part shorter than this share of a line is noise
 ORPHAN_COVERED = 0.2  # mask pixels already under a box above this share are not orphans
 NEAR_LINES = 1.6      # an orphan line must sit this many line heights from a known one
+ORPHAN_MIN = 0.5      # an orphan line is at least this many line heights tall
+SMALL_LINE = 0.3      # smaller orphans, from this many line heights, may still be a paragraph of small lettering
+SMALL_LINE_PX = 8     # never below this height in pixels
+SMALL_LINE_WIDTH = 1.5  # and their ink is this many times wider than tall: a lone letter is not a line
+FIT_SIDE = 0.3        # ink running past the box end this far (line heights) widens the box
+FIT_OVERLAP = 0.5     # boxes sharing this many line heights of rows are cut again line by line
+FIT_TALL = 2.0       # boxes are cut again only when one of them is this many line heights tall
+FIT_VALLEY = 0.12     # a row with less ink than this share of a line's usual row is a gap between lines
+FIT_GAP = 0.3         # a box grows over letters at most this far (line heights) from its own
 
 
 def _box(points):
@@ -490,13 +734,14 @@ def near_lines(lost, kept):
             and _near((x0, y0, x1, y1), kept, height)]
 
 
-def repair_lines(mask, boxes):
+def repair_lines(mask, boxes, gray=None):
     """Return (boxes, changes) with multi-line boxes split and missed lines added.
 
     ``boxes`` are axis-aligned (x0, y0, x1, y1) horizontal text lines and
     ``mask`` is the detector pixel mask of the same page.  Each entry of the
     result is (box, source) where source is the index of the original box, or
-    None for a line found only in the mask.
+    None for a line found only in the mask.  ``gray``, the page in grey levels,
+    lets a line box grow over letters the mask missed.
     """
     if mask is None or not boxes:
         return [(b, i) for i, b in enumerate(boxes)], []
@@ -546,6 +791,7 @@ def repair_lines(mask, boxes):
             changes.append(("split", (x0, y0, x1, y1), parts))
         else:
             result.append(((x0, y0, x1, y1), index))
+    result = fit_lines(ink, result, height, changes, gray)
     # Lines of the mask that no box covers.
     known = np.zeros_like(ink)
     for (x0, y0, x1, y1), _ in result:
@@ -555,9 +801,18 @@ def repair_lines(mask, boxes):
     count, labels, stats, _ = cv2.connectedComponentsWithStats(lines, connectivity=8)
     current = [b for b, _ in result]
     lonely = []  # line-shaped orphans far from any box: kept only as a paragraph (below)
+    small = []   # lines in smaller letters than the page's (a quiet bubble beside a shout): same rule
     for label in range(1, count):
         x, y, bw, bh = (int(v) for v in stats[label, :4])
-        if not (0.5 * height <= bh <= STAIR_FACTOR * height and bw >= height):
+        if max(SMALL_LINE_PX, SMALL_LINE * height) <= bh < ORPHAN_MIN * height:
+            # The component was widened to join the letters; the line shape is read on the ink itself.
+            pixels = (labels[y:y + bh, x:x + bw] == label) & ink[y:y + bh, x:x + bw]
+            cols = np.flatnonzero(pixels.any(axis=0))
+            if len(cols) and cols[-1] - cols[0] + 1 >= SMALL_LINE_WIDTH * bh \
+                    and known[y:y + bh, x:x + bw][pixels].mean() <= ORPHAN_COVERED:
+                small.append((x + int(cols[0]), y, x + int(cols[-1]) + 1, y + bh))
+            continue
+        if not (ORPHAN_MIN * height <= bh <= STAIR_FACTOR * height and bw >= height):
             continue
         pixels = (labels[y:y + bh, x:x + bw] == label) & ink[y:y + bh, x:x + bw]
         if not pixels.any() or known[y:y + bh, x:x + bw][pixels].mean() > ORPHAN_COVERED:
@@ -574,10 +829,179 @@ def repair_lines(mask, boxes):
         elif len(boxes_here) == 1:
             lonely.extend(boxes_here)
     paragraph = paragraph_lines(lonely, height)
+    # Grand Blue 102 p39: the page height came from big shouting, so small lines are
+    # measured on their own height, each size in turn.
+    for size in sorted({b[3] - b[1] for b in small}):
+        paragraph += [b for b in paragraph_lines(small, float(size)) if b not in paragraph]
     if paragraph:
         result.extend((box, None) for box in paragraph)
         changes.append(("added", None, paragraph))
     return result, changes
+
+
+def _line_runs(ink, box, height):
+    """Row runs of ink a box takes part in, read a little past its top and bottom."""
+    h = ink.shape[0]
+    x0, y0, x1, y1 = box
+    reach = int(round(SPLIT_REACH * height))
+    wy0, wy1 = max(0, y0 - reach), min(h, y1 + reach)
+    runs = []
+    for r0, r1 in _runs(ink[wy0:wy1, x0:x1].any(axis=1)):
+        if r1 - r0 >= MIN_PART * height and min(wy0 + r1, y1) - max(wy0 + r0, y0) >= SPLIT_INSIDE * height:
+            runs.append((wy0 + r0, wy0 + r1))
+    return runs
+
+
+def _ink_span(ink, x0, x1, y0, y1, height, others):
+    """Columns of the lettering in rows y0..y1 that reach the box x0..x1, stopping at other boxes."""
+    w = ink.shape[1]
+    lo, hi = 0, w
+    for ox0, oy0, ox1, oy1 in others:  # a neighbour on the same row bounds the line
+        if min(y1, oy1) - max(y0, oy0) > 0.5 * (y1 - y0):
+            if ox1 <= x0:
+                lo = max(lo, ox1)
+            elif ox0 >= x1:
+                hi = min(hi, ox0)
+    cols = ink[y0:y1, lo:hi].any(axis=0)
+    # Letter spacing only: a mark beyond a word gap (a sound effect on the bubble outline) stays out.
+    gap = max(3, int(round(height * FIT_GAP)))
+    on = np.flatnonzero(cols)
+    if not len(on):
+        return x0, x1
+    # Runs of letters, words joined across gaps up to ``gap``; every run that meets the box
+    # is the line (a box ending inside the last word, "ISN'T IT?", still holds that word).
+    runs = []
+    for c in on + lo:
+        if not runs or c - runs[-1][1] > gap:
+            runs.append([c, c + 1])
+        runs[-1][1] = c + 1
+    meeting = [(a, b) for a, b in runs if b >= x0 and a <= x1]
+    if not meeting:
+        return x0, x1
+    return min(x0, int(meeting[0][0])), max(x1, int(meeting[-1][1]))
+
+
+def _glyph_span(gray, x0, x1, r0, r1, height, lo, hi):
+    """Widen x0..x1 over dark glyphs of the image that sit inside the row band r0..r1.
+
+    The detector mask can miss the first letter of a bold italic word (the "A" of
+    "AMOUNT", read "MOUN").  A letter stays inside its line; a bubble outline or
+    the art runs above or below it and is never taken.
+    """
+    h, w = gray.shape
+    margin = max(2, int(round(0.15 * height)))
+    reach = int(round(2 * height))
+    wx0, wx1 = max(lo, x0 - reach), min(hi, x1 + reach)
+    wy0, wy1 = max(0, r0 - margin - 1), min(h, r1 + margin + 1)
+    if wx1 <= wx0 or wy1 <= wy0:
+        return x0, x1
+    dark = (gray[wy0:wy1, wx0:wx1] < INK_LEVEL).astype(np.uint8)
+    count, _, stats, _ = cv2.connectedComponentsWithStats(dark, connectivity=8)
+    glyphs = [(wx0 + int(sx), wx0 + int(sx + sw)) for sx, sy, sw, sh, _ in stats[1:]
+              if sy > 0 and sy + sh < wy1 - wy0 and sh >= 0.3 * (r1 - r0)]
+    gap = max(3, int(round(height * FIT_GAP)))
+    changed = True
+    while changed:
+        changed = False
+        for g0, g1 in glyphs:
+            if g0 < x0 and x0 - g1 <= gap:
+                x0, changed = g0, True
+            if g1 > x1 and g0 - x1 <= gap:
+                x1, changed = g1, True
+    return x0, x1
+
+
+def fit_lines(ink, items, height, changes, gray=None):
+    """Fit line boxes to the lettering of the detector mask before OCR.
+
+    Grand Blue 102 pp. 27/42/47: a box 13 px tall over letters 17 px tall, or one
+    that started after the first letter ("MOUN" for "AMOUNT"), made the OCR drop
+    the line or misread it, and the speech came out split or wrong.  Boxes that
+    share whole rows (one box over "NOW," and half of the next line, another over
+    the next two lines) are cut again, one box per row of letters.  A box that
+    already holds its line is left exactly as it is.
+    """
+    boxes = [b for b, _ in items]
+    n = len(items)
+    parent = list(range(n))
+    def root(i):
+        while parent[i] != i:
+            i = parent[i]
+        return i
+    for i in range(n):
+        for j in range(i + 1, n):
+            a, b = boxes[i], boxes[j]
+            rows = min(a[3], b[3]) - max(a[1], b[1])
+            cols = min(a[2], b[2]) - max(a[0], b[0])
+            if rows >= FIT_OVERLAP * height and cols > 0.3 * min(a[2] - a[0], b[2] - b[0]) \
+                    and a[2] - a[0] > a[3] - a[1] and b[2] - b[0] > b[3] - b[1]:
+                parent[root(i)] = root(j)
+    groups = {}
+    for i in range(n):
+        groups.setdefault(root(i), []).append(i)
+    out = []
+    for members in groups.values():
+        # Only when a box holds two lines or more: boxes of a tilted paragraph overlap a little anyway.
+        if len(members) >= 2 and max(boxes[i][3] - boxes[i][1] for i in members) >= FIT_TALL * height:
+            union = (min(boxes[i][0] for i in members), min(boxes[i][1] for i in members),
+                     max(boxes[i][2] for i in members), max(boxes[i][3] for i in members))
+            x0, y0, x1, y1 = union
+            parts = []
+            counts = ink[y0:y1, x0:x1].sum(axis=1)
+            rows = counts > 0
+            runs = []
+            for r0, r1 in _runs(rows):
+                if r1 - r0 <= SPLIT_FACTOR * height:
+                    runs.append((r0, r1))
+                    continue
+                # Lines that touch (outlined lettering, tight leading) are cut where the
+                # ink nearly stops: a row or two with only a few pixels between them.
+                body = counts[r0:r1]
+                valley = body > FIT_VALLEY * float(np.median(body[body > 0]))
+                runs.extend((r0 + a, r0 + b) for a, b in _runs(valley, gap=0))
+            for r0, r1 in runs:
+                if r1 - r0 < MIN_PART * height:
+                    continue
+                cols = np.flatnonzero(ink[y0 + r0:y0 + r1, x0:x1].any(axis=0))
+                # The row keeps its letters past the boxes ("ISN'T IT?" lost "IT?").
+                px0, px1 = _ink_span(ink, x0 + int(cols[0]), x0 + int(cols[-1]) + 1, y0 + r0, y0 + r1, height,
+                                     [b for j, b in enumerate(boxes) if j not in members])
+                part = (px0, y0 + r0, px1, y0 + r1)
+                # The source is the box holding most of the row.
+                best = max(members, key=lambda i: min(part[3], boxes[i][3]) - max(part[1], boxes[i][1]))
+                parts.append((part, items[best][1]))
+            if len(parts) >= 2:
+                out.extend(parts)
+                changes.append(("refit", union, [b for b, _ in parts]))
+                continue
+        for i in members:
+            box, source = items[i]
+            x0, y0, x1, y1 = box
+            runs = _line_runs(ink, box, height) if x1 - x0 > y1 - y0 else []
+            # Only a run one line tall: a taller one is several lines, left to the split above.
+            if len(runs) != 1 or runs[0][1] - runs[0][0] > SPLIT_CHECK * height:
+                out.append(items[i])
+                continue
+            r0, r1 = runs[0]
+            others = [b for j, b in enumerate(boxes) if j != i]
+            # Even a row of the letters left outside the box makes the OCR drop the line.
+            tall = r0 < y0 or r1 > y1
+            nx0, nx1 = _ink_span(ink, x0, x1, r0, r1, height, others)
+            if gray is not None:
+                lo = max([b[2] for b in others if min(r1, b[3]) - max(r0, b[1]) > 0.5 * (r1 - r0) and b[2] <= x0] + [0])
+                hi = min([b[0] for b in others if min(r1, b[3]) - max(r0, b[1]) > 0.5 * (r1 - r0) and b[0] >= x1]
+                         + [ink.shape[1]])
+                nx0, nx1 = _glyph_span(gray, nx0, nx1, r0, r1, height, lo, hi)
+            wide = x0 - nx0 >= FIT_SIDE * height or nx1 - x1 >= FIT_SIDE * height
+            if not (tall or wide):
+                out.append(items[i])
+                continue
+            # A pixel of margin: the OCR misreads a line whose box clips the letters.
+            fitted = (max(0, nx0 - 1), max(0, (r0 if tall else min(y0, r0)) - 1),
+                      min(ink.shape[1], nx1 + 1), min(ink.shape[0], (r1 if tall else max(y1, r1)) + 1))
+            out.append((fitted, source))
+            changes.append(("fit", box, [fitted]))
+    return out
 
 
 # Two columns of text side by side in one bubble --------------------------------
@@ -665,6 +1089,108 @@ def column_cuts(gray, boxes):
     return cuts
 
 
+# Two paragraphs side by side that the detector boxed together --------------------
+
+BLOCK_GAP_X = 0.3   # letters closer than twice this (line heights) sideways are one paragraph
+BLOCK_GAP_Y = 0.5   # and lines closer than twice this (line heights) one under the other
+BLOCK_SHARE = 0.15  # a paragraph holds at least this share of a box's ink to cut the box
+
+
+def text_blocks(mask, boxes):
+    """Labels of the paragraphs of the detector mask: letters joined across word and line gaps."""
+    mask = np.asarray(mask) > 127
+    heights = [b[3] - b[1] for b in boxes if b[2] - b[0] > b[3] - b[1]]
+    if not heights:
+        return mask, None
+    height = float(np.median(heights))
+    gx, gy = max(1, int(round(BLOCK_GAP_X * height))), max(1, int(round(BLOCK_GAP_Y * height)))
+    grown = cv2.dilate(mask.astype(np.uint8), np.ones((2 * gy + 1, 2 * gx + 1), np.uint8))
+    return mask, cv2.connectedComponents(grown, connectivity=8)[1]
+
+
+def _box_blocks(mask, labels, box):
+    """{paragraph label: ink pixels} of the paragraphs a box holds a real share of."""
+    x0, y0, x1, y1 = (int(v) for v in box)
+    ink = labels[y0:y1, x0:x1][mask[y0:y1, x0:x1]]
+    if not ink.size:
+        return {}
+    ids, counts = np.unique(ink, return_counts=True)
+    return {int(i): int(c) for i, c in zip(ids, counts) if c >= BLOCK_SHARE * ink.size}
+
+
+def _paragraphs(mask, labels, boxes):
+    """Paragraph labels that hold the main ink of two line boxes or more."""
+    count = {}
+    for box in boxes:
+        blocks = _box_blocks(mask, labels, box)
+        if blocks:
+            main = max(blocks, key=blocks.get)
+            count[main] = count.get(main, 0) + 1
+        for label in blocks:  # a box across two paragraphs is a line of each
+            if len(blocks) >= 2:
+                count[label] = count.get(label, 0) + 1
+    return {label for label, n in count.items() if n >= 2}
+
+
+def block_cuts(mask, boxes):
+    """{line index: [(x0, x1), ...]} for line boxes across two paragraphs side by side.
+
+    Grand Blue 102 p3: "LET'S / JUST DO / AS HE / SAYS." in a bubble open to the page,
+    and "I JUST / KNOW IT'LL / COME BACK..." written on the page beside it, with no
+    outline between them; the detector drew one box over "I JUST  AS HE" and another
+    over "KNOW IT'LL  SAYS.", and the two speeches were read as one.  The letters of
+    each paragraph are joined across word and line gaps; a box whose ink falls in two
+    such paragraphs, each of two lines or more, is cut between them.  Spaced-out words
+    of one speech, or a lone word beside it, are never cut off.
+    """
+    mask, labels = text_blocks(mask, boxes)
+    if labels is None:
+        return {}
+    paragraphs = _paragraphs(mask, labels, boxes)
+    cuts = {}
+    for i, (x0, y0, x1, y1) in enumerate(boxes):
+        if x1 - x0 <= y1 - y0:
+            continue
+        blocks = _box_blocks(mask, labels, (x0, y0, x1, y1))
+        if len(blocks) < 2 or not set(blocks) <= paragraphs:
+            continue
+        spans = []
+        for label in blocks:
+            cols = np.flatnonzero(((labels[y0:y1, x0:x1] == label) & mask[y0:y1, x0:x1]).any(axis=0))
+            spans.append((x0 + int(cols[0]), x0 + int(cols[-1]) + 1))
+        spans.sort()
+        if all(a[1] < b[0] for a, b in zip(spans, spans[1:])):  # side by side, never interleaved
+            cuts[i] = spans
+    return cuts
+
+
+def paragraph_of(blocks, boxes):
+    """The paragraph label (of ``text_blocks``) holding most of the ink of ``boxes``, or None."""
+    mask, labels = blocks
+    if labels is None:
+        return None
+    total = {}
+    for box in boxes:
+        for label, count in _box_blocks(mask, labels, box).items():
+            total[label] = total.get(label, 0) + count
+    return max(total, key=total.get) if total else None
+
+
+def block_groups(mask, boxes):
+    """Line indexes grouped by paragraph; one group unless two paragraphs of two lines or more."""
+    mask, labels = text_blocks(mask, boxes)
+    if labels is None:
+        return [list(range(len(boxes)))]
+    groups = {}
+    for i, box in enumerate(boxes):
+        blocks = _box_blocks(mask, labels, box)
+        key = max(blocks, key=blocks.get) if blocks else None
+        groups.setdefault(key, []).append(i)
+    if None in groups or len(groups) < 2 or min(len(g) for g in groups.values()) < 2:
+        return [list(range(len(boxes)))]
+    return list(groups.values())
+
+
 def column_groups(boxes):
     """Line indexes split into columns that share no horizontal span, left to right; one group when not."""
     order = sorted(range(len(boxes)), key=lambda i: boxes[i][0])
@@ -742,6 +1268,7 @@ def paragraph_lines(boxes, height):
 
 
 STAIR_FACTOR = 2.6  # an orphan this tall may be two touching lines
+STAIR_SHARED = 0.8  # the two lines of a staircase overlap sideways less than this share
 
 
 def stair_lines(pixels, x, y, height):
@@ -773,6 +1300,9 @@ def stair_lines(pixels, x, y, height):
         boxes.append((x + int(cols[0]), y + y0 + int(rows[0]), x + int(cols[-1]) + 1, y + y0 + int(rows[-1]) + 1))
     if boxes[0][2] - boxes[0][0] > 0.95 * w and boxes[1][2] - boxes[1][0] > 0.95 * w:
         return []  # one tall line or two stacked lines across the whole blob: not a staircase
+    shared = min(boxes[0][2], boxes[1][2]) - max(boxes[0][0], boxes[1][0])
+    if shared >= STAIR_SHARED * min(boxes[0][2] - boxes[0][0], boxes[1][2] - boxes[1][0]):
+        return []  # one half inside the other: one line of big letters (Grand Blue 102 p31), not two offset lines
     return boxes
 
 
@@ -798,7 +1328,7 @@ def _text_rows(ink):
     if len(comps) < 2:
         return None
     med = float(np.median([c[3] for c in comps]))
-    letters = [c for c in comps if 0.5 * med <= c[3] <= 1.6 * med and c[2] <= 2.5 * med]
+    letters = [c for c in comps if 0.5 * med <= c[3] <= 1.6 * med and 0.2 * med <= c[2] <= 2.5 * med]
     if sum(c[4] for c in letters) < 0.7 * sum(c[4] for c in comps):
         return None
     rows = []
@@ -817,18 +1347,36 @@ def _text_rows(ink):
         if gaps and max(gaps) > 1.5 * med:
             continue
         words += len(cs) >= 2
-        out.append((min(c[0] for c in cs), min(c[1] for c in cs),
-                    max(c[0] + c[2] for c in cs), max(c[1] + c[3] for c in cs)))
+        out.append(((min(c[0] for c in cs), min(c[1] for c in cs),
+                     max(c[0] + c[2] for c in cs), max(c[1] + c[3] for c in cs)), len(cs)))
     if not words:
         return None
-    out.sort(key=lambda b: b[1])
-    if any(b[1] - a[3] > 1.2 * med for a, b in zip(out, out[1:])):
+    out.sort(key=lambda r: r[0][1])
+    blocks = [[out[0]]]
+    for row in out[1:]:
+        if row[0][1] - blocks[-1][-1][0][3] > 1.2 * med:
+            blocks.append([])
+        blocks[-1].append(row)
+    # A lone mark far from the text (one piece on its own row: a stutter letter half
+    # outside the bubble, a stroke of the art) does not make the rest less of a speech.
+    kept = [b for b in blocks if len(b) > 1 or b[0][1] >= 2]
+    # With a mark left out, the rest has to hold a word of three letters or more.
+    if len(kept) != 1 or (len(kept) < len(blocks) and max(n for _, n in kept[0]) < 3):
         return None
+    blocks = kept
+    out = [box for box, _ in blocks[0]]
+    # Punctuation under the last row ("SORRY / ...") is a row of its own: lettering, not a drawn sound.
+    x0, _, x1, y1 = out[-1]
+    dots = [c for c in comps if c[3] < 0.5 * med and x0 <= c[0] and c[0] + c[2] <= x1 and 0 <= c[1] - y1 <= 1.2 * med]
+    if len(dots) >= 2:
+        out.append((min(c[0] for c in dots), min(c[1] for c in dots),
+                    max(c[0] + c[2] for c in dots), max(c[1] + c[3] for c in dots)))
     return out
 
 
 SCAN_SPLIT = 15           # disc (px) that cuts a bubble off a light background it leaks into
 SCAN_SEEN = 0.5           # share of a box inside a cut-off bubble that means the detector saw it
+SCAN_GRAZE = 0.02         # a box with less of itself inside a bubble that leaks out only grazes it
 
 
 def bubble_text_lines(image, boxes):
@@ -852,7 +1400,13 @@ def bubble_text_lines(image, boxes):
         if bubble:
             found.append(bubble)
         elif reason == "open":
-            found.extend(_split_bubble(gray, raw, labels, i, stats[i], boxes))
+            pieces = _split_bubble(gray, raw, labels, i, stats[i], boxes)
+            if not pieces:
+                # The white leaks out to the page and only grazes the boxes of the bubble next
+                # door (Grand Blue 102 p20, "SORRY..."): those boxes do not mean this one was seen.
+                bubble, _ = _scan_bubble(gray, raw, labels, i, stats[i], kernel, boxes, SCAN_GRAZE)
+                pieces = [bubble] if bubble else []
+            found.extend(pieces)
     return found
 
 
@@ -924,7 +1478,8 @@ def _scan_bubble(gray, raw, labels, i, stats, kernel, boxes, seen):
     if abs(tx - cw / 2) > SCAN_CENTRE[0] * cw or abs(ty - ch / 2) > SCAN_CENTRE[1] * ch:
         return None, "centre"
     letters = np.zeros((h, w), bool)
-    letters[y0:y1, x0:x1] = ink
+    for a, b, c, d in rows:  # only the ink of the rows: never a stroke of the art beside them
+        letters[y0 + max(0, b - 2):y0 + d + 2, x0 + max(0, a - 2):x0 + c + 2] = ink[max(0, b - 2):d + 2, max(0, a - 2):c + 2]
     rows = [(x0 + a, y0 + b, x0 + c, y0 + d) for a, b, c, d in rows]
     rows, y1 = _rows_below(gray, rows, letters, (x0, x1), y1)
     return ((x0, y0, x1, y1), rows, letters), None
