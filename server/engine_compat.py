@@ -863,7 +863,26 @@ def keep_clean_copy(original_render):
     async def render(self, config, ctx):
         image = getattr(ctx, "img_inpainted", None)
         ctx.mangalate_clean = image.copy() if image is not None else None
-        return await original_render(self, config, ctx)
+        lines = []
+        try:  # a panel border the cleaning cut where it crossed the text is drawn back after the lettering
+            import numpy as np
+            from quality import through_lines
+            for region in ctx.text_regions or []:
+                heights = [float(np.linalg.norm(np.asarray(l[3]) - np.asarray(l[0]))) for l in region.lines]
+                lines += through_lines(ctx.img_rgb, ctx.mask, region.xyxy,
+                                       float(np.median(heights)) if heights else float(region.font_size))
+        except Exception as exc:  # never lose a page over this
+            print(f"Line redraw skipped: {type(exc).__name__}", flush=True)
+            lines = []
+        result = await original_render(self, config, ctx)
+        if lines and ctx.mangalate_clean is not None:
+            try:
+                from quality import redraw_lines
+                result = redraw_lines(result, ctx.mangalate_clean, ctx.mask, lines)
+                print(f"Line redraw: {len(lines)} line(s) through the text drawn back", flush=True)
+            except Exception as exc:  # never lose a page over this
+                print(f"Line redraw skipped: {type(exc).__name__}", flush=True)
+        return result
     return render
 
 

@@ -554,6 +554,110 @@ def glyphs_to_clean(image, box, line_height):
     return (whole & limit) | ((cv2.dilate(glyphs.astype(np.uint8), kernel) > 0) & box_limit)
 
 
+THROUGH_DARK = 135    # line art is darker than this (0-255; thin anti-aliased lines reach ~130)
+THROUGH_REACH = 1.5   # a line is followed this far outside the mask, in line heights
+THROUGH_RUN = 1.0     # and must continue at least this far on each side of the text, in line heights
+THROUGH_THIN = 0.3    # at most this thick, in line heights (a panel border)
+THROUGH_AIM = 0.15    # each side, carried straight across the text, meets the other within this, in line heights
+
+
+def through_lines(image, mask, box, line_height):
+    """Straight art lines, like a panel border, that the cleaning mask cuts where they cross the text.
+
+    Text written on the page often runs over the border of a panel; the detector marks the
+    bits of line between the letters, and the cleaning erased the border and joined the two
+    panels (Grand Blue 102 p3).  A thin dark line that leaves the mask on two opposite sides,
+    both sides on one straight line, is art.  Returns ``[((xa, ya), (xb, yb), thickness, grey)]``
+    in page coordinates, to draw back with ``redraw_lines`` after the lettering.  A stroke
+    that ends among the letters may be part of them, and a curved line (a bubble outline)
+    is not rebuilt under the letters.
+    """
+    lh = max(4.0, float(line_height))
+    h, w = mask.shape[:2]
+    reach = int(round(THROUGH_REACH * lh)) + 2
+    x0, y0, x1, y1 = (int(v) for v in box)
+    wx0, wy0, wx1, wy1 = max(0, x0 - reach), max(0, y0 - reach), min(w, x1 + reach), min(h, y1 + reach)
+    if wx1 <= wx0 or wy1 <= wy0:
+        return []
+    m = np.asarray(mask)[wy0:wy1, wx0:wx1] > 0
+    if not m.any():
+        return []
+    gray = cv2.cvtColor(np.ascontiguousarray(np.asarray(image)[wy0:wy1, wx0:wx1, :3]), cv2.COLOR_RGB2GRAY)
+    near = cv2.dilate(m.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+    dist = cv2.distanceTransform((~m).astype(np.uint8), cv2.DIST_L2, 3)
+    outside = (gray < THROUGH_DARK) & ~m & (dist <= reach)
+    count, labels = cv2.connectedComponents(outside.astype(np.uint8), connectivity=8)
+    ends = []
+    for k in range(1, count):
+        ys, xs = np.nonzero(labels == k)
+        touch = near[ys, xs]
+        if not touch.any() or len(xs) < 3:
+            continue
+        pts = np.stack([xs, ys], 1).astype(np.float64)
+        axis = np.linalg.svd(pts - pts.mean(0), full_matrices=False)[2][0]
+        along = (pts - pts.mean(0)) @ axis
+        length = float(along.max() - along.min() + 1)
+        thick = len(pts) / length
+        if length >= THROUGH_RUN * lh and thick <= THROUGH_THIN * lh:
+            ends.append((pts, axis, pts[touch].mean(0), thick, float(np.median(gray[ys, xs]))))
+    def miss(end, point):
+        # Distance from ``point`` to the end's own line, carried straight on.
+        offset = point - end[0].mean(0)
+        return abs(offset[0] * end[1][1] - offset[1] * end[1][0])
+    pairs = []
+    for i in range(len(ends)):
+        for j in range(i + 1, len(ends)):
+            a, b = ends[i][2], ends[j][2]
+            chord = b - a
+            if np.linalg.norm(chord) < lh:
+                continue
+            steps = np.linspace(0, 1, max(2, int(np.linalg.norm(chord))))
+            xs, ys = np.round(a[None] + steps[:, None] * chord[None]).astype(int).T
+            if m[ys, xs].mean() < 0.5:
+                continue  # both ends on the same side of the text
+            err = max(miss(ends[i], b), miss(ends[j], a))
+            if err <= THROUGH_AIM * lh:
+                pairs.append((err, i, j))
+    lines, used = [], set()
+    for _, i, j in sorted(pairs):  # the straightest first
+        if i in used or j in used:
+            continue
+        used |= {i, j}
+        pts = np.concatenate([ends[i][0], ends[j][0]])
+        centre = pts.mean(0)
+        axis = np.linalg.svd(pts - centre, full_matrices=False)[2][0]
+        # From one contact to the other, on the line fitted to both sides, overlapping them a little.
+        ta, tb = sorted(float((ends[k][2] - centre) @ axis) for k in (i, j))
+        pa, pb = centre + (ta - 2) * axis, centre + (tb + 2) * axis
+        lines.append(((pa[0] + wx0, pa[1] + wy0), (pb[0] + wx0, pb[1] + wy0),
+                      (ends[i][3] + ends[j][3]) / 2, (ends[i][4] + ends[j][4]) / 2))
+    return lines
+
+
+REDRAW_GAP = 2        # px of paper left between a line drawn back and the new letters, as around the original ones
+
+
+def redraw_lines(rendered, clean, mask, lines):
+    """Draw ``through_lines`` back on the finished page, inside the cleaned area and a little apart from the new letters."""
+    if not lines:
+        return rendered
+    draw = np.zeros(rendered.shape[:2], bool)
+    shade = np.zeros(rendered.shape[:2], np.uint8)
+    for (xa, ya), (xb, yb), thick, grey in lines:
+        axis = np.zeros(rendered.shape[:2], np.uint8)
+        cv2.line(axis, (int(round(xa)), int(round(ya))), (int(round(xb)), int(round(yb))), 255, 1)
+        # As wide as measured: cv2's own thickness draws wider than asked.
+        band = cv2.distanceTransform((axis == 0).astype(np.uint8), cv2.DIST_L2, 3) <= (max(1, round(thick)) - 1) / 2
+        shade[band] = int(round(grey))
+        draw |= band
+    lettered = np.any(rendered[:, :, :3] != clean[:, :, :3], axis=2).astype(np.uint8)
+    gap = 2 * REDRAW_GAP + 1
+    draw &= (np.asarray(mask) > 0) & (cv2.dilate(lettered, np.ones((gap, gap), np.uint8)) == 0)
+    out = rendered.copy()
+    out[draw, :3] = shade[draw][:, None]
+    return out
+
+
 # Line boxes from the detector mask -----------------------------------------
 
 INK = 127

@@ -1251,3 +1251,84 @@ class OuroSevenTest(unittest.TestCase):
         d.text((150, 290), "HOLE...", fill="black", font=font)
         found = quality.bubble_text_lines(np.array(img), [])
         self.assertEqual([len(rows) for _, rows, _ in found], [2])
+
+
+class ThroughLineTest(unittest.TestCase):
+    """Grand Blue 102 p3: text written on the page ran over the panel border and the outline of the
+    bubble beside it; the cleaning erased both lines and the two panels ran into each other."""
+
+    TEXTS = ["I JUST", "KNOW IT'LL", "COME BACK", "TO BITE US"]
+
+    def page(self, border=True, outline=True, border_end=None):
+        image = np.full((400, 300, 3), 255, np.uint8)
+        art = np.zeros((400, 300), np.uint8)
+        if border:
+            cv2.line(art, (149, 0), (149, 399 if border_end is None else border_end), 255, 3)
+        if outline:
+            cv2.ellipse(art, (330, 200), (150, 260), 0, 0, 360, 255, 2)
+        letters = np.zeros((400, 300), np.uint8)
+        boxes = TextBlockTest.lines(letters, self.TEXTS, 100, 150)
+        image[(art > 0) | (letters > 0)] = 0
+        # The cleaning mask covers the letters and the bits of line between them, as the detector's does.
+        mask = cv2.dilate(letters, np.ones((11, 11), np.uint8))
+        box = (min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes))
+        return image, mask, art > 0, letters > 0, box
+
+    def test_border_through_the_text_is_found(self):
+        image, mask, _, _, box = self.page()
+        lines = quality.through_lines(image, mask, box, 18)
+        self.assertEqual(len(lines), 1, lines)
+        (xa, ya), (xb, yb), thick, grey = lines[0]
+        self.assertTrue(abs(xa - 149) <= 1 and abs(xb - 149) <= 1, lines)
+        rows = np.nonzero((mask > 0).any(axis=1))[0]
+        self.assertTrue(min(ya, yb) <= rows.min() and max(ya, yb) >= rows.max(), (lines, rows.min(), rows.max()))
+        self.assertTrue(4 <= thick <= 6 and grey < 60, lines)  # cv2 draws thickness 3 five pixels wide
+
+    def test_border_is_drawn_back_beside_the_new_letters(self):
+        image, mask, _, _, box = self.page()
+        lines = quality.through_lines(image, mask, box, 18)
+        clean = image.copy()
+        clean[mask > 0] = 255
+        rendered = clean.copy()
+        cv2.putText(rendered, "NOVO", (120, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+        out = quality.redraw_lines(rendered, clean, mask, lines)
+        changed = np.any(out != rendered, axis=2)
+        self.assertTrue(changed[150:250, 147:152].mean() > 0.4)   # the border is back across the text
+        self.assertFalse(changed[:, :140].any() or changed[:, 158:].any())
+        letters = np.any(rendered != clean, axis=2)
+        self.assertTrue(np.array_equal(out[letters], rendered[letters]))  # the new letters stay on top
+        near = cv2.dilate(letters.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+        self.assertFalse((changed & near).any())  # with a little paper around them, as around the original letters
+        self.assertFalse((changed & (mask == 0)).any())  # only where the cleaning erased
+        widths = [int(changed[y].sum()) for y in range(150, 250) if changed[y].any()]
+        self.assertTrue(widths and max(widths) <= 5, widths)  # as wide as the border, not wider
+
+    def test_each_line_keeps_its_own_grey(self):
+        page = np.full((200, 200, 3), 255, np.uint8)
+        clean, mask = page.copy(), np.full((200, 200), 255, np.uint8)
+        lines = [((50, 10), (50, 190), 3, 0), ((150, 10), (150, 190), 3, 120)]
+        out = quality.redraw_lines(page, clean, mask, lines)
+        self.assertEqual((int(out[100, 50, 0]), int(out[100, 150, 0])), (0, 120))
+
+    def test_parallel_hatching_across_the_text_is_not_rebuilt(self):
+        # Hatching under the text: strokes on each side, but offset, never one line carried across.
+        image, mask, _, _, box = self.page(border=False, outline=False)
+        for x in range(60, 260, 12):
+            cv2.line(image, (x, 60), (x, 134), (0, 0, 0), 1)
+            cv2.line(image, (x + 5, 226), (x + 5, 300), (0, 0, 0), 1)
+        image[mask > 0] = np.where(image[mask > 0] == 0, 0, 255)
+        self.assertEqual(quality.through_lines(image, mask, box, 18), [])
+
+    def test_text_without_lines_is_untouched(self):
+        image, mask, _, _, box = self.page(border=False, outline=False)
+        self.assertEqual(quality.through_lines(image, mask, box, 18), [])
+
+    def test_curved_outline_is_not_rebuilt(self):
+        # A curve is not rebuilt under the letters: a straight line would cut through them.
+        image, mask, _, _, box = self.page(border=False)
+        self.assertEqual(quality.through_lines(image, mask, box, 18), [])
+
+    def test_stroke_ending_inside_the_text_is_not_rebuilt(self):
+        # A line that stops among the letters may be part of them: nothing to draw back.
+        image, mask, _, _, box = self.page(outline=False, border_end=175)
+        self.assertEqual(quality.through_lines(image, mask, box, 18), [])
