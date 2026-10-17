@@ -15,6 +15,7 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 - MANGALATE_FONT=simples volta para a Arial do motor.
 
 ### Tradução e balões
+- Um balão branco que o detector não viu e cujo contorno se abre para um fundo claro (céu, papel), por exemplo onde uma onomatopeia cruza a borda, agora é encontrado e traduzido em vez de ficar em inglês. A busca separa o balão do fundo pela fresta; uma caixa que só cruza a borda não o esconde mais, e uma fala já detectada não é lida duas vezes.
 - Um balão de várias linhas que o detector marcou mas não separou em linhas ("--THOUGH I / MAY OFFER SOME / SUGGESTIONS...") agora é lido e traduzido em vez de ficar em inglês.
 - Quando a tradução perde o "não" do original ("I'm not..." virando afirmação), o servidor pede de novo apontando o problema.
 - Instruções da IA: o OCR costuma ler U como LI ("LINEAMILIAR" = UNFAMILIAR), e um nome entre vírgulas é com quem se fala ("E, General Arthur, você vai...").

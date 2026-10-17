@@ -618,6 +618,67 @@ class BubbleScanTest(unittest.TestCase):
         self.assertEqual(drawn, [sound])
 
 
+class LeakingBubbleScanTest(unittest.TestCase):
+    """A white bubble whose outline is broken where it meets a light background.
+
+    Found on a real page: a sound effect lettered across the bubble outline left gaps,
+    the bubble white ran into the light sky of the panel, and the scan saw one jagged
+    white area touching the sound effect box, so the speech stayed in English.
+    """
+
+    SOUND = (398, 300, 440, 470)  # vertical sound effect box across the gaps, mostly outside the bubble
+
+    @staticmethod
+    def font(size):
+        from PIL import ImageFont
+        return ImageFont.truetype(str(Path(__file__).resolve().parents[1] / "fonts" / "ComicNeue-Bold.ttf"), size)
+
+    def page(self, content="text", gap=10):
+        from PIL import Image, ImageDraw
+        img = Image.new("RGB", (900, 1200), (120, 120, 120))
+        d = ImageDraw.Draw(img)
+        d.rectangle((420, 250, 600, 450), fill=(240, 240, 240))  # light sky beside the bubble
+        d.ellipse((190, 250, 410, 550), fill="white", outline="black", width=4)
+        if gap:  # the outline broken twice towards the sky, as between sound effect letters
+            d.rectangle((395, 330, 425, 330 + gap - 1), fill="white")
+            d.rectangle((395, 380, 425, 380 + gap - 1), fill="white")
+        for k, y in enumerate(range(305, 465, 40)):  # the sound effect letters, dark, across the gaps
+            d.text((404, y), "HUH!"[k], fill="black", font=self.font(30))
+        if content == "text":
+            font = self.font(26)
+            for y, line in ((365, "WE CAN"), (400, "GO NOW.")):
+                w = d.textlength(line, font=font)
+                d.text((300 - w / 2, y), line, fill="black", font=font)
+        elif content == "face":
+            d.ellipse((255, 355, 345, 445), outline="black", width=3)
+            d.ellipse((277, 382, 289, 394), fill="black")
+            d.ellipse((311, 382, 323, 394), fill="black")
+            d.arc((282, 406, 318, 424), 0, 180, fill="black", width=3)
+        return np.array(img)
+
+    def test_speech_in_a_bubble_open_to_a_light_background_is_found(self):
+        found = quality.bubble_text_lines(self.page(), [self.SOUND])
+        self.assertEqual(len(found), 1)
+        bubble, rows, letters = found[0]
+        self.assertEqual(len(rows), 2)
+        self.assertLess(bubble[2], 430, bubble)  # the bubble alone, not the sky
+        for x0, y0, x1, y1 in rows:
+            self.assertTrue(200 < x0 < 300 < x1 < 400 and 350 < y0 < y1 < 450, rows)
+        self.assertFalse(letters[:, 398:].any())  # the sound effect is not taken as speech
+
+    def test_closed_bubble_touching_the_sound_box_is_unchanged(self):
+        self.assertEqual(quality.bubble_text_lines(self.page(gap=0), [self.SOUND]), [])
+
+    def test_face_in_an_open_bubble_is_not_speech(self):
+        self.assertEqual(quality.bubble_text_lines(self.page(content="face"), [self.SOUND]), [])
+
+    def test_open_bubble_already_detected_is_skipped(self):
+        self.assertEqual(quality.bubble_text_lines(self.page(), [self.SOUND, (240, 360, 360, 440)]), [])
+
+    def test_sky_alone_is_not_a_bubble(self):
+        self.assertEqual(quality.bubble_text_lines(self.page(content=None), [self.SOUND]), [])
+
+
 class ContainedRegionTest(unittest.TestCase):
     """Grand Blue p25: the tilted "LIKE" had its own region inside "LOOKS / IORI SCORED..."."""
 
