@@ -2,6 +2,11 @@
 
 As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://github.com/mihonapp/mihon/blob/main/CHANGELOG.md).
 
+## Em teste
+
+### Tradução e balões
+- Um balão com letra pequena, numa página em que outro balão tem letras bem maiores (um grito em itálico), agora é lido e traduzido em vez de ficar em inglês. O detector marcava o texto, mas as linhas pequenas eram descartadas por terem menos da metade da altura de linha da página. Agora elas valem quando formam um parágrafo de duas linhas ou mais, medidas pela própria altura. Letra solta empilhada (onomatopeia vertical) continua de fora.
+
 ## 0.5.7
 
 ### Letreiramento

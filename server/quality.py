@@ -434,6 +434,10 @@ SPLIT_INSIDE = 0.25   # a row run must reach this far into the box to be one of 
 MIN_PART = 0.45       # a split part shorter than this share of a line is noise
 ORPHAN_COVERED = 0.2  # mask pixels already under a box above this share are not orphans
 NEAR_LINES = 1.6      # an orphan line must sit this many line heights from a known one
+ORPHAN_MIN = 0.5      # an orphan line is at least this many line heights tall
+SMALL_LINE = 0.3      # smaller orphans, from this many line heights, may still be a paragraph of small lettering
+SMALL_LINE_PX = 8     # never below this height in pixels
+SMALL_LINE_WIDTH = 1.5  # and their ink is this many times wider than tall: a lone letter is not a line
 
 
 def _box(points):
@@ -555,9 +559,18 @@ def repair_lines(mask, boxes):
     count, labels, stats, _ = cv2.connectedComponentsWithStats(lines, connectivity=8)
     current = [b for b, _ in result]
     lonely = []  # line-shaped orphans far from any box: kept only as a paragraph (below)
+    small = []   # lines in smaller letters than the page's (a quiet bubble beside a shout): same rule
     for label in range(1, count):
         x, y, bw, bh = (int(v) for v in stats[label, :4])
-        if not (0.5 * height <= bh <= STAIR_FACTOR * height and bw >= height):
+        if max(SMALL_LINE_PX, SMALL_LINE * height) <= bh < ORPHAN_MIN * height:
+            # The component was widened to join the letters; the line shape is read on the ink itself.
+            pixels = (labels[y:y + bh, x:x + bw] == label) & ink[y:y + bh, x:x + bw]
+            cols = np.flatnonzero(pixels.any(axis=0))
+            if len(cols) and cols[-1] - cols[0] + 1 >= SMALL_LINE_WIDTH * bh \
+                    and known[y:y + bh, x:x + bw][pixels].mean() <= ORPHAN_COVERED:
+                small.append((x + int(cols[0]), y, x + int(cols[-1]) + 1, y + bh))
+            continue
+        if not (ORPHAN_MIN * height <= bh <= STAIR_FACTOR * height and bw >= height):
             continue
         pixels = (labels[y:y + bh, x:x + bw] == label) & ink[y:y + bh, x:x + bw]
         if not pixels.any() or known[y:y + bh, x:x + bw][pixels].mean() > ORPHAN_COVERED:
@@ -574,6 +587,10 @@ def repair_lines(mask, boxes):
         elif len(boxes_here) == 1:
             lonely.extend(boxes_here)
     paragraph = paragraph_lines(lonely, height)
+    # Grand Blue 102 p39: the page height came from big shouting, so small lines are
+    # measured on their own height, each size in turn.
+    for size in sorted({b[3] - b[1] for b in small}):
+        paragraph += [b for b in paragraph_lines(small, float(size)) if b not in paragraph]
     if paragraph:
         result.extend((box, None) for box in paragraph)
         changes.append(("added", None, paragraph))

@@ -298,6 +298,46 @@ class LineRepairTest(unittest.TestCase):
         _, changes = repair_lines(mask, boxes)
         self.assertEqual(changes, [])
 
+    def big_and_small(self, small_lines):
+        # Big shouted lettering sets the page line height; a small bubble far from it has no box.
+        mask = np.zeros((520, 640), np.uint8)
+        boxes = []
+        for i, text in enumerate(["HOW CAN", "THIS BE", "SO HARD"]):
+            (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.6, 4)
+            x, y = 600 - w, 80 + i * 70
+            cv2.putText(mask, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1.6, 255, 4)
+            boxes.append((x - 2, y - h - 3, x + w + 2, y + 4))
+        small = []
+        for i, text in enumerate(small_lines):
+            (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.0, 2)
+            x, y = 90 - w // 2, 350 + i * 34
+            cv2.putText(mask, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1.0, 255, 2)
+            small.append((x, y - h, x + w, y))
+        return mask, boxes, small
+
+    def test_small_paragraph_on_a_page_of_big_lettering_is_added(self):
+        # Grand Blue 102 p39: a three-line bubble in small letters next to a bubble
+        # of big italic shouting was in the mask, but under half the page line height.
+        mask, boxes, small = self.big_and_small(["DONT", "SAY", "MORE!"])
+        repaired, changes = repair_lines(mask, boxes)
+        added = sorted((box for box, source in repaired if source is None), key=lambda b: b[1])
+        self.assertEqual(len(added), 3)
+        for box, line in zip(added, small):
+            self.assertTrue(line[1] - 2 <= box[1] < box[3] <= line[3] + 3, (box, line))
+
+    def test_single_small_line_on_a_page_of_big_lettering_is_left(self):
+        mask, boxes, _ = self.big_and_small(["SAY"])
+        _, changes = repair_lines(mask, boxes)
+        self.assertEqual(changes, [])
+
+    def test_stacked_single_letters_on_a_page_of_big_lettering_are_left(self):
+        # Letters stacked one per row (a vertical sound effect) are not a paragraph of lines.
+        mask, boxes, _ = self.big_and_small([])
+        for i, letter in enumerate("ABCD"):
+            cv2.putText(mask, letter, (300, 300 + i * 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, 255, 2)
+        _, changes = repair_lines(mask, boxes)
+        self.assertEqual(changes, [])
+
     def test_hook_replaces_textlines_before_ocr(self):
         import asyncio
         import types
