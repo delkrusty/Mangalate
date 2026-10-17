@@ -827,6 +827,10 @@ def _text_rows(ink):
     return out
 
 
+SCAN_SPLIT = 15           # disc (px) that cuts a bubble off a light background it leaks into
+SCAN_SEEN = 0.5           # share of a box inside a cut-off bubble that means the detector saw it
+
+
 def bubble_text_lines(image, boxes):
     """Text lines inside white bubbles that no detected box touches.
 
@@ -844,40 +848,86 @@ def bubble_text_lines(image, boxes):
     n, labels, stats, _ = cv2.connectedComponentsWithStats(opened, connectivity=4)
     found = []
     for i in range(1, n):
-        x, y, bw, bh, area = (int(v) for v in stats[i])
-        if not SCAN_AREA[0] * h * w <= area <= SCAN_AREA[1] * h * w:
-            continue
-        if x == 0 or y == 0 or x + bw >= w or y + bh >= h:
-            continue
-        # Back to the full white area the opening trimmed (thin strips between letters).
-        g = 6
-        x0, y0, x1, y1 = max(0, x - g), max(0, y - g), min(w, x + bw + g), min(h, y + bh + g)
-        if any(min(x1, b[2]) > max(x0, b[0]) and min(y1, b[3]) > max(y0, b[1]) for b in boxes):
-            continue
-        comp = cv2.dilate((labels[y0:y1, x0:x1] == i).astype(np.uint8), kernel) & raw[y0:y1, x0:x1]
-        contours, _ = cv2.findContours(comp, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        outline = max(contours, key=cv2.contourArea)
-        filled = cv2.drawContours(np.zeros_like(comp), [outline], -1, 1, -1)
-        if filled.sum() < SCAN_SOLIDITY * cv2.contourArea(cv2.convexHull(outline)):
-            continue
-        inner = cv2.erode(filled, np.ones((7, 7), np.uint8)) > 0
-        ink = inner & (comp == 0) & (gray[y0:y1, x0:x1] < SCAN_INK)
-        if not SCAN_INK_SHARE[0] <= ink.sum() / max(1, filled.sum()) <= SCAN_INK_SHARE[1]:
-            continue
-        rows = _text_rows(ink)
-        if not rows:
-            continue
-        cw, ch = x1 - x0, y1 - y0
-        tx = (min(r[0] for r in rows) + max(r[2] for r in rows)) / 2
-        ty = (rows[0][1] + rows[-1][3]) / 2
-        if abs(tx - cw / 2) > SCAN_CENTRE[0] * cw or abs(ty - ch / 2) > SCAN_CENTRE[1] * ch:
-            continue
-        letters = np.zeros((h, w), bool)
-        letters[y0:y1, x0:x1] = ink
-        rows = [(x0 + a, y0 + b, x0 + c, y0 + d) for a, b, c, d in rows]
-        rows, y1 = _rows_below(gray, rows, letters, (x0, x1), y1)
-        found.append(((x0, y0, x1, y1), rows, letters))
+        bubble, reason = _scan_bubble(gray, raw, labels, i, stats[i], kernel, boxes, None)
+        if bubble:
+            found.append(bubble)
+        elif reason == "open":
+            found.extend(_split_bubble(gray, raw, labels, i, stats[i], boxes))
     return found
+
+
+def _split_bubble(gray, raw, labels, label, stats, boxes):
+    """Bubbles cut off a white area that was rejected as jagged or as touching a box.
+
+    A sound effect lettered across the outline left gaps, the bubble white ran into
+    the light sky of the panel and the whole area touched the sound effect box.  A bigger opening cuts the bubble off at the gaps; each piece goes
+    through the same checks, and only a box mostly inside a piece counts as seen.
+    """
+    x, y, bw, bh = (int(v) for v in stats[:4])
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (SCAN_SPLIT, SCAN_SPLIT))
+    pieces = cv2.morphologyEx((labels[y:y + bh, x:x + bw] == label).astype(np.uint8), cv2.MORPH_OPEN, kernel)
+    n, cut, cut_stats, _ = cv2.connectedComponentsWithStats(pieces, connectivity=4)
+    if n <= 2:  # nothing was cut off: the area really is jagged or seen
+        return []
+    page = np.zeros_like(labels)
+    page[y:y + bh, x:x + bw] = cut
+    found = []
+    for i in range(1, n):
+        piece = cut_stats[i].copy()
+        piece[0] += x
+        piece[1] += y
+        bubble, _ = _scan_bubble(gray, raw, page, i, piece, kernel, boxes, SCAN_SEEN)
+        if bubble:
+            found.append(bubble)
+    return found
+
+
+def _scan_bubble(gray, raw, labels, i, stats, kernel, boxes, seen):
+    """(bubble, None) when component ``i`` is an undetected bubble with text, else (None, reason).
+
+    ``seen`` None: any box touching the area means the detector saw it.  A share:
+    only a box with at least that much of itself inside the area does.  Reason
+    "open" marks an area that may be a bubble joined to a light background.
+    """
+    h, w = gray.shape
+    x, y, bw, bh, area = (int(v) for v in stats)
+    if not SCAN_AREA[0] * h * w <= area <= SCAN_AREA[1] * h * w:
+        return None, "area"
+    if x == 0 or y == 0 or x + bw >= w or y + bh >= h:
+        return None, "edge"
+    # Back to the full white area the opening trimmed (thin strips between letters).
+    g = 6
+    x0, y0, x1, y1 = max(0, x - g), max(0, y - g), min(w, x + bw + g), min(h, y + bh + g)
+    touching = [b for b in boxes if min(x1, b[2]) > max(x0, b[0]) and min(y1, b[3]) > max(y0, b[1])]
+    if touching and seen is None:
+        return None, "open"
+    comp = cv2.dilate((labels[y0:y1, x0:x1] == i).astype(np.uint8), kernel) & raw[y0:y1, x0:x1]
+    contours, _ = cv2.findContours(comp, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    outline = max(contours, key=cv2.contourArea)
+    filled = cv2.drawContours(np.zeros_like(comp), [outline], -1, 1, -1)
+    for b in touching:
+        bx0, by0, bx1, by1 = max(b[0], x0) - x0, max(b[1], y0) - y0, min(b[2], x1) - x0, min(b[3], y1) - y0
+        if filled[by0:by1, bx0:bx1].sum() >= seen * max(1, (b[2] - b[0]) * (b[3] - b[1])):
+            return None, "seen"
+    if filled.sum() < SCAN_SOLIDITY * cv2.contourArea(cv2.convexHull(outline)):
+        return None, "open"
+    inner = cv2.erode(filled, np.ones((7, 7), np.uint8)) > 0
+    ink = inner & (comp == 0) & (gray[y0:y1, x0:x1] < SCAN_INK)
+    if not SCAN_INK_SHARE[0] <= ink.sum() / max(1, filled.sum()) <= SCAN_INK_SHARE[1]:
+        return None, "ink"
+    rows = _text_rows(ink)
+    if not rows:
+        return None, "rows"
+    cw, ch = x1 - x0, y1 - y0
+    tx = (min(r[0] for r in rows) + max(r[2] for r in rows)) / 2
+    ty = (rows[0][1] + rows[-1][3]) / 2
+    if abs(tx - cw / 2) > SCAN_CENTRE[0] * cw or abs(ty - ch / 2) > SCAN_CENTRE[1] * ch:
+        return None, "centre"
+    letters = np.zeros((h, w), bool)
+    letters[y0:y1, x0:x1] = ink
+    rows = [(x0 + a, y0 + b, x0 + c, y0 + d) for a, b, c, d in rows]
+    rows, y1 = _rows_below(gray, rows, letters, (x0, x1), y1)
+    return ((x0, y0, x1, y1), rows, letters), None
 
 
 def _rows_below(gray, rows, letters, span, bottom):
