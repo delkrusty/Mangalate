@@ -284,6 +284,9 @@ DANGLING_COST = 0.8      # a dangling word is accepted when avoiding it shrinks 
 SENTENCE_COST = 0.9      # likewise for a sentence that ends mid-line
 SHAPED_MARGIN = 0.3      # air between the letters and the outline, share of the line height (TBATE 237 p20:
                          # with 0.1 the caption text touched the box on both sides)
+CENTRE_ASYMMETRY = 1.0   # the rows are limited only when their middle is this far from the text, in line
+                         # heights: a fill leaked into the sky, not a closed bubble around the text
+CENTRE_SPARE = 2.0       # rows then kept above and below the original text box, in line heights
 
 
 def half_widths(mask, cx):
@@ -428,6 +431,12 @@ def plan_shaped(image, region_box, others, text, font_path, original_size, minim
         top -= 1
     while bottom < len(half) - 1 and half[bottom + 1] > 0:
         bottom += 1
+    # A fill that leaked into the sky of the panel (or text with no bubble) would pull the block
+    # several lines away from the text, over the outline of another bubble: the rows are then
+    # kept symmetric around the text up to the edge of the interior.  A closed bubble keeps them.
+    if abs((top + bottom) / 2 - cy) > CENTRE_ASYMMETRY * original_size:
+        reach = max(min(cy - top, bottom - cy), int(round((y1 - y0) / 2 + CENTRE_SPARE * original_size)))
+        top, bottom = max(top, cy - reach), min(bottom, cy + reach)
     floor = max(1, int(minimum))
     cap = max(floor, int(round(original_size * SHAPED_MAX_SCALE)) + int(offset))
 

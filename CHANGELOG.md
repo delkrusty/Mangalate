@@ -11,6 +11,7 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 - Uma frase que termina no meio de uma linha passa para a linha seguinte quando a letra continua do tamanho do original ("E se eles / levarem ela? / Por favor, vem.").
 - Mais espaço entre o texto e a borda de legendas e balões.
 - Balão que fura a borda do quadro e encosta na margem branca da página é reconhecido inteiro, em vez de o texto ficar espremido no tamanho da caixa original.
+- A tradução fica na altura do texto original quando a área clara em volta dele é bem maior que um balão (balão aberto que se junta ao céu do quadro, ou fala sem balão). Antes, o texto ia parar no meio dessa área, linhas longe do original e às vezes por cima do contorno de outro balão. Balões fechados continuam como estavam.
 - MANGALATE_FONT=simples volta para a Arial do motor.
 
 ### Tradução e balões
