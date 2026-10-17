@@ -338,6 +338,116 @@ class LineRepairTest(unittest.TestCase):
         _, changes = repair_lines(mask, boxes)
         self.assertEqual(changes, [])
 
+    def lettered(self, lines, step=34):
+        # Black letters on white, and the detector mask of the same letters.
+        gray = np.full((320, 420), 255, np.uint8)
+        ink = []
+        for i, text in enumerate(lines):
+            (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
+            x, y = 210 - w // 2, 60 + i * step
+            alone = np.full_like(gray, 255)
+            if not text:
+                ink.append(None)
+                continue
+            cv2.putText(alone, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.9, 0, 2)
+            gray = np.minimum(gray, alone)
+            rows, cols = np.flatnonzero((alone < 128).any(axis=1)), np.flatnonzero((alone < 128).any(axis=0))
+            ink.append((int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1))
+        mask = np.where(gray < 128, 255, 0).astype(np.uint8)
+        return gray, mask, ink
+
+    def test_box_clipping_the_letters_is_fitted(self):
+        # Grand Blue 102 pp. 27/47: a box a row or more short of the letters made the OCR drop the line.
+        gray, mask, ink = self.lettered(["THE KI", "RESTRAINER", "FUNCTIONED."])
+        x0, y0, x1, y1 = ink[1]
+        boxes = [ink[0], (x0, y0 + 2, x1, y1 - 3), ink[2]]
+        repaired, changes = repair_lines(mask, boxes)
+        self.assertEqual([kind for kind, _, _ in changes], ["fit"])
+        fitted = repaired[1][0]
+        self.assertTrue(fitted[1] <= y0 and fitted[3] >= y1, fitted)
+        self.assertLess(fitted[3] - fitted[1], (y1 - y0) + 4)  # still one line, not two
+
+    def test_box_missing_the_first_letter_grows_over_the_page(self):
+        # Grand Blue 102 p42: the mask missed the "A" of "AMOUNT" and the OCR read "MOUN".
+        gray, mask, ink = self.lettered(["THE KI", "RESTRAINER", "FUNCTIONED."])
+        x0, y0, x1, y1 = ink[1]
+        mask[:, :x0 + 18] = 0  # the detector lost the first letter
+        boxes = [ink[0], (x0 + 18, y0 - 1, x1 + 1, y1 + 1), ink[2]]
+        repaired, _ = repair_lines(mask, boxes, gray)
+        self.assertLessEqual(repaired[1][0][0], x0)
+        unchanged, _ = repair_lines(mask, boxes)  # without the page, the mask alone decides
+        self.assertEqual(unchanged[1][0][0], x0 + 18)
+
+    def test_outline_next_to_the_line_is_not_a_letter(self):
+        gray, mask, ink = self.lettered(["THE KI", "RESTRAINER", "FUNCTIONED."])
+        x0, y0, x1, y1 = ink[1]
+        cv2.line(gray, (x0 - 8, 10), (x0 - 8, 300), 0, 3)  # bubble outline, taller than any line
+        boxes = [ink[0], (x0 - 1, y0 - 1, x1 + 1, y1 + 1), ink[2]]
+        repaired, changes = repair_lines(mask, boxes, gray)
+        self.assertEqual(changes, [])
+        self.assertEqual([box for box, _ in repaired], boxes)
+
+    def test_overlapping_boxes_are_cut_line_by_line(self):
+        # Grand Blue 102 p20: one box over "NOW," and half the next line, another over the
+        # next two lines; the OCR dropped the second and the bubble stayed half in English.
+        gray, mask, ink = self.lettered(["NOW,", "HOLD", "ON.", "", "", "", "ANOTHER LINE", "AND ONE MORE"], step=26)
+        ink = ink[:3] + ink[6:]
+        first = (ink[0][0], ink[0][1], ink[0][2], ink[1][1] + 14)  # takes most of "HOLD" too
+        second = (min(ink[1][0], ink[2][0]) - 4, ink[0][3] - 6, max(ink[1][2], ink[2][2]) + 4, ink[2][3] + 12)
+        others = [(x0 - 1, y0 - 1, x1 + 1, y1 + 1) for x0, y0, x1, y1 in ink[3:]]  # one-line boxes elsewhere
+        repaired, changes = repair_lines(mask, [first, second] + others)
+        self.assertIn("refit", [kind for kind, _, _ in changes])
+        boxes = sorted((box for box, _ in repaired if box[1] < ink[3][1] - 10), key=lambda b: b[1])
+        self.assertEqual(len(boxes), 3)
+        for box, line in zip(boxes, ink):
+            self.assertTrue(box[1] <= line[1] + 1 and box[3] >= line[3] - 1 and box[3] - box[1] < 1.5 * (line[3] - line[1]),
+                            (box, line))
+
+    def test_tilted_paragraph_boxes_are_left_alone(self):
+        # Grand Blue 102 p3: boxes of a tilted paragraph overlap a little; none holds two lines.
+        gray, mask, ink = self.lettered(["I JUST KNOW", "IT WILL COME", "BACK TO US"], step=24)
+        boxes = [(x0 - 2, y0 - 2, x1 + 2, y1 + 8) for x0, y0, x1, y1 in ink]  # each reaches into the next line
+        _, changes = repair_lines(mask, boxes)
+        self.assertNotIn("refit", [kind for kind, _, _ in changes])
+
+    def big_lines(self):
+        # Small lettering elsewhere sets the page line height; two big lines touch through a few pixels.
+        mask = np.zeros((420, 640), np.uint8)
+        small = []
+        for i in range(4):
+            cv2.putText(mask, "SMALL TEXT", (20, 40 + i * 26), cv2.FONT_HERSHEY_SIMPLEX, 0.7, 255, 2)
+            small.append((18, 40 + i * 26 - 18, 170, 40 + i * 26 + 4))
+        cv2.putText(mask, "STUFF", (300, 220), cv2.FONT_HERSHEY_SIMPLEX, 2.4, 255, 12)
+        cv2.putText(mask, "IS IT", (300, 290), cv2.FONT_HERSHEY_SIMPLEX, 2.4, 255, 12)
+        rows = np.flatnonzero(mask[150:, 280:].any(axis=1)) + 150
+        return mask, small, rows
+
+    def test_touching_big_lines_are_cut_at_the_valley(self):
+        # Grand Blue 102 p31: "96%," and "ISN'T IT?" touch through their outlines; one box held both.
+        mask, small, rows = self.big_lines()
+        gap = rows[0] + int(np.argmin([mask[y, 280:].sum() for y in range(rows[0] + 30, rows[-1] - 30)])) + 30
+        mask[gap - 1:gap + 1, 400:404] = 255  # the lines touch at a few pixels
+        top, bottom = (296, rows[0] - 2, 520, gap + 6), (296, gap - 6, 520, rows[-1] + 2)
+        repaired, changes = repair_lines(mask, small + [top, bottom])
+        big = sorted((b for b, _ in repaired if b[1] > 140), key=lambda b: b[1])
+        self.assertEqual(len(big), 2, big)
+        self.assertLessEqual(big[0][3], gap + 1)
+        self.assertGreaterEqual(big[1][1], gap - 1)
+
+    def test_line_cut_again_keeps_its_letters_past_the_boxes(self):
+        # Grand Blue 102 p31: the boxes stopped before the last word of "ISN'T IT?"; cut again
+        # inside them, the line lost the word and the translation lost its tag question.
+        mask, small, rows = self.big_lines()
+        gap = rows[0] + int(np.argmin([mask[y, 280:].sum() for y in range(rows[0] + 30, rows[-1] - 30)])) + 30
+        mask[gap - 1:gap + 1, 400:404] = 255
+        end = int(np.flatnonzero(mask[gap:rows[-1] + 1, :].any(axis=0))[-1]) + 1
+        # The boxes end inside the last word, past a word gap.
+        top, bottom = (296, rows[0] - 2, end - 30, gap + 6), (296, gap - 6, end - 30, rows[-1] + 2)
+        repaired, _ = repair_lines(mask, small + [top, bottom])
+        big = sorted((b for b, _ in repaired if b[1] > 140), key=lambda b: b[1])
+        self.assertEqual(len(big), 2, big)
+        self.assertGreaterEqual(big[1][2], end - 1)
+
     def test_hook_replaces_textlines_before_ocr(self):
         import asyncio
         import types

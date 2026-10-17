@@ -636,7 +636,8 @@ def repair_textlines(original_detect):
         if image is not None:
             for box in boxes:
                 seen = seen | bubble_glyphs(np.asarray(image), box, box[3] - box[1], near=NEAR_LINES)
-        repaired, changes = repair_lines(seen.astype(np.uint8) * 255, boxes)
+        gray = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2GRAY) if image is not None else None
+        repaired, changes = repair_lines(seen.astype(np.uint8) * 255, boxes, gray)
         ctx.mangalate_line_repairs = [{"tipo": kind, "antes": before, "depois": after} for kind, before, after in changes]
         # One box across two columns of text in the same bubble is cut at the gutter.
         if image is not None:
@@ -688,8 +689,9 @@ def repair_textlines(original_detect):
         split = sum(1 for kind, _, _ in changes if kind == "split")
         scan = sum(1 for kind, _, _ in changes if kind == "bubble")
         column = sum(1 for kind, _, _ in changes if kind == "column")
-        print(f"Line repair: split={split} added={len(changes) - split - scan - column} scanned={scan} "
-              f"column_cuts={column}", flush=True)
+        fit = sum(1 for kind, _, _ in changes if kind in ("fit", "refit"))
+        print(f"Line repair: split={split} added={len(changes) - split - scan - column - fit} scanned={scan} "
+              f"column_cuts={column} fitted={fit}", flush=True)
         return (lines, mask_raw, mask) + tuple(result[3:])
     return detect
 

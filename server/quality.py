@@ -438,6 +438,11 @@ ORPHAN_MIN = 0.5      # an orphan line is at least this many line heights tall
 SMALL_LINE = 0.3      # smaller orphans, from this many line heights, may still be a paragraph of small lettering
 SMALL_LINE_PX = 8     # never below this height in pixels
 SMALL_LINE_WIDTH = 1.5  # and their ink is this many times wider than tall: a lone letter is not a line
+FIT_SIDE = 0.3        # ink running past the box end this far (line heights) widens the box
+FIT_OVERLAP = 0.5     # boxes sharing this many line heights of rows are cut again line by line
+FIT_TALL = 2.0       # boxes are cut again only when one of them is this many line heights tall
+FIT_VALLEY = 0.12     # a row with less ink than this share of a line's usual row is a gap between lines
+FIT_GAP = 0.3         # a box grows over letters at most this far (line heights) from its own
 
 
 def _box(points):
@@ -494,13 +499,14 @@ def near_lines(lost, kept):
             and _near((x0, y0, x1, y1), kept, height)]
 
 
-def repair_lines(mask, boxes):
+def repair_lines(mask, boxes, gray=None):
     """Return (boxes, changes) with multi-line boxes split and missed lines added.
 
     ``boxes`` are axis-aligned (x0, y0, x1, y1) horizontal text lines and
     ``mask`` is the detector pixel mask of the same page.  Each entry of the
     result is (box, source) where source is the index of the original box, or
-    None for a line found only in the mask.
+    None for a line found only in the mask.  ``gray``, the page in grey levels,
+    lets a line box grow over letters the mask missed.
     """
     if mask is None or not boxes:
         return [(b, i) for i, b in enumerate(boxes)], []
@@ -550,6 +556,7 @@ def repair_lines(mask, boxes):
             changes.append(("split", (x0, y0, x1, y1), parts))
         else:
             result.append(((x0, y0, x1, y1), index))
+    result = fit_lines(ink, result, height, changes, gray)
     # Lines of the mask that no box covers.
     known = np.zeros_like(ink)
     for (x0, y0, x1, y1), _ in result:
@@ -595,6 +602,171 @@ def repair_lines(mask, boxes):
         result.extend((box, None) for box in paragraph)
         changes.append(("added", None, paragraph))
     return result, changes
+
+
+def _line_runs(ink, box, height):
+    """Row runs of ink a box takes part in, read a little past its top and bottom."""
+    h = ink.shape[0]
+    x0, y0, x1, y1 = box
+    reach = int(round(SPLIT_REACH * height))
+    wy0, wy1 = max(0, y0 - reach), min(h, y1 + reach)
+    runs = []
+    for r0, r1 in _runs(ink[wy0:wy1, x0:x1].any(axis=1)):
+        if r1 - r0 >= MIN_PART * height and min(wy0 + r1, y1) - max(wy0 + r0, y0) >= SPLIT_INSIDE * height:
+            runs.append((wy0 + r0, wy0 + r1))
+    return runs
+
+
+def _ink_span(ink, x0, x1, y0, y1, height, others):
+    """Columns of the lettering in rows y0..y1 that reach the box x0..x1, stopping at other boxes."""
+    w = ink.shape[1]
+    lo, hi = 0, w
+    for ox0, oy0, ox1, oy1 in others:  # a neighbour on the same row bounds the line
+        if min(y1, oy1) - max(y0, oy0) > 0.5 * (y1 - y0):
+            if ox1 <= x0:
+                lo = max(lo, ox1)
+            elif ox0 >= x1:
+                hi = min(hi, ox0)
+    cols = ink[y0:y1, lo:hi].any(axis=0)
+    # Letter spacing only: a mark beyond a word gap (a sound effect on the bubble outline) stays out.
+    gap = max(3, int(round(height * FIT_GAP)))
+    on = np.flatnonzero(cols)
+    if not len(on):
+        return x0, x1
+    # Runs of letters, words joined across gaps up to ``gap``; every run that meets the box
+    # is the line (a box ending inside the last word, "ISN'T IT?", still holds that word).
+    runs = []
+    for c in on + lo:
+        if not runs or c - runs[-1][1] > gap:
+            runs.append([c, c + 1])
+        runs[-1][1] = c + 1
+    meeting = [(a, b) for a, b in runs if b >= x0 and a <= x1]
+    if not meeting:
+        return x0, x1
+    return min(x0, int(meeting[0][0])), max(x1, int(meeting[-1][1]))
+
+
+def _glyph_span(gray, x0, x1, r0, r1, height, lo, hi):
+    """Widen x0..x1 over dark glyphs of the image that sit inside the row band r0..r1.
+
+    The detector mask can miss the first letter of a bold italic word (the "A" of
+    "AMOUNT", read "MOUN").  A letter stays inside its line; a bubble outline or
+    the art runs above or below it and is never taken.
+    """
+    h, w = gray.shape
+    margin = max(2, int(round(0.15 * height)))
+    reach = int(round(2 * height))
+    wx0, wx1 = max(lo, x0 - reach), min(hi, x1 + reach)
+    wy0, wy1 = max(0, r0 - margin - 1), min(h, r1 + margin + 1)
+    if wx1 <= wx0 or wy1 <= wy0:
+        return x0, x1
+    dark = (gray[wy0:wy1, wx0:wx1] < INK_LEVEL).astype(np.uint8)
+    count, _, stats, _ = cv2.connectedComponentsWithStats(dark, connectivity=8)
+    glyphs = [(wx0 + int(sx), wx0 + int(sx + sw)) for sx, sy, sw, sh, _ in stats[1:]
+              if sy > 0 and sy + sh < wy1 - wy0 and sh >= 0.3 * (r1 - r0)]
+    gap = max(3, int(round(height * FIT_GAP)))
+    changed = True
+    while changed:
+        changed = False
+        for g0, g1 in glyphs:
+            if g0 < x0 and x0 - g1 <= gap:
+                x0, changed = g0, True
+            if g1 > x1 and g0 - x1 <= gap:
+                x1, changed = g1, True
+    return x0, x1
+
+
+def fit_lines(ink, items, height, changes, gray=None):
+    """Fit line boxes to the lettering of the detector mask before OCR.
+
+    Grand Blue 102 pp. 27/42/47: a box 13 px tall over letters 17 px tall, or one
+    that started after the first letter ("MOUN" for "AMOUNT"), made the OCR drop
+    the line or misread it, and the speech came out split or wrong.  Boxes that
+    share whole rows (one box over "NOW," and half of the next line, another over
+    the next two lines) are cut again, one box per row of letters.  A box that
+    already holds its line is left exactly as it is.
+    """
+    boxes = [b for b, _ in items]
+    n = len(items)
+    parent = list(range(n))
+    def root(i):
+        while parent[i] != i:
+            i = parent[i]
+        return i
+    for i in range(n):
+        for j in range(i + 1, n):
+            a, b = boxes[i], boxes[j]
+            rows = min(a[3], b[3]) - max(a[1], b[1])
+            cols = min(a[2], b[2]) - max(a[0], b[0])
+            if rows >= FIT_OVERLAP * height and cols > 0.3 * min(a[2] - a[0], b[2] - b[0]) \
+                    and a[2] - a[0] > a[3] - a[1] and b[2] - b[0] > b[3] - b[1]:
+                parent[root(i)] = root(j)
+    groups = {}
+    for i in range(n):
+        groups.setdefault(root(i), []).append(i)
+    out = []
+    for members in groups.values():
+        # Only when a box holds two lines or more: boxes of a tilted paragraph overlap a little anyway.
+        if len(members) >= 2 and max(boxes[i][3] - boxes[i][1] for i in members) >= FIT_TALL * height:
+            union = (min(boxes[i][0] for i in members), min(boxes[i][1] for i in members),
+                     max(boxes[i][2] for i in members), max(boxes[i][3] for i in members))
+            x0, y0, x1, y1 = union
+            parts = []
+            counts = ink[y0:y1, x0:x1].sum(axis=1)
+            rows = counts > 0
+            runs = []
+            for r0, r1 in _runs(rows):
+                if r1 - r0 <= SPLIT_FACTOR * height:
+                    runs.append((r0, r1))
+                    continue
+                # Lines that touch (outlined lettering, tight leading) are cut where the
+                # ink nearly stops: a row or two with only a few pixels between them.
+                body = counts[r0:r1]
+                valley = body > FIT_VALLEY * float(np.median(body[body > 0]))
+                runs.extend((r0 + a, r0 + b) for a, b in _runs(valley, gap=0))
+            for r0, r1 in runs:
+                if r1 - r0 < MIN_PART * height:
+                    continue
+                cols = np.flatnonzero(ink[y0 + r0:y0 + r1, x0:x1].any(axis=0))
+                # The row keeps its letters past the boxes ("ISN'T IT?" lost "IT?").
+                px0, px1 = _ink_span(ink, x0 + int(cols[0]), x0 + int(cols[-1]) + 1, y0 + r0, y0 + r1, height,
+                                     [b for j, b in enumerate(boxes) if j not in members])
+                part = (px0, y0 + r0, px1, y0 + r1)
+                # The source is the box holding most of the row.
+                best = max(members, key=lambda i: min(part[3], boxes[i][3]) - max(part[1], boxes[i][1]))
+                parts.append((part, items[best][1]))
+            if len(parts) >= 2:
+                out.extend(parts)
+                changes.append(("refit", union, [b for b, _ in parts]))
+                continue
+        for i in members:
+            box, source = items[i]
+            x0, y0, x1, y1 = box
+            runs = _line_runs(ink, box, height) if x1 - x0 > y1 - y0 else []
+            # Only a run one line tall: a taller one is several lines, left to the split above.
+            if len(runs) != 1 or runs[0][1] - runs[0][0] > SPLIT_CHECK * height:
+                out.append(items[i])
+                continue
+            r0, r1 = runs[0]
+            others = [b for j, b in enumerate(boxes) if j != i]
+            # Even a row of the letters left outside the box makes the OCR drop the line.
+            tall = r0 < y0 or r1 > y1
+            nx0, nx1 = _ink_span(ink, x0, x1, r0, r1, height, others)
+            if gray is not None:
+                lo = max([b[2] for b in others if min(r1, b[3]) - max(r0, b[1]) > 0.5 * (r1 - r0) and b[2] <= x0] + [0])
+                hi = min([b[0] for b in others if min(r1, b[3]) - max(r0, b[1]) > 0.5 * (r1 - r0) and b[0] >= x1]
+                         + [ink.shape[1]])
+                nx0, nx1 = _glyph_span(gray, nx0, nx1, r0, r1, height, lo, hi)
+            wide = x0 - nx0 >= FIT_SIDE * height or nx1 - x1 >= FIT_SIDE * height
+            if not (tall or wide):
+                out.append(items[i])
+                continue
+            # A pixel of margin: the OCR misreads a line whose box clips the letters.
+            fitted = (max(0, nx0 - 1), max(0, (r0 if tall else min(y0, r0)) - 1),
+                      min(ink.shape[1], nx1 + 1), min(ink.shape[0], (r1 if tall else max(y1, r1)) + 1))
+            out.append((fitted, source))
+            changes.append(("fit", box, [fitted]))
+    return out
 
 
 # Two columns of text side by side in one bubble --------------------------------
