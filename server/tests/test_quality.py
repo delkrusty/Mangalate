@@ -967,6 +967,156 @@ class GrazedBubbleScanTest(unittest.TestCase):
         self.assertEqual(quality.bubble_text_lines(self.page(), [(240, 90, 330, 130)]), [])
 
 
+class TextBlockTest(unittest.TestCase):
+    """Grand Blue 102 p3: a paragraph on the page beside a bubble's paragraph; the detector drew
+    boxes across both ("I JUST  AS HE") and the two speeches were read and translated as one."""
+
+    @staticmethod
+    def lines(mask, texts, x, y, step=24, centre=False):
+        boxes = []
+        for i, text in enumerate(texts):
+            (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+            left = x - w // 2 if centre else x
+            cv2.putText(mask, text, (left, y + i * step), cv2.FONT_HERSHEY_SIMPLEX, 0.7, 255, 2)
+            boxes.append((left - 1, y + i * step - h - 1, left + w + 1, y + i * step + 5))
+        return boxes
+
+    def page(self):
+        mask = np.zeros((400, 520), np.uint8)
+        # The last line of the page's paragraph runs under the bubble's: no straight gutter between them.
+        left = self.lines(mask, ["I JUST", "KNOW IT", "COME BACK", "TO BITE", "IF WE GO AWAY"], 40, 140)
+        right = self.lines(mask, ["LETS", "JUST DO", "AS HE", "SAYS."], 230, 92, centre=True)
+        # The detector's boxes over the two rows the paragraphs share.
+        merged = [(left[0][0], min(left[0][1], right[2][1]), right[2][2], max(left[0][3], right[2][3])),
+                  (left[1][0], min(left[1][1], right[3][1]), right[3][2], max(left[1][3], right[3][3]))]
+        return mask, left, right, [right[0], right[1]] + merged + left[2:]
+
+    def test_box_across_two_paragraphs_is_cut(self):
+        mask, left, right, boxes = self.page()
+        cuts = quality.block_cuts(mask, boxes)
+        self.assertEqual(sorted(cuts), [2, 3], cuts)
+        for i, (l, r) in zip((2, 3), ((left[0], right[2]), (left[1], right[3]))):
+            (a0, a1), (b0, b1) = cuts[i]
+            self.assertTrue(abs(a0 - l[0]) <= 4 and abs(a1 - l[2]) <= 4 and abs(b0 - r[0]) <= 4 and abs(b1 - r[2]) <= 4,
+                            (cuts[i], l, r))
+
+    def test_lines_are_grouped_by_paragraph(self):
+        mask, left, right, _ = self.page()
+        groups = quality.block_groups(mask, left + right)
+        self.assertEqual(sorted(sorted(g) for g in groups), [[0, 1, 2, 3, 4], [5, 6, 7, 8]])
+
+    def test_wide_gap_in_one_paragraph_is_not_cut(self):
+        # Spaced-out words in one bubble ("WAIT    WHAT"): one speech.
+        mask = np.zeros((300, 520), np.uint8)
+        boxes = self.lines(mask, ["HOLD ON,", "WAIT", "THIS IS", "TOO MUCH"], 200, 80, centre=True)
+        (w, h), _ = cv2.getTextSize("WAIT", cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+        cv2.putText(mask, "WHAT", (boxes[1][2] + 30, 104), cv2.FONT_HERSHEY_SIMPLEX, 0.7, 255, 2)
+        boxes[1] = (boxes[1][0], boxes[1][1], boxes[1][2] + 32 + w, boxes[1][3])
+        self.assertEqual(quality.block_cuts(mask, boxes), {})
+        self.assertEqual(len(quality.block_groups(mask, boxes)), 1)
+
+    def test_lone_line_beside_a_paragraph_is_not_cut(self):
+        # One short line next to a paragraph (a name tag, a stray word): never split off on its own.
+        mask = np.zeros((300, 520), np.uint8)
+        boxes = self.lines(mask, ["THIS IS", "ONE SPEECH", "HERE."], 230, 80, centre=True)
+        cv2.putText(mask, "OH", (60, 104), cv2.FONT_HERSHEY_SIMPLEX, 0.7, 255, 2)
+        boxes[1] = (58, boxes[1][1], boxes[1][2], boxes[1][3])
+        self.assertEqual(quality.block_cuts(mask, boxes), {})
+
+
+class TextBlockRegionTest(unittest.TestCase):
+    """The region the merge built over both paragraphs is split, and stays split, even in an open bubble."""
+
+    class Block:
+        def __init__(self, lines, texts, font_size=20, angle=0, prob=1.0, fg_color=None, bg_color=None):
+            self.lines, self.texts = np.asarray(lines), list(texts)
+            self.font_size, self.angle, self.prob = font_size, angle, prob
+            self.fg_colors, self.bg_colors, self.horizontal = fg_color, bg_color, True
+            pts = self.lines.reshape(-1, 2)
+            self.xyxy = (*pts.min(axis=0), *pts.max(axis=0))
+
+    def test_two_paragraphs_in_one_region_are_split(self):
+        from engine_compat import join_split_blocks
+        mask, left, right, _ = TextBlockTest().page()
+        boxes = sorted(left + right, key=lambda b: b[1])
+        texts = [f"L{i}" if b in left else f"R{i}" for i, b in enumerate(boxes)]
+        block = self.Block([quad(*b) for b in boxes], texts)
+        page = np.full((400, 520, 3), 255, np.uint8)  # one white page: the bubble is open to it
+        out = join_split_blocks([block], page, mask)
+        self.assertEqual(sorted(sorted(t[0] for t in b.texts) for b in out), [["L"] * 5, ["R"] * 4])
+        self.assertEqual(len(join_split_blocks([block], page)), 1)  # without the mask: as before
+
+    def test_pieces_of_one_paragraph_on_the_page_are_joined(self):
+        # Grand Blue 102 p3: the text beside the bubble, written on the page (no bubble around it),
+        # came out as "I JUST / KNOW IT'LL" and "COME BACK...", translated as two half sentences.
+        from engine_compat import join_split_blocks
+        mask, left, _, _ = TextBlockTest().page()
+        mask[:, 200:] = 0
+        page = noisy_art((520, 400))
+        top = self.Block([quad(*b) for b in left[:2]], ["L0", "L1"])
+        bottom = self.Block([quad(*b) for b in left[2:]], ["L2", "L3", "L4"])
+        out = join_split_blocks([top, bottom], page, mask)
+        self.assertEqual([b.texts for b in out], [["L0", "L1", "L2", "L3", "L4"]])
+        self.assertEqual(len(join_split_blocks([top, bottom], page)), 2)  # without the mask: as before
+
+    def test_pieces_of_one_paragraph_on_open_flat_page_are_joined(self):
+        # Grand Blue 102 p3: the top piece sat on a flat, open gutter; the bubble search came back
+        # with the piece's own box as if it were a bubble, so the rest of the paragraph stayed apart.
+        from engine_compat import join_split_blocks
+        mask, left, _, _ = TextBlockTest().page()
+        mask[:, 200:] = 0
+        page = np.full((400, 520, 3), 255, np.uint8)
+        top = self.Block([quad(*b) for b in left[:2]], ["L0", "L1"])
+        bottom = self.Block([quad(*b) for b in left[2:]], ["L2", "L3", "L4"])
+        out = join_split_blocks([top, bottom], page, mask)
+        self.assertEqual([b.texts for b in out], [["L0", "L1", "L2", "L3", "L4"]])
+
+    def test_piece_in_a_closed_bubble_stays_apart_from_the_paragraph_outside(self):
+        # The neighbour: a real bubble around the top piece still keeps the text below it apart.
+        from engine_compat import join_split_blocks
+        mask, left, _, _ = TextBlockTest().page()
+        mask[:, 200:] = 0
+        page = noisy_art((520, 400))
+        cv2.ellipse(page, (90, 147), (85, 36), 0, 0, 360, (255, 255, 255), -1)
+        cv2.ellipse(page, (90, 147), (85, 36), 0, 0, 360, (0, 0, 0), 3)
+        top = self.Block([quad(*b) for b in left[:2]], ["L0", "L1"])
+        bottom = self.Block([quad(*b) for b in left[2:]], ["L2", "L3", "L4"])
+        self.assertEqual(len(join_split_blocks([top, bottom], page, mask)), 2)
+
+    def test_pieces_in_a_tight_caption_box_stay_joined(self):
+        # A narration box drawn close around its text: the bubble barely exceeds the lines, still one speech.
+        from engine_compat import join_split_blocks
+        mask, left, _, _ = TextBlockTest().page()
+        mask[:, 200:] = 0
+        page = noisy_art((520, 400))
+        x0, y0 = min(b[0] for b in left) - 6, min(b[1] for b in left) - 6
+        x1, y1 = max(b[2] for b in left) + 6, max(b[3] for b in left) + 6
+        cv2.rectangle(page, (x0, y0), (x1, y1), (255, 255, 255), -1)
+        cv2.rectangle(page, (x0, y0), (x1, y1), (0, 0, 0), 3)
+        top = self.Block([quad(*b) for b in left[:2]], ["L0", "L1"])
+        bottom = self.Block([quad(*b) for b in left[2:]], ["L2", "L3", "L4"])
+        out = join_split_blocks([top, bottom], page, mask)
+        self.assertEqual([b.texts for b in out], [["L0", "L1", "L2", "L3", "L4"]])
+        self.assertEqual(len(join_split_blocks([top, bottom], page)), 1)  # the box alone joins them, as before
+
+    def test_two_paragraphs_on_the_page_stay_apart(self):
+        from engine_compat import join_split_blocks
+        mask = np.zeros((400, 520), np.uint8)
+        upper = TextBlockTest.lines(mask, ["ONE TEXT", "UP HERE"], 40, 100)
+        lower = TextBlockTest.lines(mask, ["ANOTHER", "DOWN HERE"], 40, 178)  # a blank line and a half below
+        a = self.Block([quad(*b) for b in upper], ["U0", "U1"])
+        b = self.Block([quad(*b) for b in lower], ["D0", "D1"])
+        self.assertEqual(len(join_split_blocks([a, b], noisy_art((520, 400)), mask)), 2)
+
+    def test_one_paragraph_stays_one_region(self):
+        from engine_compat import join_split_blocks
+        mask, left, _, _ = TextBlockTest().page()
+        mask[:, 200:] = 0
+        block = self.Block([quad(*b) for b in left], [f"L{i}" for i in range(len(left))])
+        out = join_split_blocks([block], np.full((400, 520, 3), 255, np.uint8), mask)
+        self.assertEqual(len(out), 1)
+
+
 class ContainedRegionTest(unittest.TestCase):
     """Grand Blue p25: the tilted "LIKE" had its own region inside "LOOKS / IORI SCORED..."."""
 

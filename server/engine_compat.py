@@ -403,7 +403,12 @@ def credit_followers(regions):
     return follow
 
 
-def join_split_blocks(regions, image):
+# A bubble's interior is at least this many times the text box's area; the search clips
+# open sides to the box, so a fill no larger than the box is open page around the text, not a bubble.
+BUBBLE_BEYOND_BOX = 1.1
+
+
+def join_split_blocks(regions, image, text_mask=None):
     """One speech the detector split in two stacked regions becomes one region again.
 
     Otherwise each piece is translated alone ("o de verdade" / "Treino") and
@@ -412,16 +417,35 @@ def join_split_blocks(regions, image):
     import cv2
     import numpy as np
     import lettering
-    from quality import join_blocks, absorb_contained, column_groups, _box
+    from quality import join_blocks, absorb_contained, column_groups, block_groups, paragraph_of, text_blocks, _box
+
+    page_blocks = None
+    if text_mask is not None:
+        try:
+            page_blocks = text_blocks(np.asarray(text_mask),
+                                      [_box(q) for r in regions for q in np.asarray(getattr(r, "lines", []))])
+        except Exception:  # never lose a page over this
+            page_blocks = None
 
     def inside(a, b):
-        found = lettering.bubble_mask(image, tuple(int(v) for v in a.xyxy))
-        if found is None:
+        # Two paragraphs side by side, separated below, are two speeches even in one open bubble.
+        if getattr(a, "mangalate_block", None) is not None and getattr(b, "mangalate_block", None) is not None                 and a.mangalate_block[0] == b.mangalate_block[0] and a.mangalate_block[1] != b.mangalate_block[1]:
             return False
-        mask, wx0, wy0 = found
-        # The letters are holes in the flat interior; fill them so a point on a glyph counts.
-        contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        mask = cv2.drawContours(np.zeros(mask.shape, np.uint8), contours, -1, 1, -1) > 0
+        ax0, ay0, ax1, ay1 = (int(v) for v in a.xyxy)
+        found = lettering.bubble_mask(image, (ax0, ay0, ax1, ay1))
+        if found is not None:
+            mask, wx0, wy0 = found
+            # The letters are holes in the flat interior; fill them so a point on a glyph counts.
+            contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            mask = cv2.drawContours(np.zeros(mask.shape, np.uint8), contours, -1, 1, -1) > 0
+            if mask.sum() < BUBBLE_BEYOND_BOX * (ax1 - ax0) * (ay1 - ay0):
+                found = None
+        if found is None:
+            # Text written on the page, no bubble: the pieces of one paragraph are one speech.
+            if page_blocks is None:
+                return False
+            pa = paragraph_of(page_blocks, [_box(q) for q in np.asarray(a.lines)])
+            return pa is not None and pa == paragraph_of(page_blocks, [_box(q) for q in np.asarray(b.lines)])
         bx0, by0, bx1, by1 = (int(v) for v in b.xyxy)
         cx, cy = (bx0 + bx1) // 2 - wx0, (by0 + by1) // 2 - wy0
         return 0 <= cy < mask.shape[0] and 0 <= cx < mask.shape[1] and bool(mask[cy, cx])
@@ -448,12 +472,21 @@ def join_split_blocks(regions, image):
         boxes = [_box(q) for q in np.asarray(region.lines)]
         groups = column_groups(boxes)
         gaps = [min(boxes[i][0] for i in b) - max(boxes[i][2] for i in a) for a, b in zip(groups, groups[1:])]
+        paragraphs = False
+        if (len(groups) < 2 or min(gaps) <= 0) and text_mask is not None and len(region.texts) == len(boxes):
+            groups, paragraphs = block_groups(np.asarray(text_mask), boxes), True
+            groups = sorted(groups, key=lambda g: min(boxes[i][0] for i in g))
+            gaps = [1] * (len(groups) - 1) or [0]
         if len(groups) < 2 or min(gaps) <= 0 or max(len(g) for g in groups) < 2 or len(region.texts) != len(boxes):
             return [region]
         lines, texts = np.asarray(region.lines), list(region.texts)
-        return [type(region)(lines[g], [texts[i] for i in g], font_size=region.font_size, angle=region.angle,
-                             prob=region.prob, fg_color=region.fg_colors, bg_color=region.bg_colors)
-                for g in (sorted(g, key=lambda i: boxes[i][1]) for g in groups)]
+        parts = [type(region)(lines[g], [texts[i] for i in g], font_size=region.font_size, angle=region.angle,
+                              prob=region.prob, fg_color=region.fg_colors, bg_color=region.bg_colors)
+                 for g in (sorted(g, key=lambda i: boxes[i][1]) for g in groups)]
+        if paragraphs:
+            for k, part in enumerate(parts):
+                part.mangalate_block = (id(region), k)
+        return parts
 
     try:
         split = [part for region in horizontal for part in columns(region)]
@@ -550,7 +583,7 @@ def classify_regions(original_merge):
             regions, context_only = on_page(regions, _PAGE_ROWS.get())
             if context_only:
                 print(f"Region check: {len(context_only)} only in the neighbouring pages, skipped", flush=True)
-            regions = join_split_blocks(regions, ctx.img_rgb)
+            regions = join_split_blocks(regions, ctx.img_rgb, getattr(ctx, "mask_raw", None))
             regions = drop_duplicates(regions)
             regions, drawn = scanned_sounds(regions, getattr(ctx, "mangalate_scanned", []),
                                             getattr(ctx, "mangalate_scanned_rows", None))
@@ -663,6 +696,18 @@ def repair_textlines(original_detect):
                 (x0, y0, x1, y1), source = repaired[i]
                 gx0, gx1 = cuts[i]
                 parts = [(x0, y0, gx0, y1), (gx1, y0, x1, y1)]
+                repaired[i:i + 1] = [(part, source) for part in parts]
+                changes.append(("column", (x0, y0, x1, y1), parts))
+            # One box across two paragraphs side by side (a bubble and the text on the page beside it).
+            from quality import block_cuts
+            try:
+                cuts = block_cuts(np.asarray(mask_raw), [box for box, _ in repaired])
+            except Exception as exc:  # never lose a page over this
+                print(f"Block check skipped: {type(exc).__name__}", flush=True)
+                cuts = {}
+            for i in sorted(cuts, reverse=True):
+                (x0, y0, x1, y1), source = repaired[i]
+                parts = [(a, y0, b, y1) for a, b in cuts[i]]
                 repaired[i:i + 1] = [(part, source) for part in parts]
                 changes.append(("column", (x0, y0, x1, y1), parts))
         # Small white bubbles the detector did not see at all.

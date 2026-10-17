@@ -985,6 +985,108 @@ def column_cuts(gray, boxes):
     return cuts
 
 
+# Two paragraphs side by side that the detector boxed together --------------------
+
+BLOCK_GAP_X = 0.3   # letters closer than twice this (line heights) sideways are one paragraph
+BLOCK_GAP_Y = 0.5   # and lines closer than twice this (line heights) one under the other
+BLOCK_SHARE = 0.15  # a paragraph holds at least this share of a box's ink to cut the box
+
+
+def text_blocks(mask, boxes):
+    """Labels of the paragraphs of the detector mask: letters joined across word and line gaps."""
+    mask = np.asarray(mask) > 127
+    heights = [b[3] - b[1] for b in boxes if b[2] - b[0] > b[3] - b[1]]
+    if not heights:
+        return mask, None
+    height = float(np.median(heights))
+    gx, gy = max(1, int(round(BLOCK_GAP_X * height))), max(1, int(round(BLOCK_GAP_Y * height)))
+    grown = cv2.dilate(mask.astype(np.uint8), np.ones((2 * gy + 1, 2 * gx + 1), np.uint8))
+    return mask, cv2.connectedComponents(grown, connectivity=8)[1]
+
+
+def _box_blocks(mask, labels, box):
+    """{paragraph label: ink pixels} of the paragraphs a box holds a real share of."""
+    x0, y0, x1, y1 = (int(v) for v in box)
+    ink = labels[y0:y1, x0:x1][mask[y0:y1, x0:x1]]
+    if not ink.size:
+        return {}
+    ids, counts = np.unique(ink, return_counts=True)
+    return {int(i): int(c) for i, c in zip(ids, counts) if c >= BLOCK_SHARE * ink.size}
+
+
+def _paragraphs(mask, labels, boxes):
+    """Paragraph labels that hold the main ink of two line boxes or more."""
+    count = {}
+    for box in boxes:
+        blocks = _box_blocks(mask, labels, box)
+        if blocks:
+            main = max(blocks, key=blocks.get)
+            count[main] = count.get(main, 0) + 1
+        for label in blocks:  # a box across two paragraphs is a line of each
+            if len(blocks) >= 2:
+                count[label] = count.get(label, 0) + 1
+    return {label for label, n in count.items() if n >= 2}
+
+
+def block_cuts(mask, boxes):
+    """{line index: [(x0, x1), ...]} for line boxes across two paragraphs side by side.
+
+    Grand Blue 102 p3: "LET'S / JUST DO / AS HE / SAYS." in a bubble open to the page,
+    and "I JUST / KNOW IT'LL / COME BACK..." written on the page beside it, with no
+    outline between them; the detector drew one box over "I JUST  AS HE" and another
+    over "KNOW IT'LL  SAYS.", and the two speeches were read as one.  The letters of
+    each paragraph are joined across word and line gaps; a box whose ink falls in two
+    such paragraphs, each of two lines or more, is cut between them.  Spaced-out words
+    of one speech, or a lone word beside it, are never cut off.
+    """
+    mask, labels = text_blocks(mask, boxes)
+    if labels is None:
+        return {}
+    paragraphs = _paragraphs(mask, labels, boxes)
+    cuts = {}
+    for i, (x0, y0, x1, y1) in enumerate(boxes):
+        if x1 - x0 <= y1 - y0:
+            continue
+        blocks = _box_blocks(mask, labels, (x0, y0, x1, y1))
+        if len(blocks) < 2 or not set(blocks) <= paragraphs:
+            continue
+        spans = []
+        for label in blocks:
+            cols = np.flatnonzero(((labels[y0:y1, x0:x1] == label) & mask[y0:y1, x0:x1]).any(axis=0))
+            spans.append((x0 + int(cols[0]), x0 + int(cols[-1]) + 1))
+        spans.sort()
+        if all(a[1] < b[0] for a, b in zip(spans, spans[1:])):  # side by side, never interleaved
+            cuts[i] = spans
+    return cuts
+
+
+def paragraph_of(blocks, boxes):
+    """The paragraph label (of ``text_blocks``) holding most of the ink of ``boxes``, or None."""
+    mask, labels = blocks
+    if labels is None:
+        return None
+    total = {}
+    for box in boxes:
+        for label, count in _box_blocks(mask, labels, box).items():
+            total[label] = total.get(label, 0) + count
+    return max(total, key=total.get) if total else None
+
+
+def block_groups(mask, boxes):
+    """Line indexes grouped by paragraph; one group unless two paragraphs of two lines or more."""
+    mask, labels = text_blocks(mask, boxes)
+    if labels is None:
+        return [list(range(len(boxes)))]
+    groups = {}
+    for i, box in enumerate(boxes):
+        blocks = _box_blocks(mask, labels, box)
+        key = max(blocks, key=blocks.get) if blocks else None
+        groups.setdefault(key, []).append(i)
+    if None in groups or len(groups) < 2 or min(len(g) for g in groups.values()) < 2:
+        return [list(range(len(boxes)))]
+    return list(groups.values())
+
+
 def column_groups(boxes):
     """Line indexes split into columns that share no horizontal span, left to right; one group when not."""
     order = sorted(range(len(boxes)), key=lambda i: boxes[i][0])
