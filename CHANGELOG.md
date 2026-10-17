@@ -13,6 +13,7 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 - Balão que fura a borda do quadro e encosta na margem branca da página é reconhecido inteiro, em vez de o texto ficar espremido no tamanho da caixa original.
 - A tradução fica na altura do texto original quando a área clara em volta dele é bem maior que um balão (balão aberto que se junta ao céu do quadro, ou fala sem balão). Antes, o texto ia parar no meio dessa área, linhas longe do original e às vezes por cima do contorno de outro balão. Balões fechados continuam como estavam.
 - MANGALATE_FONT=simples volta para a Arial do motor.
+- O teste do letreiramento no gancho do motor passava no CI e falhava dentro da imagem, porque só a imagem tem a fonte de quadrinhos. Agora são dois testes, com e sem a fonte, e o caminho com a fonte, que é o das páginas reais, passa a ser testado no CI.
 
 ### Tradução e balões
 - Um balão branco que o detector não viu e cujo contorno se abre para um fundo claro (céu, papel), por exemplo onde uma onomatopeia cruza a borda, agora é encontrado e traduzido em vez de ficar em inglês. A busca separa o balão do fundo pela fresta; uma caixa que só cruza a borda não o esconde mais, e uma fala já detectada não é lida duas vezes.
