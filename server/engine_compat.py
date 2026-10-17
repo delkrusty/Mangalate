@@ -542,6 +542,7 @@ def classify_regions(original_merge):
     """
     async def merge(self, config, ctx):
         import cv2
+        import numpy as np
         from quality import classify_region
         regions = await original_merge(self, config, ctx)
         ctx.mangalate_preserved = []
@@ -577,7 +578,17 @@ def classify_regions(original_merge):
                 ctx.mangalate_preserved.append(region)
                 continue
             region.mangalate_background = classify_region(image, raw, region.lines)
-            if region.mangalate_background["kind"] == "interior":
+            # Outlined lettering over the art is translated; only the letters and their outline are cleaned.
+            if region.mangalate_background["kind"] == "contorno":
+                from quality import outlined_area, outlined_colours
+                if not outlined_area(image, region.lines).any():
+                    # Nothing to clean: the translation would be written over the English.
+                    region.mangalate_background["kind"] = "art"
+                    ctx.mangalate_preserved.append(region)
+                    continue
+                fg, bg = outlined_colours(image, region.lines)
+                region.fg_colors, region.bg_colors = np.array(fg), np.array(bg)
+            if region.mangalate_background["kind"] in ("interior", "contorno"):
                 kept.append(region)
             else:
                 ctx.mangalate_preserved.append(region)
@@ -893,6 +904,21 @@ async def refine_mask_consistently(self, config, ctx):
     if grown.any():
         mask = mask.copy()
         mask[grown] = 255
+    # Outlined lettering over the art: the cleaning stays on the letters and their outline.
+    from quality import outlined_area
+    for region in ctx.text_regions or []:
+        if (getattr(region, "mangalate_background", None) or {}).get("kind") != "contorno":
+            continue
+        x0, y0, x1, y1 = (int(v) for v in region.xyxy)
+        pad = int(max(8, region.font_size))
+        x0, y0, x1, y1 = max(0, x0 - pad), max(0, y0 - pad), min(w, x1 + pad), min(h, y1 + pad)
+        allowed = outlined_area(ctx.img_rgb, region.lines)
+        for other in ctx.text_regions:  # the cleaning of a bubble next to it stays
+            if other is not region:
+                ox0, oy0, ox1, oy1 = (int(v) for v in other.xyxy)
+                allowed[max(0, oy0):oy1, max(0, ox0):ox1] = True
+        mask = mask.copy()
+        mask[y0:y1, x0:x1][~allowed[y0:y1, x0:x1]] = 0
     return mask
 
 

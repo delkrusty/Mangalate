@@ -53,6 +53,50 @@ class BackgroundTest(unittest.TestCase):
         self.assertEqual(verdict["kind"], expected, verdict)
         return verdict
 
+    def outlined(self, outline=True, colour=(255, 255, 255)):
+        image = noisy_art((420, 200))
+        letters = np.zeros(image.shape[:2], np.uint8)
+        for text, y in (("SO THIS", 80), ("IS IT?", 140)):
+            cv2.putText(letters, text, (60, y), cv2.FONT_HERSHEY_SIMPLEX, 1.6, 255, 4)
+        if outline:
+            image[cv2.dilate(letters, np.ones((9, 9), np.uint8)) > 0] = (0, 0, 0)
+        image[letters > 0] = colour
+        mask = np.zeros(image.shape[:2], np.uint8)
+        mask[40:155, 50:330] = 255
+        return image, mask, [quad(55, 45, 320, 90), quad(55, 105, 270, 150)]
+
+    def test_outlined_lettering_over_art_is_its_own_interior(self):
+        # Grand Blue 102 p31: white letters with a thick black outline over a dark,
+        # toned background.  The outline belongs to the lettering, not to the art.
+        image, mask, quads = self.outlined()
+        self.assertEqual(classify_region(image, mask, quads)["kind"], "contorno")
+
+    def test_one_outlined_word_over_art_stays_art(self):
+        # The usual sound effect: one word, white with a black outline, drawn over the art.
+        image = noisy_art((420, 200))
+        letters = np.zeros(image.shape[:2], np.uint8)
+        cv2.putText(letters, "BAM", (60, 110), cv2.FONT_HERSHEY_SIMPLEX, 1.6, 255, 4)
+        image[cv2.dilate(letters, np.ones((9, 9), np.uint8)) > 0] = (0, 0, 0)
+        image[letters > 0] = (255, 255, 255)
+        mask = np.zeros(image.shape[:2], np.uint8)
+        mask[60:125, 50:200] = 255
+        self.assertEqual(classify_region(image, mask, [quad(55, 65, 190, 120)])["kind"], "art")
+
+    def test_dark_letters_in_a_white_bubble_are_not_outlined_lettering(self):
+        image = noisy_art((420, 200))
+        image[30:165, 45:335] = 255  # a narrow white bubble; the art comes right up to it
+        letters = np.zeros(image.shape[:2], np.uint8)
+        for text, y in (("SO THIS", 80), ("IS IT?", 140)):
+            cv2.putText(letters, text, (60, y), cv2.FONT_HERSHEY_SIMPLEX, 1.6, 255, 6)
+        image[letters > 0] = 0
+        self.assertNotEqual(classify_region(image, letters, [quad(55, 45, 320, 90), quad(55, 105, 270, 150)])["kind"],
+                            "contorno")
+
+    def test_plain_lettering_over_art_stays_art(self):
+        for outline, colour in ((False, (255, 255, 255)), (False, (0, 0, 0))):
+            image, mask, quads = self.outlined(outline, colour)
+            self.assertEqual(classify_region(image, mask, quads)["kind"], "art", (outline, colour))
+
     def test_white_bubble_black_text_is_cleaned(self):
         image = bubble(page((90, 140, 200)), (200, 150), (150, 80), (255, 255, 255))
         write(image, "WHAT IS GOING ON?", (90, 160), (0, 0, 0), 0.75)
@@ -447,6 +491,17 @@ class LineRepairTest(unittest.TestCase):
         big = sorted((b for b, _ in repaired if b[1] > 140), key=lambda b: b[1])
         self.assertEqual(len(big), 2, big)
         self.assertGreaterEqual(big[1][2], end - 1)
+
+    def test_one_big_line_is_not_a_staircase(self):
+        # Grand Blue 102 p31: "...THIS" in letters twice the page line height was cut into
+        # "THIS" and "..." as if it were two offset lines.
+        mask, small, rows = self.big_lines()
+        mask[230:, :] = 0  # only "STUFF"
+        cv2.circle(mask, (292, 214), 5, 255, -1)  # a dot at the bottom left, like "..."
+        line = np.flatnonzero(mask[150:, 280:].any(axis=1)) + 150
+        box = (284, int(line[0]) - 2, 520, int(line[-1]) + 3)
+        repaired, changes = repair_lines(mask, small + [box])
+        self.assertNotIn("split", [kind for kind, _, _ in changes])
 
     def test_hook_replaces_textlines_before_ocr(self):
         import asyncio

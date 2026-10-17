@@ -108,7 +108,84 @@ def classify_region(image, text_mask, quads, line_height=None):
     residual = _fit_background(coords, values)
     share = float(np.mean(residual <= BACKGROUND_TOLERANCE))
     kind = "interior" if share >= MIN_INTERIOR_SHARE else "art"
+    # A sound effect is usually one outlined word over the art: it stays art (and goes to review).
+    if kind == "art" and len(quads) >= OUTLINE_LINES and outlined_lettering(image, lines, line_height):
+        kind = "contorno"
     return {"kind": kind, "interior_share": round(share, 4), "samples": int(len(xs))}
+
+
+OUTLINE_LIGHT = 190    # letter fill of outlined lettering is lighter than this
+OUTLINE_DARK = 130     # and its outline darker than this (black, or black over a screentone)
+OUTLINE_RING = 0.85    # share of the ring around a letter that is outline
+OUTLINE_WIDTH = 0.06   # outline thickness checked, in line heights (at least 2 px)
+OUTLINE_REACH = 0.6    # the letters and their outline are looked for this far around the lines, in line heights
+OUTLINE_SHARE = 0.6    # share of the light pixels on the lines that are outlined letters
+OUTLINE_AROUND = 0.5   # at most this share of the page around them is light
+OUTLINE_LINES = 2      # outlined lettering is translated only as a sentence of this many lines or more
+
+
+def outlined_colours(image, quads):
+    """(letter colour, outline colour) of outlined lettering, measured on the page."""
+    quads = [np.asarray(q, np.float32).reshape(4, 2) for q in quads]
+    lines = _line_mask(image.shape, quads) > 0
+    gray = cv2.cvtColor(np.asarray(image)[:, :, :3], cv2.COLOR_RGB2GRAY)
+    near = cv2.dilate(lines.astype(np.uint8), np.ones((9, 9), np.uint8)) > 0
+    fill, edge = lines & (gray > OUTLINE_LIGHT), near & (gray < OUTLINE_DARK)
+    if not fill.any() or not edge.any():
+        return (255, 255, 255), (0, 0, 0)
+    return (tuple(int(v) for v in np.median(image[fill][:, :3], axis=0)),
+            tuple(int(v) for v in np.median(image[edge][:, :3], axis=0)))
+
+
+def outlined_area(image, quads, line_height=None):
+    """Pixels of outlined lettering and its outline, the only part of the page cleaned for it."""
+    quads = [np.asarray(q, np.float32).reshape(4, 2) for q in quads]
+    if line_height is None:
+        line_height = float(np.median([max(np.ptp(q[:, 1]), 1.0) for q in quads]))
+    found = outlined_lettering(image, _line_mask(image.shape, quads), line_height, area_only=True)
+    return found if found is not None else np.zeros(image.shape[:2], bool)
+
+
+def outlined_lettering(image, lines, line_height, area_only=False):
+    """True for light letters wrapped in their own dark outline (a shout lettered over the art).
+
+    Grand Blue 102 p31: white letters with a thick black outline over a dark, toned
+    background.  Every letter, with its outline, is its own interior: cleaning the
+    letter and the outline only leaves the art around them as drawn.  Dark letters
+    drawn straight on the art have no such outline and stay art.
+    """
+    gray = cv2.cvtColor(np.asarray(image)[:, :, :3], cv2.COLOR_RGB2GRAY) if image.ndim == 3 else np.asarray(image)
+    on_lines = lines > 0
+    if not on_lines.any():
+        return None if area_only else False
+    lh = max(4.0, float(line_height))
+    width = max(2, int(round(OUTLINE_WIDTH * lh)))
+    reach = max(width + 2, int(round(OUTLINE_REACH * lh)))
+    area = cv2.dilate(lines, np.ones((2 * reach + 1, 2 * reach + 1), np.uint8)) > 0
+    edge = area & ~(cv2.erode(area.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0)
+    light = gray > OUTLINE_LIGHT
+    count, labels, stats, _ = cv2.connectedComponentsWithStats((light & area).astype(np.uint8), connectivity=8)
+    # The page between dark letters, or a light background, runs out to the edge of the area.
+    open_labels = set(np.unique(labels[edge & light]).tolist())
+    kernel = np.ones((2 * width + 1, 2 * width + 1), np.uint8)
+    letters = np.zeros_like(light)
+    for k in range(1, count):
+        if k in open_labels or stats[k, 4] < (0.1 * lh) ** 2:
+            continue
+        x, y, w, h = (int(v) for v in stats[k, :4])
+        x0, y0 = max(0, x - width - 1), max(0, y - width - 1)
+        piece = labels[y0:y + h + width + 1, x0:x + w + width + 1] == k
+        ring = (cv2.dilate(piece.astype(np.uint8), kernel) > 0) & ~light[y0:y + h + width + 1, x0:x + w + width + 1]
+        if ring.any() and np.mean(gray[y0:y + h + width + 1, x0:x + w + width + 1][ring] < OUTLINE_DARK) >= OUTLINE_RING:
+            letters[y0:y + h + width + 1, x0:x + w + width + 1] |= piece
+    if area_only:  # the letters and their outline, grown like the outline itself
+        return cv2.dilate(letters.astype(np.uint8), np.ones((4 * width + 1, 4 * width + 1), np.uint8)) > 0
+    lit = (light & on_lines).sum()
+    if not lit or (letters & on_lines).sum() < OUTLINE_SHARE * lit:
+        return False
+    # Light letters over a light page are the holes of dark letters in a white bubble, not outlined lettering.
+    around = area & ~(cv2.dilate(letters.astype(np.uint8), np.ones((4 * width + 1, 4 * width + 1), np.uint8)) > 0)
+    return bool(around.any()) and float(light[around].mean()) < OUTLINE_AROUND
 
 
 # Text spacing ---------------------------------------------------------------
@@ -931,6 +1008,7 @@ def paragraph_lines(boxes, height):
 
 
 STAIR_FACTOR = 2.6  # an orphan this tall may be two touching lines
+STAIR_SHARED = 0.8  # the two lines of a staircase overlap sideways less than this share
 
 
 def stair_lines(pixels, x, y, height):
@@ -962,6 +1040,9 @@ def stair_lines(pixels, x, y, height):
         boxes.append((x + int(cols[0]), y + y0 + int(rows[0]), x + int(cols[-1]) + 1, y + y0 + int(rows[-1]) + 1))
     if boxes[0][2] - boxes[0][0] > 0.95 * w and boxes[1][2] - boxes[1][0] > 0.95 * w:
         return []  # one tall line or two stacked lines across the whole blob: not a staircase
+    shared = min(boxes[0][2], boxes[1][2]) - max(boxes[0][0], boxes[1][0])
+    if shared >= STAIR_SHARED * min(boxes[0][2] - boxes[0][0], boxes[1][2] - boxes[1][0]):
+        return []  # one half inside the other: one line of big letters (Grand Blue 102 p31), not two offset lines
     return boxes
 
 
