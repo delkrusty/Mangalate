@@ -225,3 +225,206 @@ class OuroTwoLetteringTest(unittest.TestCase):
         ys, xs = np.nonzero(mask)
         self.assertGreater(y0 + ys.min(), 140)          # the gutter is not part of the bubble
         self.assertLess(x0 + xs.min(), 220)             # and the bubble is not cut to the text box
+
+
+def page_with_panel(art_band=None):
+    """A large light panel closed only by its frame, with no bubble in it (text on the sky)."""
+    image = np.full((800, 800, 3), 90, np.uint8)
+    cv2.rectangle(image, (100, 100), (700, 700), (255, 255, 255), -1)
+    cv2.rectangle(image, (100, 100), (700, 700), (0, 0, 0), 4)
+    if art_band is not None:  # dark drawing across the panel (a shore, a crowd)
+        cv2.rectangle(image, (104, art_band[0]), (696, art_band[1]), (40, 40, 40), -1)
+    return image
+
+
+def line_slots(plan):
+    """(x0, y0, x1, y1) of every drawn line of a plan_shaped result."""
+    measure = lettering.Measure(plan["font"], plan["size"])
+    slots = []
+    for i, line in enumerate(plan["lines"]):
+        w = measure(line)
+        top = plan["top"] + i * plan["advance"]
+        slots.append((plan["x"] - w / 2, top, plan["x"] + w / 2, top + plan["slot"]))
+    return slots
+
+
+def centre_y(plan):
+    x0, y0, x1, y1 = plan["box"]
+    return (y0 + y1) / 2
+
+
+class VerticalCentreTest(unittest.TestCase):
+    """The translation stays at the height of the original text, not in the middle of a big light area.
+
+    Test rounds: text on the sky of a panel (no bubble) or in a bubble whose fill leaked into
+    the sky was centred in the whole panel, lines away from the original, over the outline of
+    another bubble.
+    """
+
+    LINE = 30
+    TEXT = "A reunião começa logo depois do almoço."
+
+    def test_text_near_the_bottom_of_a_large_light_area_stays_there(self):
+        box = (320, 600, 480, 660)  # two lines of lettering near the bottom of the panel
+        plan = lettering.plan_shaped(page_with_panel(), box, [], self.TEXT, FONT, self.LINE, 10)
+        self.assertIsNotNone(plan)
+        self.assertLessEqual(abs(centre_y(plan) - (box[1] + box[3]) / 2), self.LINE,
+                             f"block centre {centre_y(plan):.0f}, original text centre {(box[1] + box[3]) / 2:.0f}")
+
+    def test_staying_in_place_does_not_shrink_the_letters(self):
+        box = (320, 600, 480, 660)
+        text = "A reunião começa logo depois do almoço, no salão principal, e ninguém pode faltar."
+        plan = lettering.plan_shaped(page_with_panel(), box, [], text, FONT, self.LINE, 10)
+        self.assertGreaterEqual(plan["size"], self.LINE)
+
+    def test_dark_drawing_next_to_the_text_is_never_covered(self):
+        image = page_with_panel(art_band=(670, 696))  # drawing right under the text
+        box = (320, 600, 480, 660)
+        plan = lettering.plan_shaped(image, box, [], self.TEXT, FONT, self.LINE, 10)
+        self.assertIsNotNone(plan)
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+        for x0, y0, x1, y1 in line_slots(plan):
+            under = gray[int(y0):int(np.ceil(y1)), int(x0):int(np.ceil(x1))]
+            self.assertFalse((under < 110).any(), "a line is drawn over the dark drawing")
+
+    def test_centred_text_in_an_oval_keeps_the_middle(self):
+        image = page_with_bubble(axes=(170, 140))
+        box = (230, 270, 370, 330)
+        plan = lettering.plan_shaped(image, box, [], self.TEXT, FONT, self.LINE, 10)
+        self.assertGreaterEqual(plan["size"], self.LINE)
+        x0, y0, x1, y1 = plan["box"]
+        self.assertLess(abs(centre_y(plan) - 300), 0.1 * (y1 - y0) + 5)
+
+    def test_bubble_with_a_tail_keeps_the_text_in_its_body(self):
+        image = page_with_bubble(axes=(150, 110))
+        tail = np.array([[230, 380], [270, 395], [180, 480]], np.int32)  # down-left, like most tails
+        cv2.fillPoly(image, [tail], (255, 255, 255))
+        cv2.line(image, (230, 380), (180, 480), (0, 0, 0), 3)
+        cv2.line(image, (270, 395), (180, 480), (0, 0, 0), 3)
+        box = (240, 270, 360, 330)
+        plan = lettering.plan_shaped(image, box, [], self.TEXT, FONT, self.LINE, 10)
+        self.assertGreaterEqual(plan["size"], self.LINE)
+        self.assertLessEqual(abs(centre_y(plan) - 300), self.LINE)
+        for x0, y0, x1, y1 in line_slots(plan):
+            for x, y in ((x0, y0), (x1, y0), (x0, y1), (x1, y1)):
+                self.assertLess(((x - 300) / 150) ** 2 + ((y - 300) / 110) ** 2, 1.0, "a line leaves the oval body")
+
+    def test_text_at_the_edge_of_the_area_stays_inside_whole_and_readable(self):
+        # A long translation whose original box sits against the top or the bottom of the light
+        # area: the centre cannot always stay put, but the block never leaves the area, never
+        # cuts a letter, never covers the dark drawing and never gets tiny.
+        text = "A reunião começa logo depois do almoço, no salão principal, e ninguém pode chegar atrasado."
+        area_top, area_bottom = 104, 664  # inside the frame, above a dark band 670..696
+        cases = {"top edge": (320, 108, 480, 168), "bottom edge": (320, 600, 480, 660), "room": (320, 330, 480, 390)}
+        for name, box in cases.items():
+            with self.subTest(name):
+                image = page_with_panel(art_band=(670, 696))
+                cv2.line(image, (560, 120), (560, 650), (30, 30, 30), 3)  # a dark stroke beside the text
+                plan = lettering.plan_shaped(image, box, [], text, FONT, self.LINE, 10)
+                again = lettering.plan_shaped(image, box, [], text, FONT, self.LINE, 10)
+                self.assertIsNotNone(plan)
+                self.assertEqual(plan, again)                         # deterministic
+                self.assertEqual(" ".join(plan["lines"]), text)       # every word, none split
+                self.assertGreaterEqual(plan["size"], 0.6 * self.LINE)  # not below the safe size
+                x0, y0, x1, y1 = plan["box"]
+                self.assertGreaterEqual(y0, area_top)
+                self.assertLessEqual(y1, area_bottom)
+                half = (y1 - y0) / 2
+                centre = (box[1] + box[3]) / 2
+                if area_top <= centre - half and centre + half <= area_bottom:
+                    self.assertLessEqual(abs(centre_y(plan) - centre), self.LINE)  # room: stays put
+                gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+                for sx0, sy0, sx1, sy1 in line_slots(plan):
+                    under = gray[int(sy0):int(np.ceil(sy1)), int(sx0):int(np.ceil(sx1))]
+                    self.assertFalse((under < 110).any(), "a line is drawn over the dark drawing")
+                # Every drawn letter lands whole on the page and inside the light area.
+                drawn = image.copy()
+                lettering.draw_shaped(drawn, plan, (0, 0, 0), None)
+                ys, xs = np.nonzero((drawn != image).any(axis=2))
+                self.assertGreater(len(ys), 0)
+                self.assertTrue(area_top <= ys.min() and ys.max() <= area_bottom and 104 <= xs.min() and xs.max() < 557,
+                                f"ink at x {xs.min()}..{xs.max()}, y {ys.min()}..{ys.max()}")
+
+    def test_bubble_leaking_into_the_sky_keeps_the_text_in_it(self):
+        # A bubble with a gap in its outline at the top, inside a light panel: the fill runs
+        # through the gap into the sky, a light area far bigger than the bubble.
+        image = page_with_panel()
+        cv2.ellipse(image, (400, 580), (130, 85), 0, 0, 360, (0, 0, 0), 3)
+        cv2.rectangle(image, (385, 490), (415, 500), (255, 255, 255), -1)  # 30 px gap: wider than a leak closes
+        box = (330, 550, 470, 610)
+        plan = lettering.plan_shaped(image, box, [], self.TEXT, FONT, self.LINE, 10)
+        self.assertIsNotNone(plan)
+        self.assertLessEqual(abs(centre_y(plan) - (box[1] + box[3]) / 2), self.LINE,
+                             f"block centre {centre_y(plan):.0f}, original text centre {(box[1] + box[3]) / 2:.0f}")
+
+
+def clearance(image, plan):
+    """Smallest distance (px) from a drawn line to a dark pixel of the page."""
+    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+    dist = cv2.distanceTransform((gray >= 110).astype(np.uint8), cv2.DIST_L2, 3)
+    return min(float(dist[int(y0):int(np.ceil(y1)), int(x0):int(np.ceil(x1))].min())
+               for x0, y0, x1, y1 in line_slots(plan))
+
+
+class ClosedBubbleTest(unittest.TestCase):
+    """A well placed text in a tall closed bubble keeps the layout it had; only a leak moves it.
+
+    Test rounds: the text sat a third of a line above the middle of a tall bubble with a small
+    drawing inside it; limiting the rows anyway moved the block a few pixels, one line fewer
+    fitted, and the longest line ran up to the outline.
+    """
+
+    LINE = 21
+    TEXT = "Vocês vão ganhar muito tempo assim."
+
+    def test_text_near_the_middle_of_a_tall_closed_bubble_keeps_its_air(self):
+        image = np.full((700, 600, 3), 90, np.uint8)
+        cv2.ellipse(image, (300, 350), (120, 170), 0, 0, 360, (255, 255, 255), -1)
+        cv2.ellipse(image, (300, 350), (120, 170), 0, 0, 360, (0, 0, 0), 3)
+        cv2.circle(image, (202, 380), 28, (30, 30, 30), -1)  # a small drawing inside, on the left
+        box = (230, 288, 370, 396)  # centre 8 px (0.4 line) above the middle of the bubble
+        plan = lettering.plan_shaped(image, box, [], self.TEXT, FONT, self.LINE, 10)
+        self.assertIsNotNone(plan)
+        self.assertEqual(" ".join(plan["lines"]), self.TEXT)
+        # The block is centred in the rows it is given, whatever the font: in the middle of the
+        # bubble (y 350) when the rows are left alone, a few px higher when they are cut.
+        self.assertLessEqual(abs(centre_y(plan) - 350), 2, f"block centre {centre_y(plan):.1f}, bubble middle 350")
+
+
+class TextAtTheTopTest(unittest.TestCase):
+    """Text lettered at the top of a closed bubble or a narration box, translation much longer.
+
+    The middle of the interior is lines away from the text, as in a leak, but the area is closed:
+    the translation must stay whole, inside, and not shrink far below the original size.
+    """
+
+    LINE = 30
+    TEXT = "Na manhã seguinte, todos já estavam no porto esperando o primeiro barco do dia."
+
+    def check(self, image, box, inside):
+        plan = lettering.plan_shaped(image, box, [], self.TEXT, FONT, self.LINE, 10)
+        self.assertIsNotNone(plan)
+        self.assertEqual(" ".join(plan["lines"]), self.TEXT)               # every word, none split
+        self.assertGreaterEqual(plan["size"], 0.7 * self.LINE, plan["lines"])  # not tiny
+        for x0, y0, x1, y1 in line_slots(plan):
+            for x, y in ((x0, y0), (x1, y0), (x0, y1), (x1, y1)):
+                self.assertTrue(inside(x, y), f"line corner ({x:.0f}, {y:.0f}) outside the interior")
+        return plan
+
+    # Known defect of the centre limit: a closed tall bubble with the text at its top passes the
+    # asymmetry threshold like a leak and the letters shrink (18 px for 30).  No real case in the
+    # five measured excerpts; queued until one shows up on a real page.
+    @unittest.expectedFailure
+    def test_text_at_the_top_of_a_tall_closed_bubble(self):
+        image = np.full((800, 600, 3), 90, np.uint8)
+        cv2.ellipse(image, (300, 400), (130, 230), 0, 0, 360, (255, 255, 255), -1)
+        cv2.ellipse(image, (300, 400), (130, 230), 0, 0, 360, (0, 0, 0), 3)
+        box = (240, 215, 360, 275)  # two lines near the top of the oval
+        self.check(image, box, lambda x, y: ((x - 300) / 130) ** 2 + ((y - 400) / 230) ** 2 < 1.0)
+
+    def test_text_at_the_top_of_a_narration_box(self):
+        image = np.full((700, 700, 3), 90, np.uint8)
+        cv2.rectangle(image, (150, 120), (550, 520), (255, 255, 255), -1)
+        cv2.rectangle(image, (150, 120), (550, 520), (0, 0, 0), 3)
+        box = (230, 140, 470, 200)  # two lines right under the top edge of the box
+        self.check(image, box, lambda x, y: 153 <= x <= 547 and 123 <= y <= 517)
