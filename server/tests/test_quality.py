@@ -829,6 +829,42 @@ class LeakingBubbleScanTest(unittest.TestCase):
         self.assertEqual(quality.bubble_text_lines(self.page(content=None), [self.SOUND]), [])
 
 
+class GrazedBubbleScanTest(unittest.TestCase):
+    """Grand Blue 102 p20: "S... / SORRY / ..." in a bubble whose white leaks out of a gap in
+    the outline and only grazes the line boxes of the bubble next to it."""
+
+    NEIGHBOUR = (306, 100, 400, 130)
+
+    def page(self, mark=True):
+        from PIL import Image, ImageDraw
+        img = Image.new("RGB", (900, 1200), (120, 120, 120))
+        d = ImageDraw.Draw(img)
+        d.ellipse((100, 100, 260, 460), fill="white", outline="black", width=4)
+        d.rectangle((215, 70, 300, 140), fill="white")  # the gap in the outline, open to a light patch
+        font = LeakingBubbleScanTest.font(26)
+        d.text((200, 150), "S", fill="black", font=font)  # stutter letter on its own, near the gap
+        w = d.textlength("SORRY", font=font)
+        d.text((180 - w / 2, 270), "SORRY", fill="black", font=font)
+        d.text((165, 290), "...", fill="black", font=font)
+        if mark:  # a stroke of the art inside the white
+            d.line((235, 360, 238, 395), fill="black", width=3)
+        return np.array(img)
+
+    def test_bubble_that_only_grazes_a_neighbour_box_is_found(self):
+        found = quality.bubble_text_lines(self.page(), [self.NEIGHBOUR])
+        self.assertEqual(len(found), 1)
+        _, rows, letters = found[0]
+        self.assertEqual(len(rows), 2, rows)  # the word, then its dots: two rows of lettering
+        (x0, y0, x1, y1), dots = rows
+        self.assertTrue(130 < x0 < x1 < 230 and 270 < y0 < y1 < 305, rows)
+        self.assertTrue(y1 <= dots[1] and x0 <= dots[0] < dots[2] <= x1, rows)
+        self.assertTrue(letters[dots[1]:dots[3], dots[0]:dots[2]].any())  # the dots are cleaned too
+        self.assertFalse(letters[355:400, 228:245].any())  # the art stroke stays
+
+    def test_box_reaching_into_the_bubble_still_means_seen(self):
+        self.assertEqual(quality.bubble_text_lines(self.page(), [(240, 90, 330, 130)]), [])
+
+
 class ContainedRegionTest(unittest.TestCase):
     """Grand Blue p25: the tilted "LIKE" had its own region inside "LOOKS / IORI SCORED..."."""
 

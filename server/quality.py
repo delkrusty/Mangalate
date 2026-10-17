@@ -987,7 +987,7 @@ def _text_rows(ink):
     if len(comps) < 2:
         return None
     med = float(np.median([c[3] for c in comps]))
-    letters = [c for c in comps if 0.5 * med <= c[3] <= 1.6 * med and c[2] <= 2.5 * med]
+    letters = [c for c in comps if 0.5 * med <= c[3] <= 1.6 * med and 0.2 * med <= c[2] <= 2.5 * med]
     if sum(c[4] for c in letters) < 0.7 * sum(c[4] for c in comps):
         return None
     rows = []
@@ -1006,18 +1006,36 @@ def _text_rows(ink):
         if gaps and max(gaps) > 1.5 * med:
             continue
         words += len(cs) >= 2
-        out.append((min(c[0] for c in cs), min(c[1] for c in cs),
-                    max(c[0] + c[2] for c in cs), max(c[1] + c[3] for c in cs)))
+        out.append(((min(c[0] for c in cs), min(c[1] for c in cs),
+                     max(c[0] + c[2] for c in cs), max(c[1] + c[3] for c in cs)), len(cs)))
     if not words:
         return None
-    out.sort(key=lambda b: b[1])
-    if any(b[1] - a[3] > 1.2 * med for a, b in zip(out, out[1:])):
+    out.sort(key=lambda r: r[0][1])
+    blocks = [[out[0]]]
+    for row in out[1:]:
+        if row[0][1] - blocks[-1][-1][0][3] > 1.2 * med:
+            blocks.append([])
+        blocks[-1].append(row)
+    # A lone mark far from the text (one piece on its own row: a stutter letter half
+    # outside the bubble, a stroke of the art) does not make the rest less of a speech.
+    kept = [b for b in blocks if len(b) > 1 or b[0][1] >= 2]
+    # With a mark left out, the rest has to hold a word of three letters or more.
+    if len(kept) != 1 or (len(kept) < len(blocks) and max(n for _, n in kept[0]) < 3):
         return None
+    blocks = kept
+    out = [box for box, _ in blocks[0]]
+    # Punctuation under the last row ("SORRY / ...") is a row of its own: lettering, not a drawn sound.
+    x0, _, x1, y1 = out[-1]
+    dots = [c for c in comps if c[3] < 0.5 * med and x0 <= c[0] and c[0] + c[2] <= x1 and 0 <= c[1] - y1 <= 1.2 * med]
+    if len(dots) >= 2:
+        out.append((min(c[0] for c in dots), min(c[1] for c in dots),
+                    max(c[0] + c[2] for c in dots), max(c[1] + c[3] for c in dots)))
     return out
 
 
 SCAN_SPLIT = 15           # disc (px) that cuts a bubble off a light background it leaks into
 SCAN_SEEN = 0.5           # share of a box inside a cut-off bubble that means the detector saw it
+SCAN_GRAZE = 0.02         # a box with less of itself inside a bubble that leaks out only grazes it
 
 
 def bubble_text_lines(image, boxes):
@@ -1041,7 +1059,13 @@ def bubble_text_lines(image, boxes):
         if bubble:
             found.append(bubble)
         elif reason == "open":
-            found.extend(_split_bubble(gray, raw, labels, i, stats[i], boxes))
+            pieces = _split_bubble(gray, raw, labels, i, stats[i], boxes)
+            if not pieces:
+                # The white leaks out to the page and only grazes the boxes of the bubble next
+                # door (Grand Blue 102 p20, "SORRY..."): those boxes do not mean this one was seen.
+                bubble, _ = _scan_bubble(gray, raw, labels, i, stats[i], kernel, boxes, SCAN_GRAZE)
+                pieces = [bubble] if bubble else []
+            found.extend(pieces)
     return found
 
 
@@ -1113,7 +1137,8 @@ def _scan_bubble(gray, raw, labels, i, stats, kernel, boxes, seen):
     if abs(tx - cw / 2) > SCAN_CENTRE[0] * cw or abs(ty - ch / 2) > SCAN_CENTRE[1] * ch:
         return None, "centre"
     letters = np.zeros((h, w), bool)
-    letters[y0:y1, x0:x1] = ink
+    for a, b, c, d in rows:  # only the ink of the rows: never a stroke of the art beside them
+        letters[y0 + max(0, b - 2):y0 + d + 2, x0 + max(0, a - 2):x0 + c + 2] = ink[max(0, b - 2):d + 2, max(0, a - 2):c + 2]
     rows = [(x0 + a, y0 + b, x0 + c, y0 + d) for a, b, c, d in rows]
     rows, y1 = _rows_below(gray, rows, letters, (x0, x1), y1)
     return ((x0, y0, x1, y1), rows, letters), None

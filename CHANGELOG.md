@@ -7,6 +7,7 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 ### Tradução e balões
 - Um balão com letra pequena, numa página em que outro balão tem letras bem maiores (um grito em itálico), agora é lido e traduzido em vez de ficar em inglês. O detector marcava o texto, mas as linhas pequenas eram descartadas por terem menos da metade da altura de linha da página. Agora elas valem quando formam um parágrafo de duas linhas ou mais, medidas pela própria altura. Letra solta empilhada (onomatopeia vertical) continua de fora.
 - A caixa de cada linha é ajustada às letras antes da leitura. Uma caixa mais baixa que as letras, ou que começava depois da primeira letra ("MOUN" no lugar de "AMOUNT"), fazia a linha sumir ou ser lida errado, e a fala saía partida ou com sentido trocado. Caixas sobrepostas que pegavam uma linha e meia são recortadas linha a linha, e uma linha recortada mantém as palavras que passavam da caixa ("ISN'T IT?" não perde mais o "IT?").
+- Um balão alto e estreito com uma fala curta e espaçada ("Desculpa..."), que nem o detector nem a varredura de balões achavam porque o branco dele vaza por uma abertura do contorno, agora é encontrado.
 
 ## 0.5.7
 
