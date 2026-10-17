@@ -2,7 +2,7 @@
 
 As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://github.com/mihonapp/mihon/blob/main/CHANGELOG.md).
 
-## Em teste (próxima versão)
+## 0.5.7
 
 ### Letreiramento
 - A tradução é escrita numa fonte de quadrinhos (Comic Neue Bold, licença livre) em vez da Arial, com contorno branco fino.
