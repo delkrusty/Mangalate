@@ -88,6 +88,8 @@ Nesse caso, prepare o commit (um assunto, mensagem em português como as do hist
 
 Leve a ficha, a tabela antes e depois, os caminhos das imagens no PC e uma recomendação.
 
+Todo resultado mostrado ao Lucas vem com amostras ampliadas dos balões afetados, lado a lado (Original | 1ª versão traduzida | Correção), e com pelo menos um balão de controle que não pode mudar. Salve em `teste-curto/<rodada>/amostras/` com um `amostras.html` que tenha uma legenda por amostra.
+
 ## 7. Registrar
 
 Feche a iteração com um resumo curto: ficha, commit de partida e final, tabela, decisão e o próximo problema da fila. A próxima iteração começa no passo 0.
