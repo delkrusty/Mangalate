@@ -629,6 +629,7 @@ def repair_textlines(original_detect):
             return result
         horizontal = [i for i, line in enumerate(textlines) if getattr(line, "direction", "h") == "h"]
         boxes = [_box(textlines[i].pts) for i in horizontal]
+        ctx.mangalate_detector_lines = [list(_box(line.pts)) for line in textlines]  # --diagnostics only
         # Letters inside a flat interior count even where the detector mask missed them.
         from quality import bubble_glyphs, NEAR_LINES
         seen = np.asarray(mask_raw) > 127
@@ -824,9 +825,14 @@ def rescue_ocr(original_ocr):
         result = await original_ocr(self, config, ctx)
         kept = {id(line) for line in result}
         lost = [line for line in before if id(line) not in kept and getattr(line, "direction", "h") == "h"]
+        from quality import _box
+        # --diagnostics only: what the OCR read on each line, and the lines it dropped.
+        ctx.mangalate_ocr_lines = [{"caixa": list(_box(l.pts)), "texto": str(getattr(l, "text", "")),
+                                    "prob": round(float(getattr(l, "prob", 0) or 0), 3)} for l in result]
+        ctx.mangalate_ocr_lost = [list(_box(l.pts)) for l in lost]
         if not lost:
             return result
-        from quality import near_lines, _box
+        from quality import near_lines
         candidates = [lost[i] for i in near_lines([_box(l.pts) for l in lost],
                                                    [_box(l.pts) for l in result if getattr(l, "direction", "h") == "h"])]
         if not candidates:
