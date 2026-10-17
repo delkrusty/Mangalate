@@ -90,10 +90,15 @@ class BubbleLayoutTest(unittest.TestCase):
 
 
 class BubbleLayoutHookTest(unittest.TestCase):
-    """The engine renderer uses the plan; regions without one keep the engine's drawing."""
+    """The engine renderer uses the plan; regions without one keep the engine's drawing.
 
-    def test_planned_region_is_drawn_centred_in_the_rectangle(self):
+    Each path pins the font: inside the image the comic font exists and the shaped plan
+    is used, outside it only the rectangle plan would run, whatever the machine.
+    """
+
+    def render_page(self, font):
         import types
+        from unittest import mock
         from engine_compat import bubble_layout
         calls = []
         rendering = types.SimpleNamespace(
@@ -128,16 +133,42 @@ class BubbleLayoutHookTest(unittest.TestCase):
 
         image = page_with_bubble()
         bubble, art = Region((255, 200, 345, 400), "Espero que você se parta"), Region((10, 10, 40, 40), "")
-        rendering.resize_regions_to_font_size(image, [bubble, art], None, 0, -1)
-        self.assertIsNotNone(bubble.mangalate_plan)
+        with mock.patch.object(lettering, "font_file", lambda: font):
+            rendering.resize_regions_to_font_size(image, [bubble, art], None, 0, -1)
         self.assertIsNone(art.mangalate_plan)
+        self.assertIsNone(art.mangalate_shaped)
         before = image.copy()
         rendering.render(image, bubble, None, False, None, False)
         rendering.render(image, art, None, False, None, False)
-        self.assertEqual(calls, ["engine"])
-        changed = np.argwhere((image != before).any(axis=2))
+        self.assertEqual(calls, ["engine"])  # only the region without a bubble goes to the engine
+        return bubble, np.argwhere((image != before).any(axis=2))
+
+    def test_rectangle_plan_is_drawn_centred_in_the_rectangle(self):
+        bubble, changed = self.render_page(None)  # no font: the rectangle plan
+        self.assertIsNone(bubble.mangalate_shaped)
+        self.assertIsNotNone(bubble.mangalate_plan)
         _, (x0, y0, x1, y1) = bubble.mangalate_plan
         self.assertTrue(changed.size and changed[:, 1].min() >= x0 and changed[:, 1].max() < x1)
+        self.assertTrue(changed[:, 0].min() >= y0 and changed[:, 0].max() < y1)
+        self.assertLessEqual(abs((changed[:, 1].min() + changed[:, 1].max()) / 2 - (x0 + x1) / 2), 1)
+        self.assertLessEqual(abs((changed[:, 0].min() + changed[:, 0].max()) / 2 - (y0 + y1) / 2), 1)
+
+    def test_shaped_plan_is_drawn_centred_in_the_bubble(self):
+        bubble, changed = self.render_page(FONT)  # the comic font of the image: the path of real pages
+        self.assertIsNone(bubble.mangalate_plan)
+        plan = bubble.mangalate_shaped
+        self.assertIsNotNone(plan)
+        self.assertEqual(" ".join(plan["lines"]), "Espero que você se parta")
+        x0, y0, x1, y1 = plan["box"]
+        pad = int(round(plan["size"] * 0.07)) + 2  # the white outline around the letters
+        self.assertGreater(len(changed), 500)
+        self.assertGreaterEqual(changed[:, 1].min(), x0 - pad)
+        self.assertLessEqual(changed[:, 1].max(), x1 + pad)
+        self.assertGreaterEqual(changed[:, 0].min(), y0 - pad)
+        self.assertLessEqual(changed[:, 0].max(), y1 + pad)
+        # Centred on the bubble (300, 300); vertically a little lower, accents against descenders.
+        self.assertLessEqual(abs((changed[:, 1].min() + changed[:, 1].max()) / 2 - 300), pad)
+        self.assertLessEqual(abs((changed[:, 0].min() + changed[:, 0].max()) / 2 - 300), pad + 2)
 
 
 if __name__ == "__main__":
