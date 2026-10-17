@@ -433,6 +433,7 @@ def broken_words(text, lines):
 GLYPH_TOLERANCE = 40     # antialiased letter edges still differ this much from the interior
 GLYPH_REACH = 1.5        # search window around the text, in line heights
 GLYPH_NEAR = 0.8         # letters kept only this close to the text box, in line heights
+CLEAN_MARK = 0.4         # a punctuation dot is smaller than this, in line heights (a lower-case letter is not)
 
 
 def bubble_glyphs(image, box, line_height, near=GLYPH_NEAR):
@@ -498,6 +499,59 @@ def bubble_glyphs(image, box, line_height, near=GLYPH_NEAR):
     keep[max(0, by0 - near):by1 + near, max(0, bx0 - near):bx1 + near] = True
     out[wy0:wy1, wx0:wx1] = holes & keep
     return out
+
+
+def glyphs_to_clean(image, box, line_height):
+    """Letters around a text box to add to the cleaning mask, grown like the detector's own mask.
+
+    Grown by about a quarter of the line height: with a thin margin the cleaner left a
+    grey ghost of the anti-aliased letter edges (TBATE new episode p12, "OF US.").  The
+    growth stays near the text box, never reaching the bubble outline, but a letter of the
+    box (its centre inside) that the margin cuts is taken whole, and so are the dots of
+    punctuation that follow the line or sit on the row under it: the dots of "..." past the box stayed as a grey
+    smudge (Grand Blue 102 p42/p20).  A word past the box, or another line, is never
+    taken: it was not read, and erasing it would lose the speech.
+    """
+    h, w = image.shape[:2]
+    lh = max(4.0, float(line_height))
+    glyphs = bubble_glyphs(image, box, lh, near=NEAR_LINES)
+    if not glyphs.any():
+        return glyphs
+    size = max(5, int(round(lh * 0.25)) | 1)
+    x0, y0, x1, y1 = (int(v) for v in box)
+    limit = np.zeros((h, w), bool)
+    limit[max(0, y0 - size):min(h, y1 + size), max(0, x0 - size):min(w, x1 + size)] = True
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(glyphs.astype(np.uint8), connectivity=8)
+    def belongs(label, near_taken, grow=False):
+        gx, gy, gw, gh = (int(v) for v in stats[label, :4])
+        mark = gh < CLEAN_MARK * lh and gw < CLEAN_MARK * lh
+        if near_taken and y0 <= gy + gh / 2 <= y1 and (mark or (not grow and x0 <= gx + gw / 2 <= x1)):
+            return True  # a letter of the box the margin cuts, or a dot of punctuation within a letter gap
+        # A dot of punctuation on the row just under the line ("SORRY / ...").
+        return mark and 0 <= gy - y1 <= lh and x0 <= gx and gx + gw <= x1
+    box_limit = limit.copy()
+    queue = [k for k in set(np.unique(labels[limit & glyphs]).tolist()) - {0} if belongs(k, True)]
+    below = [k for k in range(1, count) if k not in queue and belongs(k, False)]
+    if below:
+        # Only a row of dots alone: a letter on the same row makes it a line of text that was not read.
+        r0, r1 = min(stats[k, 1] for k in below), max(stats[k, 1] + stats[k, 3] for k in below)
+        if any(stats[k, 1] < r1 and stats[k, 1] + stats[k, 3] > r0 and k not in below and k not in queue
+               for k in range(1, count)):
+            below = []
+    queue += below
+    taken = set(queue)
+    while queue:
+        k = queue.pop()
+        gx, gy, gw, gh = (int(v) for v in stats[k, :4])
+        limit[max(0, gy - size):min(h, gy + gh + size), max(0, gx - size):min(w, gx + gw + size)] = True
+        for label in set(np.unique(labels[limit & glyphs]).tolist()) - taken - {0}:
+            if belongs(label, True, grow=True):
+                taken.add(label)
+                queue.append(label)
+    kernel = np.ones((size, size), np.uint8)
+    whole = cv2.dilate(np.isin(labels, list(taken)).astype(np.uint8), kernel) > 0
+    # Letters of the lines above and below: only what reaches into the box margin, as before.
+    return (whole & limit) | ((cv2.dilate(glyphs.astype(np.uint8), kernel) > 0) & box_limit)
 
 
 # Line boxes from the detector mask -----------------------------------------

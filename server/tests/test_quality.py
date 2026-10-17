@@ -11,7 +11,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import quality
-from quality import (broken_words, bubble_glyphs, classify_region, compact_symbols, normalize_spacing,
+from quality import (broken_words, bubble_glyphs, glyphs_to_clean, classify_region, compact_symbols, normalize_spacing,
                      repair_lines, whole_word_breaker)
 
 RNG = np.random.default_rng(65)
@@ -629,6 +629,53 @@ class BubbleGlyphTest(unittest.TestCase):
             seen |= bubble_glyphs(image, box, box[3] - box[1], near=1.6)
         _, changes = repair_lines(seen.astype(np.uint8) * 255, boxes)
         self.assertEqual([kind for kind, _, _ in changes], ["added"])
+
+    def dotted(self):
+        # A line ending in "..." whose last dots sit just past the box, and a row of dots under it.
+        image = self.page()
+        image[100:300, 120:400] = 250
+        cv2.putText(image, "THE WORD", (150, 170), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (10, 10, 10), 3)
+        dots = [(318, 166), (330, 166), (342, 166), (200, 200), (212, 200), (224, 200)]
+        for x, y in dots:
+            cv2.circle(image, (x, y), 3, (10, 10, 10), -1)
+        return image, (148, 146, 322, 172), dots
+
+    def test_letters_cut_by_the_box_are_cleaned_whole(self):
+        # Grand Blue 102 p42/p20: the last dot of "...", or a row of dots under the word,
+        # was cleaned only up to the box margin and left a grey half dot.
+        image, box, dots = self.dotted()
+        clean = glyphs_to_clean(image, box, 26)
+        for x, y in dots:
+            self.assertTrue(clean[y - 3:y + 4, x - 3:x + 4].all(), (x, y))
+        self.assertFalse(clean[:, :60].any())          # the bubble outline stays
+
+    def test_word_past_the_box_is_not_cleaned(self):
+        # A word the box left out (printed text running on past what was read) was not
+        # translated: erasing it would lose it.  Only the dots of punctuation follow the line.
+        image = self.page()
+        image[100:300, 120:400] = 250
+        cv2.putText(image, "THE", (150, 170), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (10, 10, 10), 3)
+        cols = np.flatnonzero((image[140:175, 120:400, 0] < 128).any(axis=0)) + 120
+        end = int(cols[-1]) + 1
+        cv2.putText(image, "IT", (end + 2, 170), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (10, 10, 10), 3)
+        clean = glyphs_to_clean(image, (148, 146, end, 172), 26)
+        self.assertFalse(clean[150:172, end + 6:end + 8].all(axis=1).any())  # only the margin touches the "I"
+        self.assertFalse(clean[150:172, end + 18:end + 28].any())            # the next letter stays
+
+    def test_small_letters_of_the_line_below_are_not_dots(self):
+        # A line in lower case under the box that was not read: its small letters are not punctuation.
+        image = self.page()
+        image[100:300, 120:400] = 250
+        cv2.putText(image, "THE WORD", (150, 170), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (10, 10, 10), 3)
+        cv2.putText(image, "one more line", (160, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (10, 10, 10), 2)
+        clean = glyphs_to_clean(image, (148, 146, 322, 172), 26)
+        self.assertFalse(clean[186:202, 150:330].any())
+
+    def test_cleaning_stays_off_the_outline(self):
+        image, _, _ = self.dotted()
+        cv2.putText(image, "EDGE", (60, 210), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (10, 10, 10), 3)  # touches the outline
+        clean = glyphs_to_clean(image, (148, 146, 322, 172), 26)
+        self.assertFalse(clean[190:215, 40:58].any())
 
 
 class PageRowsTest(unittest.TestCase):

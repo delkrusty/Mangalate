@@ -9,6 +9,7 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 - A caixa de cada linha é ajustada às letras antes da leitura. Uma caixa mais baixa que as letras, ou que começava depois da primeira letra ("MOUN" no lugar de "AMOUNT"), fazia a linha sumir ou ser lida errado, e a fala saía partida ou com sentido trocado. Caixas sobrepostas que pegavam uma linha e meia são recortadas linha a linha, e uma linha recortada mantém as palavras que passavam da caixa ("ISN'T IT?" não perde mais o "IT?").
 - Um balão alto e estreito com uma fala curta e espaçada ("Desculpa..."), que nem o detector nem a varredura de balões achavam porque o branco dele vaza por uma abertura do contorno, agora é encontrado.
 - Letreiro claro com contorno escuro grosso desenhado sobre um fundo escuro ou retícula agora é traduzido. A limpeza fica só nas letras e no contorno delas, e a arte em volta não é tocada. Na área repintada a retícula vira cinza liso. Vale só para frases de duas linhas ou mais: uma palavra sozinha com contorno (efeito sonoro) continua no original.
+- A limpeza do balão apaga a letra inteira quando a margem da caixa a cortava ao meio, e também os pontos de reticências que ficavam logo depois da linha ou na fileira de baixo. Antes ficava um borrão cinza no lugar do último ponto.
 
 ## 0.5.7
 
