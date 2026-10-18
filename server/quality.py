@@ -209,6 +209,7 @@ def normalize_spacing(text):
     if not text or has_cjk(text):
         return text
     text = re.sub(r"[ \t]+", " ", text)
+    text = text.replace("\u2011", "-")  # no glyph in the lettering font
     text = re.sub(r"(?<!-)--(?!-)", "—", text)  # "Eu--" -> "Eu—" (TBATE 199 p22)
     text = re.sub(r"[,;:]\s*(?=[.!?…—])", "", text)  # "da muralha,." (TBATE new p108)
     text = re.sub(r" +([,;:!?…])", r"\1", text)

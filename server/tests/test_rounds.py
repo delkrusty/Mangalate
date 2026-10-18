@@ -134,6 +134,13 @@ class RoundFixesTest(unittest.TestCase):
         self.assertEqual(normalize_spacing("Eu-- eu não sei"), "Eu— eu não sei")
         self.assertEqual(normalize_spacing("Espera---"), "Espera---")
 
+    def test_non_breaking_hyphen_becomes_plain_hyphen(self):
+        # The AI writes U+2011 in clitics; the lettering font has no glyph for it
+        # and it was drawn as a box (Black Clover 374 p5, Grand Blue 102 p2).
+        self.assertEqual(normalize_spacing("vamos enfrentá\u2011los juntos."), "vamos enfrentá-los juntos.")
+        self.assertEqual(normalize_spacing("vamos enfrentá-los juntos."), "vamos enfrentá-los juntos.")
+        self.assertEqual(normalize_spacing("Espera — não – agora."), "Espera — não – agora.")
+
 
 if __name__ == "__main__":
     unittest.main()
