@@ -155,6 +155,8 @@ def flat_fill_enabled():
 FLAT_SPREAD = 10    # max distance (0-255) of 95% of the ring from its median colour
 GROUP = 15          # letters this close (px) belong to the same blob of text
 RING = 6            # width (px) of the border read around a blob
+EDGE = 2            # width (px) of the ring touching the letters; it must be flat on its own
+FLAT_SHARE = 0.8    # min share of the whole ring in the edge colour when the outline crosses the ring
 CROP_PADDING = 96   # context (px) given to the model around text over art
 MAX_CROP_SHARE = 0.6
 
@@ -182,7 +184,17 @@ def split_flat(image, mask):
         colour = np.median(pixels, axis=0)
         spread = np.percentile(np.abs(pixels.astype(np.int16) - colour).max(axis=1), 95)
         if spread > FLAT_SPREAD:
-            continue
+            # A bubble outline near the text spoils the ring without touching the letters.
+            # Still flat if the band next to the letters is flat and holds most of the ring.
+            edge = cv2.dilate(letters.astype(np.uint8), np.ones((2 * EDGE + 1, 2 * EDGE + 1), np.uint8)).astype(bool)
+            near = image[y0:y1, x0:x1][edge & ring]
+            if len(near) < 4 * RING:
+                continue
+            colour = np.median(near, axis=0)
+            if np.percentile(np.abs(near.astype(np.int16) - colour).max(axis=1), 95) > FLAT_SPREAD:
+                continue
+            if (np.abs(pixels.astype(np.int16) - colour).max(axis=1) <= FLAT_SPREAD).mean() < FLAT_SHARE:
+                continue
         page[y0:y1, x0:x1][letters] = colour.round().astype(image.dtype)
         left[y0:y1, x0:x1][letters] = 0
     return page, left
