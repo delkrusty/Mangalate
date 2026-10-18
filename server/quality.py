@@ -1596,6 +1596,47 @@ def _has(name, text):
     return re.search(rf"(?<![\wÀ-ÿ]){re.escape(name)}(?![\wÀ-ÿ])", text or "", re.I) is not None
 
 
+# Spanish words that are never Portuguese (op1153-6a: a weaker model wrote "Gracias" and
+# "nuestra reina" in Brazilian dialogue).  A word the original also has is a name and stays.
+SPANISH_WORDS = re.compile(
+    r"(?<![\wÀ-ÿ])(?:gracias|usted|ustedes|señora?|señorita|hola|muy|buen[oa]s?|ahora|entonces|también|"
+    r"nosotros|nuestr[oa]s?|ellos|ellas|aquí|allí|hacer|tengo|tienes|puedo|quiero|mism[oa]s?|cuando|"
+    r"verdad|dinero|mierda|perdón|siempre|hij[oa]s?|mujer|hombre|niñ[oa]s?|corazón|ciudad|"
+    r"[\wÀ-ÿ]*ñ[\wÀ-ÿ]*|[a-zà-ÿ]{2,}ió)(?![\wÀ-ÿ])|[¡¿]", re.I)  # "-ió": Spanish past ("desenvolvió")
+# "O mais triste de todas": the article and "de todos/todas" disagree in gender.
+# Only "o ... de todas": a woman in a mixed group is rightly "a mais forte de todos".
+SUPERLATIVE_GENDER = re.compile(r"(?<![\wÀ-ÿ])(?:o|um)\s+mais\s+[\wÀ-ÿ]+\s+de\s+todas(?![\wÀ-ÿ])", re.I)
+# The same word twice in a row ("vocês tão tão distraídos"); a hyphen marks a stutter and a
+# word without a vowel is a sound ("Bzz bzz", "Hmm hmm").
+DOUBLED_WORD = re.compile(r"(?<![\wÀ-ÿ-])((?=[\wÀ-ÿ]*[aeiouáéíóúâêôãõà])[\wÀ-ÿ]{2,})\s+\1(?![\wÀ-ÿ-])",
+                          re.I)
+# Portuguese says these twice on purpose ("já já", "tchau tchau", "o que que", "bem bem
+# longe", "quase quase", "pega pega"), and laughs and interjections are written apart even
+# when the original glues them ("HAHAHA", "UH-OH").
+REDUPLICATIONS = {"já", "logo", "que", "tchau", "bem", "quase", "pisca", "corre", "pega",
+                  "ha", "há", "rá", "he", "hi", "ho", "hu", "ah", "oh", "eh", "ai", "ei", "ui", "hum"}
+
+
+def portuguese_problems(source, text):
+    """Notes for Spanish words, a superlative with the wrong gender and a word written twice."""
+    notes = []
+    for match in SPANISH_WORDS.finditer(text or ""):
+        # A name of the original, with its tilde or without it when the OCR dropped it ("MUNOZ").
+        word = match.group(0)
+        if word in "¡¿" or not (_has(word, source) or _has(word.replace("ñ", "n").replace("Ñ", "N"), source)):
+            notes.append(f"has the Spanish \"{match.group(0)}\": write correct Brazilian Portuguese")
+            break
+    match = SUPERLATIVE_GENDER.search(text or "")
+    if match:
+        notes.append(f"\"{match.group(0)}\" mixes masculine and feminine: make the gender agree")
+    if not DOUBLED_WORD.search(str(source or "")):
+        for match in DOUBLED_WORD.finditer(text or ""):
+            if match.group(1).lower() not in REDUPLICATIONS:
+                notes.append(f"writes \"{match.group(0)}\", the same word twice: write it once")
+                break
+    return notes
+
+
 def translation_problems(sources, translations, glossary=(), earlier=""):
     """Notes for a second try: dropped names and negations, feminine forms with no woman in sight.
 
@@ -1627,6 +1668,7 @@ def translation_problems(sources, translations, glossary=(), earlier=""):
             if word:
                 notes.append(f"<|{number}|> uses the feminine \"{word.group(0)}\" but nothing shows a woman "
                              "here: rephrase without gender, or use the masculine")
+        notes += [f"<|{number}|> {note}" for note in portuguese_problems(source, text)]
     return notes
 
 

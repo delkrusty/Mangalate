@@ -783,6 +783,46 @@ class AddedNegationTest(unittest.TestCase):
             self.assertFalse(quality.added_negation(source, text), source)
 
 
+class PortugueseCheckTest(unittest.TestCase):
+    """op1153-6a: Spanish words, a superlative with the wrong gender and a doubled word."""
+
+    def test_spanish_words_ask_again(self):
+        notes = quality.translation_problems(["THANKS TO YOUR HELP, WE MADE IT."], ["Gracias à sua ajuda, conseguimos."])
+        self.assertTrue(any("Spanish" in n and "Gracias" in n for n in notes))
+        notes = quality.translation_problems(["IT IS VERY GOOD, SIR."], ["Está muy bom, senhor."])
+        self.assertTrue(any("Spanish" in n for n in notes))
+        notes = quality.translation_problems(["SHE GREW STRONGER."], ["Ela se desenvolvió mais forte."])
+        self.assertTrue(any("Spanish" in n for n in notes))
+        # A name from the source and plain Portuguese never trigger it.
+        for source, text in (("REINA, WAIT!", "Reina, espera!"), ("THANK YOU!", "Obrigado!"),
+                             ("ASK MUNOZ.", "Pergunta pro Muñoz."), ("MUÑOZ, WAIT!", "Muñoz, espera!"),
+                             ("I'LL DO IT NOW", "Vou fazer agora."), ("WHERE?", "Onde?")):
+            self.assertFalse(any("Spanish" in n for n in quality.translation_problems([source], [text])), text)
+
+    def test_superlative_keeps_the_gender_of_de_todos(self):
+        notes = quality.translation_problems(["THE SADDEST OF ALL THE BIRDS"],
+                                             ["O mais triste de todas as aves"])
+        self.assertTrue(any("gender" in n for n in notes))
+        # A woman in a mixed group is "a mais forte de todos": only "o ... de todas" is flagged.
+        for text in ("A mais triste de todas as aves", "O mais forte de todos!",
+                     "Ela é a mais rápida de todas.", "Ela é a mais forte de todos nós."):
+            self.assertFalse(any("gender" in n for n in quality.translation_problems(["X"], [text])), text)
+
+    def test_doubled_word_asks_again(self):
+        notes = quality.translation_problems(["WHY ARE YOU SO QUIET?"],
+                                             ["Por que você tá tá tão quieto?"])
+        self.assertTrue(any("tá tá" in n for n in notes))
+        notes = quality.translation_problems(["BACK SOON. WHY SO QUIET?"], ["Já já volto. Por que tão tão quieto?"])
+        self.assertTrue(any("tão tão" in n for n in notes))
+        # Laughs, stutters and repetitions the original also has stay.
+        for source, text in (("HA HA HA!", "Ha ha ha!"), ("C-CONGRATULATIONS!", "P-parabéns!"),
+                             ("NO, NO, NO!", "Não, não, não!"), ("RUN, RUN!", "Corre, corre!"),
+                             ("BZZZT BZT", "Bzzz bzzz"), ("HAHAHA!", "Ha ha ha!"), ("BYE-BYE!", "Tchau tchau!"),
+                             ("SOON.", "Já já."), ("WHAT IS THIS?", "O que que é isso?"),
+                             ("UH-OH.", "Oh oh.")):
+            self.assertFalse(any("twice" in n for n in quality.translation_problems([source], [text])), text)
+
+
 class BubbleScanTest(unittest.TestCase):
     """Small white bubbles the detector missed (Grand Blue pp. 19/27)."""
 

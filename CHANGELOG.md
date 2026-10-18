@@ -7,6 +7,7 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 ### Tradução
 - A resposta da IA com um marcador estragado mas legível (`<|5;|&gt;` no lugar de `<|5|>`, ou um marcador vazio sobrando depois do último balão) agora é aceita. O Gemini fazia isso com a tradução inteira certa, a página era recusada e ia para outra IA, às vezes a reserva, que é mais fraca e escrevia com erros de português, palavras em espanhol ou sentido trocado. Resposta que perde, junta ou troca balões continua recusada.
 - Quando a IA principal devolve a resposta fora do formato (junta dois balões numa linha ou pula um marcador), ela recebe uma segunda chance na mesma hora, com o marcador que faltou apontado, antes de a página ir para outra IA. Com `--diagnostics`, a resposta fora do formato fica salva em `respostas-invalidas.txt` também quando a página foi traduzida, para dar para ver o que a IA errou.
+- A tradução é conferida antes de sair: uma palavra em espanhol ("gracias", "muy", "desenvolvió"), um superlativo masculino com "de todas" ("o mais triste de todas") ou a mesma palavra duas vezes seguidas ("tão tão") fazem a IA tentar de novo com o problema apontado, e fica a melhor das duas respostas. Não contam: uma palavra que também está no original (um nome), "a mais forte de todos" (mulher num grupo misto), repetições normais do português ("já já", "tchau tchau", "o que que"), risada, interjeição, gagueira e som sem vogal ("Bzz bzz").
 
 ## 0.5.8
 
