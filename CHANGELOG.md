@@ -2,6 +2,15 @@
 
 As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://github.com/mihonapp/mihon/blob/main/CHANGELOG.md).
 
+## Em teste
+
+### Tradução
+- A resposta da IA com um marcador estragado mas legível (`<|5;|&gt;` no lugar de `<|5|>`, ou um marcador vazio sobrando depois do último balão) agora é aceita. O Gemini fazia isso com a tradução inteira certa, a página era recusada e ia para outra IA, às vezes a reserva, que é mais fraca e escrevia com erros de português, palavras em espanhol ou sentido trocado. Resposta que perde, junta ou troca balões continua recusada.
+- Quando a IA principal devolve a resposta fora do formato (junta dois balões numa linha ou pula um marcador), ela recebe uma segunda chance na mesma hora, com o marcador que faltou apontado, antes de a página ir para outra IA. Com `--diagnostics`, a resposta fora do formato fica salva em `respostas-invalidas.txt` também quando a página foi traduzida, para dar para ver o que a IA errou.
+- A tradução é conferida antes de sair: uma palavra em espanhol ("gracias", "muy", "desenvolvió"), um superlativo masculino com "de todas" ("o mais triste de todas") ou a mesma palavra duas vezes seguidas ("tão tão") fazem a IA tentar de novo com o problema apontado, e fica a melhor das duas respostas. Não contam: uma palavra que também está no original (um nome), "a mais forte de todos" (mulher num grupo misto), repetições normais do português ("já já", "tchau tchau", "o que que"), risada, interjeição, gagueira e som sem vogal ("Bzz bzz").
+- Nome de lugar com mais de uma palavra mantido em inglês na tradução é guardado inteiro na memória da obra, e não palavra por palavra. A mesma página lida de novo recebe os nomes que a leitura anterior manteve como estavam no original, mesmo antes de o termo aparecer numa segunda página; termo traduzido e gênero não são repetidos, para uma releitura poder consertar uma página ruim. Antes, um nome que aparecia uma vez só no capítulo podia sair em inglês numa rodada e traduzido na outra.
+- As instruções da IA ganharam regras de gênero pela pessoa de quem se fala (olhando os pronomes dos balões vizinhos), de manter o sentido simples das palavras e o pronome de verbos como "se vingar", de verbo figurado virar o que um brasileiro diz, de nomes de lugar no original e de português sem espanhol.
+
 ## 0.5.8
 
 ### Tradução e balões

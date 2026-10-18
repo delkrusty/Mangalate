@@ -198,7 +198,19 @@ class WorkMemory:
             pages = data["chapters"].get(chapter, {}).get("pages", {}) if chapter else {}
             earlier = sorted((int(k) for k in pages if k.isdigit() and (page is None or int(k) < page)))
             previous = [pages[str(k)] for k in earlier[-PREVIOUS_PAGES:]] if page is not None else []
-            return {"glossary": self.glossary(work), "previous": previous}
+            # A term seen only on this very page waits for a second page before it is used
+            # elsewhere, but the same page read again has the same OCR: there a name the first
+            # reading kept as written stays as written (op1153-6a: a sea named in English came
+            # back translated).  Translated terms and genders are not repeated: a reading again
+            # is how a bad page gets fixed.
+            here = f"{chapter}#{page}"
+            glossary = self.glossary(work)
+            known = {normalize(g["source"]) for g in glossary}
+            glossary += [{"source": c["source"], "target": c["target"]}
+                         for key, c in data["candidates"].items()
+                         if chapter and page is not None and here in c["pages"] and key not in known
+                         and normalize(c["target"]) == key]
+            return {"glossary": glossary, "previous": previous}
 
     def record(self, work, chapter, page, pairs, terms, page_text):
         """Store the page's dialogue and the accepted new terms. Returns the accepted terms."""
@@ -303,13 +315,29 @@ def kept_names(pairs):
     found = {}
     for pair in pairs:
         source, translation = pair.get("original", ""), pair.get("translation", "")
-        for word in set(re.findall(r"[A-Za-zÀ-ÿ]{3,}", source)):
-            if word.lower() in NOT_NAMES:
-                continue
-            name = word[:1].upper() + word[1:].lower()
-            if re.search(rf"(?<![\wÀ-ÿ]){re.escape(name)}(?![\wÀ-ÿ])", translation):
-                found.setdefault(word.upper(), name)
+        # Words kept side by side form one name ("WEST MARSH" -> "West Marsh"), so the
+        # next chapter keeps the whole name instead of translating it (op1153-6a).
+        words = [w for w in re.split(r"[^A-Za-zÀ-ÿ]+", source) if w]
+        start = 0
+        while start < len(words):
+            end = start
+            while end < len(words) and _kept(words[start:end + 1], translation):
+                end += 1
+            if end > start:
+                name = " ".join(w[:1].upper() + w[1:].lower() for w in words[start:end])
+                found.setdefault(" ".join(words[start:end]).upper(), name)
+                start = end
+            else:
+                start += 1
     return list(found.items())
+
+
+def _kept(words, translation):
+    """True when these source words appear capitalized and side by side in the translation."""
+    if any(w.lower() in NOT_NAMES or len(w) < 3 for w in words):
+        return False
+    name = r"\s+".join(re.escape(w[:1].upper() + w[1:].lower()) for w in words)
+    return re.search(rf"(?<![\wÀ-ÿ]){name}(?![\wÀ-ÿ])", translation) is not None
 
 
 def remember(memory, work, regions, terms):

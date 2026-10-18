@@ -137,6 +137,35 @@ class KeptNamesTest(unittest.TestCase):
                  {"original": "THE WALL", "translation": "A muralha."}]
         self.assertEqual(sorted(kept_names(pairs)), [("CHISA", "Chisa"), ("KOHEI", "Kohei")])
 
+    def test_a_name_of_several_words_is_kept_whole(self):
+        # op1153-6a: a sea and a mountain range named in English came back translated in
+        # the next round; learned as single words, the whole name was never a term.
+        from memory import kept_names
+        pairs = [{"original": "I WAS BORN IN THE WEST MARSH.", "translation": "Nasci no West Marsh."},
+                 {"original": "BEYOND THE IRON PEAKS, CHISA?", "translation": "Além dos Iron Peaks, Chisa?"}]
+        self.assertEqual(sorted(kept_names(pairs)), [("CHISA", "Chisa"), ("IRON PEAKS", "Iron Peaks"),
+                                                     ("WEST MARSH", "West Marsh")])
+        # A name and a title next to it, both kept but apart, stay two terms.
+        self.assertEqual(sorted(kept_names([{"original": "KOHEI, CHISA!", "translation": "Kohei, Chisa!"}])),
+                         [("CHISA", "Chisa"), ("KOHEI", "Kohei")])
+
+    def test_a_term_seen_on_this_very_page_is_sent_again_for_it(self):
+        # The same page read again has the same OCR, so an unconfirmed term from it is
+        # safe there; other pages still wait for the second page.
+        memory = WorkMemory()
+        memory.record("Obra", "Cap 1", 8, [], [("WEST MARSH", "West Marsh")], "BORN IN THE WEST MARSH")
+        self.assertEqual(memory.glossary("Obra"), [])
+        same = memory.context("Obra", "Cap 1", 8)["glossary"]
+        self.assertEqual(same, [{"source": "WEST MARSH", "target": "West Marsh"}])
+        self.assertEqual(memory.context("Obra", "Cap 1", 9)["glossary"], [])
+        self.assertEqual(memory.context("Obra", "Cap 2", 8)["glossary"], [])
+        # A translated term or a gender from one reading is not forced on the next one.
+        memory.record("Obra", "Cap 1", 8, [], [("IRON PEAKS", "Picos de Ferro"), ("CHISA", "Chisa (f)")],
+                      "THE IRON PEAKS, CHISA")
+        self.assertEqual([g["source"] for g in memory.context("Obra", "Cap 1", 8)["glossary"]],
+                         ["WEST MARSH", "CHISA"])
+        self.assertNotIn("gender", memory.context("Obra", "Cap 1", 8)["glossary"][1])
+
     def test_names_need_two_pages_even_without_the_terms_line(self):
         memory = WorkMemory()
         page = [region("CHISA, WAIT!", "Chisa, espera!")]

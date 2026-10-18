@@ -124,9 +124,16 @@ def parse_plain_lines(content, count):
     return lines if count > 1 and len(lines) == count else None
 
 
+# A marker the model mangled but whose number is clear: "<|5;|&gt;" (op1153-8a p14, Gemini).
+MARKER = r"<\|(\d+)[;:,.]?\|(?:>|&gt;)"
+
+
 def parse_marked(content, count):
     import re
-    markers = list(re.finditer(r"<\|(\d+)\|>", content))
+    markers = list(re.finditer(MARKER, content))
+    # One empty marker right after the last bubble ("<|10|>" before the terms line) is not a bubble.
+    if markers and int(markers[-1].group(1)) == count + 1 and not content[markers[-1].end():].strip():
+        content = content[:markers.pop().start()]
     if not markers and count == 1 and content:
         return [content]
     if not markers:
@@ -257,10 +264,19 @@ async def translate_byok(self, from_lang, to_lang, queries):
                 content, extracted, terms = await ask(provider, prompt)
                 try:
                     parsed = parse_marked(extracted, count)
-                except ValueError:
+                except ValueError as exc:
                     # Kept in memory for the local --diagnostics report only; never logged.
                     pool.__dict__.setdefault("raw", []).append((provider["name"], count, prompt, content))
-                    raise
+                    # One second try with the marker problem pointed out before the page goes to
+                    # the next AI (op1153-6a: Gemini merged two bubbles on three pages and the
+                    # weaker reserve wrote Spanish).  A limit or timeout here rests the provider.
+                    print("Second try: answer out of format", flush=True)
+                    content, extracted, terms = await ask(provider, prompt + "\n\n" + marker_note(extracted, count))
+                    try:
+                        parsed = parse_marked(extracted, count)
+                    except ValueError:
+                        pool.__dict__["raw"].append((provider["name"], count, prompt, content))
+                        raise exc
                 notes = answer_problems(sources, parsed)
                 if notes:
                     # One second try with the problems pointed out; the better answer stays.
@@ -283,6 +299,24 @@ async def translate_byok(self, from_lang, to_lang, queries):
         translations += parse_marked(self.extract_capture_groups(answer, rf"{self.rgx_capture}").strip(), count)
         _learned().extend(terms)
     return translations
+
+
+def marker_note(answer, count):
+    """What was wrong with the markers of an answer, for the second try (no answer text)."""
+    import re
+    found = [int(n) for n in re.findall(MARKER, answer or "")]
+    missing = [n for n in range(1, count + 1) if n not in found]
+    twice = sorted({n for n in found if found.count(n) > 1})
+    extra = sorted({n for n in found if n > count})
+    problems = ([f"missing {', '.join(f'<|{n}|>' for n in missing)}"] if missing else []) + \
+               ([f"repeated {', '.join(f'<|{n}|>' for n in twice)}"] if twice else []) + \
+               ([f"no region {', '.join(f'<|{n}|>' for n in extra)}"] if extra else [])
+    if not problems:
+        problems = ["text before <|1|> or an empty region"] if found == list(range(1, count + 1)) \
+            else ["markers out of order"]
+    return ("A previous answer broke the format (" + "; ".join(problems) +
+            f"). Answer again with exactly {count} lines, <|1|> to <|{count}|> in order, one translation per "
+            "marker: never merge two regions into one, even when they form one sentence.")
 
 
 def answer_problems(sources, translations):

@@ -173,7 +173,80 @@ class TranslateWithPoolTest(unittest.TestCase):
         finally:
             engine_compat.provider_client = original_client
         self.assertEqual(result, ["Olá!", "Mundo!"])
-        self.assertEqual(seen, [GROQ["model"], GEMINI["model"]])
+        # The first provider gets one second try pointing out the markers, then the page moves on.
+        self.assertEqual(seen, [GROQ["model"], GROQ["model"], GEMINI["model"]])
+
+    def run_page(self, request, queries):
+        engine = SimpleNamespace(
+            client=SimpleNamespace(max_retries=2),
+            _assemble_prompts=lambda source, target, queries: [("prompt", len(queries))],
+            _request_translation=request, rgx_capture="(.*)",
+            extract_capture_groups=lambda text, regex: text,
+        )
+        original_client = engine_compat.provider_client
+        engine_compat.provider_client = lambda pool, provider: None
+        try:
+            return asyncio.run(engine_compat.translate_byok(engine, "ENG", "PTB", queries))
+        finally:
+            engine_compat.provider_client = original_client
+
+    def test_main_provider_fixes_its_markers_before_the_page_goes_elsewhere(self):
+        # op1153-6a: Gemini merged two bubbles on three pages and the weaker reserve took them,
+        # writing Spanish and misspelled Portuguese.  Told which marker is missing, it answers right.
+        p, _, _ = pool(GEMINI, GROQ)
+        engine_compat._POOL = p
+        prompts = []
+
+        async def request(to_lang, prompt, client=None, model=None):
+            prompts.append((model, prompt))
+            if model == GEMINI["model"] and len(prompts) == 1:
+                return "<|1|>Olá, mundo!\n<|3|>Tchau!"
+            return "<|1|>Olá!\n<|2|>Mundo!\n<|3|>Tchau!"
+        self.assertEqual(self.run_page(request, ["Hello!", "World!", "Bye!"]), ["Olá!", "Mundo!", "Tchau!"])
+        self.assertEqual([m for m, _ in prompts], [GEMINI["model"], GEMINI["model"]])
+        self.assertIn("<|2|>", prompts[1][1].split("prompt", 1)[1])
+        self.assertIn("missing", prompts[1][1])
+
+    def test_both_answers_out_of_format_are_kept_for_diagnostics(self):
+        p, _, _ = pool(GEMINI, GROQ)
+        engine_compat._POOL = p
+        answers = iter(["<|1|>Só uma", ""])
+
+        async def request(to_lang, prompt, client=None, model=None):
+            if model == GEMINI["model"]:
+                return next(answers) or "<|1|>Outra só"
+            return "<|1|>Olá!\n<|2|>Mundo!"
+        self.assertEqual(self.run_page(request, ["Hello!", "World!"]), ["Olá!", "Mundo!"])
+        self.assertEqual([name for name, *_ in p.raw], ["gemini", "gemini"])
+        self.assertEqual(p.events[0][0], "gemini")
+        self.assertIn("missing", p.events[0][1])  # the first answer's error, not the second's
+
+    def test_a_good_answer_costs_one_call(self):
+        p, _, _ = pool(GEMINI, GROQ)
+        engine_compat._POOL = p
+        seen = []
+
+        async def request(to_lang, prompt, client=None, model=None):
+            seen.append(model)
+            return "<|1|>Olá!\n<|2|>Mundo!"
+        self.assertEqual(self.run_page(request, ["Hello!", "World!"]), ["Olá!", "Mundo!"])
+        self.assertEqual(seen, [GEMINI["model"]])
+
+    def test_a_limit_on_the_second_try_still_rests_the_provider(self):
+        p, _, logs = pool(GEMINI, GROQ)
+        engine_compat._POOL = p
+        seen = []
+
+        async def request(to_lang, prompt, client=None, model=None):
+            seen.append(model)
+            if model == GEMINI["model"]:
+                if len(seen) == 1:
+                    return "<|1|>Só uma"
+                raise ProviderError(429)
+            return "<|1|>Olá!\n<|2|>Mundo!"
+        self.assertEqual(self.run_page(request, ["Hello!", "World!"]), ["Olá!", "Mundo!"])
+        self.assertEqual(seen, [GEMINI["model"], GEMINI["model"], GROQ["model"]])
+        self.assertTrue(any("gemini em pausa" in line for line in logs))
 
     def test_single_key_secret_keeps_previous_behaviour(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -298,6 +371,17 @@ class NumberedAnswerTest(unittest.TestCase):
                          ["Entendido, Kaiser.", "Hoje de manhã?"])
         self.assertEqual(parse_marked("[1] Olá\n[2] Mundo\ncontinua aqui", 2), ["Olá", "Mundo continua aqui"])
         self.assertEqual(parse_marked("1) Sim\n2) Não", 2), ["Sim", "Não"])
+
+    def test_a_marker_mangled_by_the_model_is_still_read(self):
+        # op1153-8a p14: Gemini wrote "<|5;|&gt;" for <|5|>, and next time an empty <|10|>
+        # before the terms line; both answers had every bubble right.
+        self.assertEqual(engine_compat.parse_marked("<|1|>Um\n<|2;|&gt;Dois\n<|3|>Três", 3), ["Um", "Dois", "Três"])
+        self.assertEqual(engine_compat.parse_marked("<|1|>Um\n<|2|>Dois\n<|3|>", 2), ["Um", "Dois"])
+        # An extra marker with text is a bubble too many, and a missing one is still missing.
+        for answer in ("<|1|>Um\n<|2|>Dois\n<|3|>Três", "<|1|>Um\n<|3;|&gt;Três", "<|1|>Um\n<|2|>\n<|3|>",
+                       "<|1|>Um\n<|2|>Dois\n<|3|>\n<|4|>"):
+            with self.assertRaises(ValueError, msg=answer):
+                engine_compat.parse_marked(answer, 2)
 
     def test_anything_that_could_swap_or_lose_a_bubble_is_rejected(self):
         from engine_compat import parse_marked
