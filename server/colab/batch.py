@@ -225,6 +225,8 @@ async def run(args):
                 # Diagnostic images use the strip, whose coordinates match the regions.
                 rows = save_diagnostics(output / "diagnostico" / f"{index:04d}", ctx, strip.image)
                 entry["preserved_regions"] = sum(row["estado"] == "original_preservada" for row in rows)
+                # Also when a second try or another AI saved the page: why the first answer failed.
+                save_raw_answers(output / "diagnostico" / f"{index:04d}")
             entry["status"] = "review" if pairs else "no_text_review"
             if provider_events():
                 entry["provider_events"] = provider_events()

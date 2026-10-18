@@ -2,6 +2,12 @@
 
 As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://github.com/mihonapp/mihon/blob/main/CHANGELOG.md).
 
+## Em teste
+
+### Tradução
+- A resposta da IA com um marcador estragado mas legível (`<|5;|&gt;` no lugar de `<|5|>`, ou um marcador vazio sobrando depois do último balão) agora é aceita. O Gemini fazia isso com a tradução inteira certa, a página era recusada e ia para outra IA, às vezes a reserva, que é mais fraca e escrevia com erros de português, palavras em espanhol ou sentido trocado. Resposta que perde, junta ou troca balões continua recusada.
+- Quando a IA principal devolve a resposta fora do formato (junta dois balões numa linha ou pula um marcador), ela recebe uma segunda chance na mesma hora, com o marcador que faltou apontado, antes de a página ir para outra IA. Com `--diagnostics`, a resposta fora do formato fica salva em `respostas-invalidas.txt` também quando a página foi traduzida, para dar para ver o que a IA errou.
+
 ## 0.5.8
 
 ### Tradução e balões
