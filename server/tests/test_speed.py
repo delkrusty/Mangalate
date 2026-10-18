@@ -159,6 +159,44 @@ class FlatFillTest(unittest.TestCase):
         asyncio.run(engine._run_inpainting(None, SimpleNamespace(img_rgb=image, mask=mask)))
         self.assertEqual(seen, [])
 
+    def outlined_bubble(self, gap):
+        """Plain bubble whose outline runs `gap` px above the text mask, inside the measuring ring."""
+        import numpy as np
+        image = np.full((300, 400, 3), 255, np.uint8)
+        mask = np.zeros((300, 400), np.uint8)
+        image[120:140, 100:300] = 0                           # letters
+        mask[116:144, 96:304] = 255
+        top = 116 - gap
+        image[top - 2:top, 60:340] = 0                        # outline, 2 px thick
+        return image, mask, (slice(top - 2, top), slice(60, 340))
+
+    def test_outline_near_the_text_does_not_send_a_plain_bubble_to_the_model(self):
+        # Seen in white bubbles: the ring caught the outline, the model left a smudge of the letters.
+        engine, seen = self.engine()
+        image, mask, outline = self.outlined_bubble(gap=3)
+        out = asyncio.run(engine._run_inpainting(None, SimpleNamespace(img_rgb=image, mask=mask)))
+        self.assertEqual(seen, [])
+        self.assertTrue((out[116:144, 96:304] == 255).all())
+        self.assertTrue((out[outline] == 0).all())                          # outline intact
+
+    def test_outline_running_under_the_mask_still_goes_to_the_model(self):
+        engine, seen = self.engine()
+        image, mask, _ = self.outlined_bubble(gap=0)
+        image[116:144, 60:62] = 0                             # outline side crossing into the mask
+        mask[116:144, 60:96] = 255
+        asyncio.run(engine._run_inpainting(None, SimpleNamespace(img_rgb=image, mask=mask)))
+        self.assertEqual(len(seen), 1)
+
+    def test_text_on_screentone_still_goes_to_the_model(self):
+        import numpy as np
+        engine, seen = self.engine()
+        image, mask, _ = self.outlined_bubble(gap=3)
+        tone = np.full((60, 240), 255, np.uint8)
+        tone[::3, ::3] = 0                                    # dots every 3 px
+        image[100:160, 80:320] = np.where(mask[100:160, 80:320, None] > 0, image[100:160, 80:320], tone[..., None])
+        asyncio.run(engine._run_inpainting(None, SimpleNamespace(img_rgb=image, mask=mask)))
+        self.assertEqual(len(seen), 1)
+
     def test_can_be_turned_off(self):
         import os
         engine, seen = self.engine()
