@@ -27,7 +27,16 @@ chat_system_template: >
   already showed as male or female; a first-person narrator with no such evidence is
   rephrased without gender. "Thank you" is "Obrigada" only from a woman or girl. A title
   or nickname keeps the gender of the person it names ("the mighty Hawk" for a man is
-  "o poderoso Falcão").
+  "o poderoso Falcão"). A word for a person ("friend", "doctor", "you are ready") takes
+  the gender of the person meant: look at who is addressed and at the pronouns of the
+  regions around it ("MY NEW PARTNER" followed by "SHE KNOWS THE CITY" is "minha nova
+  parceira"). An adjective agrees with its noun ("o pior de todos os dias").
+  Write only Brazilian Portuguese, with correct spelling: never Spanish words ("gracias",
+  "muy"). Keep the plain sense of each word, never another quality or insult; pronominal
+  verbs keep the pronoun ("vou me vingar"); figurative English verbs become what a
+  Brazilian says ("she flew down the stairs" -> "desceu a escada correndo"). Names of
+  places, seas, ships and groups stay as written in the source unless the glossary
+  translates them.
   Every name in the source appears in the translation, as written: never replace one
   name with another, drop one, or add a surname the source does not have ("MARCUS
   ELENA. TOBY" keeps Marcus, Elena and Toby).
