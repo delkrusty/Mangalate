@@ -2,7 +2,7 @@
 
 As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://github.com/mihonapp/mihon/blob/main/CHANGELOG.md).
 
-## Em teste
+## 0.5.8
 
 ### Tradução e balões
 - Balão branco com o contorno passando perto do texto não fica mais com uma sombra borrada das letras originais. A limpeza lisa media o fundo num anel em volta das letras; quando o contorno caía nesse anel, o fundo parecia irregular e o balão ia para o modelo de limpeza, que deixava o borrão. Agora o balão é pintado liso quando a faixa colada às letras é lisa e a mesma cor ocupa pelo menos 80% do anel. Se o contorno ou a arte encostam nas letras, ou o fundo é retícula, continua indo para o modelo. Risco conhecido: a regra ainda não foi vista sobre balão colorido ou em degradê; nas rodadas de teste coloridas nenhum balão mudou de caminho.
