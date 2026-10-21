@@ -4,6 +4,9 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 
 ## Em teste
 
+### Balões e arte
+- Um símbolo desenhado dentro do balão (veia de raiva, coração partido) não vira mais uma linha de texto. O detector marcava o símbolo como texto, a leitura o descartava, mas a releitura de linhas perdidas aceitava a leitura "JJJJ", apagava o símbolo e escrevia "Jjjj" no fim da fala. Agora a releitura só aceita uma linha com pelo menos duas letras diferentes; um grito como "WAAAH" continua valendo. A linha recusada assim fica inteira fora da limpeza: antes, a máscara da fala de cima ainda pegava a ponta do símbolo e a limpeza espalhava o resto dele pelo balão. O símbolo também não impede mais a limpeza lisa do balão.
+
 ### Tradução
 - A resposta da IA com um marcador estragado mas legível (`<|5;|&gt;` no lugar de `<|5|>`, ou um marcador vazio sobrando depois do último balão) agora é aceita. O Gemini fazia isso com a tradução inteira certa, a página era recusada e ia para outra IA, às vezes a reserva, que é mais fraca e escrevia com erros de português, palavras em espanhol ou sentido trocado. Resposta que perde, junta ou troca balões continua recusada.
 - Quando a IA principal devolve a resposta fora do formato (junta dois balões numa linha ou pula um marcador), ela recebe uma segunda chance na mesma hora, com o marcador que faltou apontado, antes de a página ir para outra IA. Com `--diagnostics`, a resposta fora do formato fica salva em `respostas-invalidas.txt` também quando a página foi traduzida, para dar para ver o que a IA errou.

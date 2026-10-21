@@ -543,7 +543,7 @@ class OcrRescueTest(unittest.TestCase):
         def __init__(self, box, text=""):
             self.pts, self.text, self.prob, self.direction = np.asarray(quad(*box)), text, 0.0, "h"
 
-    def run_ocr(self, lines, dropped):
+    def run_ocr(self, lines, dropped, reading="MUSTVE MAL-"):
         import asyncio
         import types
         from types import SimpleNamespace
@@ -552,7 +552,7 @@ class OcrRescueTest(unittest.TestCase):
         async def dispatch(name, image, textlines, config, device, verbose):
             seen["prob"], seen["count"] = config.prob, len(textlines)
             for line in textlines:
-                line.text, line.prob = "MUSTVE MAL-", 0.08
+                line.text, line.prob = reading, 0.08
             return list(textlines)
         module = types.ModuleType("manga_translator.ocr")
         module.dispatch = dispatch
@@ -582,6 +582,24 @@ class OcrRescueTest(unittest.TestCase):
         self.assertEqual(seen["count"], 1)
         self.assertEqual(len(result), 4)
         self.assertEqual(len(ctx.mangalate_ocr_rescued), 1)
+
+    def test_drawn_symbol_read_as_one_letter_repeated_is_not_rescued(self):
+        # One Piece 1161 p16: an anger vein and a broken heart under the last line of a
+        # bubble were read again as "JJJJ", erased, and "Jjjj" was written at the end of the speech.
+        lines = [self.Line((100, 40 + i * 34, 300, 68 + i * 34)) for i in range(4)]
+        result, seen, ctx = self.run_ocr(lines, [lines[3]], reading="JJJJ")
+        self.assertEqual(seen["count"], 1)
+        self.assertEqual(len(result), 3)
+        self.assertEqual(ctx.mangalate_ocr_rescued, [])
+        self.assertEqual(ctx.mangalate_drawn, [[100, 142, 300, 170]])  # left out of the cleaning mask
+        # A drawn-out cry still has two letters: it is speech and is read again.
+        result, _, ctx = self.run_ocr(lines, [lines[3]], reading="WAAAH!!")
+        self.assertEqual(len(result), 4)
+        self.assertEqual(ctx.mangalate_drawn, [])
+        # So is one vowel drawn out, the end of a cry split in two lines ("GYAA- / AAA!!!").
+        result, _, ctx = self.run_ocr(lines, [lines[3]], reading="AAA!!!")
+        self.assertEqual(len(result), 4)
+        self.assertEqual(ctx.mangalate_drawn, [])
 
     def test_lonely_dropped_line_is_left_alone(self):
         lines = [self.Line((100, 40, 300, 68)), self.Line((100, 600, 300, 628))]
@@ -613,6 +631,20 @@ class BubbleGlyphTest(unittest.TestCase):
         image = self.page(double_outline=True)
         found = bubble_glyphs(image, (145, 120, 360, 240), 30, near=3)
         self.assertFalse(found[60:70, 200:300].any())            # top of the inner hairline
+
+    def test_drawing_read_as_one_letter_repeated_stays_whole(self):
+        # One Piece 1161 p16: an anger vein under the last line was read as "JJJJ".  Its own
+        # box gives back only the drawing; the letters of the line above are not touched.
+        image = self.page()
+        vein = np.zeros(image.shape[:2], np.uint8)
+        for dx in (0, 14):
+            cv2.ellipse(vein, (230 + dx, 252), (6, 10), 0, 90, 270, 255, 3)
+            cv2.ellipse(vein, (230 + dx + 28, 252), (6, 10), 0, -90, 90, 255, 3)
+        image[vein > 0] = (10, 10, 10)
+        keep = quality.drawn_marks(image, [(218, 240, 284, 264)])
+        self.assertTrue(keep[vein > 0].all())
+        self.assertFalse(keep[200:232, :].any())       # the line "OF US." just above
+        self.assertFalse(quality.drawn_marks(image, []).any())
 
     def test_text_on_art_gives_nothing(self):
         image = noisy_art((500, 400))

@@ -933,6 +933,7 @@ def rescue_ocr(original_ocr):
     """
     async def ocr(self, config, ctx):
         before = list(ctx.textlines or [])
+        ctx.mangalate_drawn = []
         result = await original_ocr(self, config, ctx)
         kept = {id(line) for line in result}
         lost = [line for line in before if id(line) not in kept and getattr(line, "direction", "h") == "h"]
@@ -952,7 +953,17 @@ def rescue_ocr(original_ocr):
         retry = config.ocr.model_copy(deep=True) if hasattr(config.ocr, "model_copy") else config.ocr
         retry.prob = RESCUE_PROB
         read = await dispatch_ocr(config.ocr.ocr, ctx.img_rgb, candidates, retry, self.device, self.verbose)
-        rescued = [line for line in read if sum(ch.isalpha() for ch in str(line.text)) >= 2]
+        # A drawing the detector took for a line (an anger vein, One Piece 1161 p16) comes back
+        # as one consonant repeated, "JJJJ": real speech has two different letters or a vowel.
+        # A drawn-out vowel ("AAA!!!", the end of a cry split in two lines) is still speech.
+        def letters(line):
+            return [ch.upper() for ch in str(line.text) if ch.isalpha()]
+        def drawing(line):
+            found = set(letters(line))
+            return len(found) == 1 and not found & set("AEIOUY")
+        rescued = [line for line in read if len(letters(line)) >= 2 and not drawing(line)]
+        # Kept out of the cleaning mask by refine_mask_consistently.
+        ctx.mangalate_drawn = [list(_box(l.pts)) for l in read if len(letters(l)) >= 2 and drawing(l)]
         render = getattr(config, "render", None)
         for line in rescued:
             if getattr(render, "font_color_fg", None):
@@ -990,6 +1001,17 @@ async def refine_mask_consistently(self, config, ctx):
     if grown.any():
         mask = mask.copy()
         mask[grown] = 255
+    # A drawing the OCR read as "JJJJ" (quality.drawn_marks) stays whole.
+    drawn = getattr(ctx, "mangalate_drawn", None)
+    if drawn:
+        try:
+            from quality import drawn_marks
+            keep = drawn_marks(ctx.img_rgb, drawn)
+            if keep.any():
+                mask = mask.copy()
+                mask[keep] = 0
+        except Exception as exc:  # never lose a page over this
+            print(f"Drawn marks skipped: {type(exc).__name__}", flush=True)
     # Outlined lettering over the art: the cleaning stays on the letters and their outline.
     from quality import outlined_area
     for region in ctx.text_regions or []:

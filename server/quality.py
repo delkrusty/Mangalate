@@ -555,6 +555,29 @@ def glyphs_to_clean(image, box, line_height):
     return (whole & limit) | ((cv2.dilate(glyphs.astype(np.uint8), kernel) > 0) & box_limit)
 
 
+def drawn_marks(image, boxes):
+    """Pixels of the drawings inside ``boxes``, line boxes the OCR read as one letter repeated.
+
+    A symbol drawn under the speech (an anger vein, a broken heart: One Piece 1161 p16) gets
+    a line box from the detector mask, and the OCR reads it as "JJJJ".  It is not text: the
+    mask of the line above still covered its top, and the cleaner smeared the rest over the
+    bubble.  Returns the ink inside the bubble whose centre falls in one of the boxes, grown
+    by a pixel, to be left out of the cleaning mask whole.
+    """
+    h, w = image.shape[:2]
+    keep = np.zeros((h, w), bool)
+    for x0, y0, x1, y1 in boxes:
+        glyphs = bubble_glyphs(image, (x0, y0, x1, y1), max(4.0, float(y1 - y0)))
+        count, labels, stats, centres = cv2.connectedComponentsWithStats(glyphs.astype(np.uint8), connectivity=8)
+        for label in range(1, count):
+            cx, cy = centres[label]
+            if x0 <= cx <= x1 and y0 <= cy <= y1:
+                keep |= labels == label
+    if keep.any():
+        keep = cv2.dilate(keep.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+    return keep
+
+
 THROUGH_DARK = 135    # line art is darker than this (0-255; thin anti-aliased lines reach ~130)
 THROUGH_REACH = 1.5   # a line is followed this far outside the mask, in line heights
 THROUGH_RUN = 1.0     # and must continue at least this far on each side of the text, in line heights
