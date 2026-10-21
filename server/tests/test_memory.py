@@ -149,6 +149,18 @@ class KeptNamesTest(unittest.TestCase):
         self.assertEqual(sorted(kept_names([{"original": "KOHEI, CHISA!", "translation": "Kohei, Chisa!"}])),
                          [("CHISA", "Chisa"), ("KOHEI", "Kohei")])
 
+    def test_a_line_lettered_unchanged_teaches_no_name(self):
+        # A scream the AI returned unchanged is lettered as is (engine_compat.validate_page_translations);
+        # "Guha- aaa!!!" keeps "Guha" capitalized, but that is no name of the work.
+        memory = WorkMemory()
+        for page in (1, 2):
+            regions = [SimpleNamespace(text="GUHA- AAA!!!", translation="Guha- aaa!!!", mangalate_same_as_source=True),
+                       SimpleNamespace(text="KOHEI, WAIT!", translation="Kohei, espera!")]
+            remember(memory, {"obra": "Obra", "capitulo": "Cap 1", "pagina": page}, regions, [])
+        targets = {g["target"] for g in memory.context("Obra", "Cap 1", 3)["glossary"]}
+        self.assertIn("Kohei", targets)
+        self.assertNotIn("Guha", targets)
+
     def test_a_term_seen_on_this_very_page_is_sent_again_for_it(self):
         # The same page read again has the same OCR, so an unconfirmed term from it is
         # safe there; other pages still wait for the second page.

@@ -1615,6 +1615,54 @@ DOUBLED_WORD = re.compile(r"(?<![\wÀ-ÿ-])((?=[\wÀ-ÿ]*[aeiouáéíóúâêô�
 # when the original glues them ("HAHAHA", "UH-OH").
 REDUPLICATIONS = {"já", "logo", "que", "tchau", "bem", "quase", "pisca", "corre", "pega",
                   "ha", "há", "rá", "he", "hi", "ho", "hu", "ah", "oh", "eh", "ai", "ei", "ui", "hum"}
+# Interjections a Brazilian scan writes as the English lettering does ("AH..", "HMM", "HAHA", "OK!").
+SAME_INTERJECTIONS = {"ah", "oh", "eh", "uh", "hm", "hmm", "hum", "ha", "ho", "ok"}  # not "he": a pronoun
+LAUGH = re.compile(r"(?:h[aeio]){2,}h?")
+# Grand Blue 106 p23: asked to read an OCR mistake "as intended", the AI shrank a vertical buzz to "V";
+# p24: without the exception spelled out, the prompt's "isolated sound effects" rule won twice.
+UNCHANGED_NOTE = ("came back unchanged, but it is lettered in a bubble or caption, so the rule about isolated "
+                  "sound effects does not apply to it: write what a Brazilian scanlation prints there, "
+                  "an interjection, scream or sound effect in its Portuguese form, "
+                  "as long and as loud as the original (\"GRR\" -> \"Grrr\", \"SNIFF\" -> \"Snif\"), never a "
+                  "lone letter; only names stay as written")
+
+
+def same_text(source, text):
+    """The engine's test for an untranslated answer (it drops the region)."""
+    return str(source or "").strip().lower() == str(text or "").strip().lower()
+
+
+def unchanged_english(source, names=()):
+    """Words that keep an answer equal to its source from being Portuguese already.
+
+    op1161 p16: "AH.." and a scream came back unchanged and the engine dropped them,
+    leaving the English lettering; Grand Blue 106 p23 the same with the OCR of a
+    vertical phone buzz ("V BVVVV BVVV").  An interjection, a scream, a sound or a
+    name reads the same in Portuguese; a common English word, a lone letter or a word
+    with digits (an OCR mistake) does not.  ``names`` are names of the page or glossary.
+    """
+    common, _ = english_words()
+    tokens = re.findall(r"[^\W_]+", str(source or ""))
+    if not common:  # no word list: nothing is known to read the same
+        return tokens
+    named = {word.lower() for name in names for word in re.findall(r"[^\W_]+", str(name))}  # "Lily Steel"
+    found = []
+    for token in tokens:
+        word = token.lower()
+        if word.isdigit() or word in named:
+            continue
+        if any(c.isdigit() for c in word) or (len(word) == 1 and word not in "aeo"):
+            found.append(token)
+            continue
+        # A held vowel or consonant is the same word: "AAAH" is "ah", "NOOO" is "no", "GOOOD" is
+        # "good"; a plain double letter stays ("SHAKKY" is no "shaky").
+        forms = {word} | {f for f in (re.sub(r"(.)\1{2,}", r"\1", word), re.sub(r"(.)\1{2,}", r"\1\1", word))
+                          if len(f) > 1}
+        if any(f in SAME_INTERJECTIONS or LAUGH.fullmatch(f) for f in forms):
+            continue
+        if len(word) > 1 and any(f in common for f in forms):
+            found.append(token)
+    return found
 
 
 def portuguese_problems(source, text):
@@ -1649,9 +1697,19 @@ def translation_problems(sources, translations, glossary=(), earlier=""):
     page = " ".join(str(s) for s in sources)
     female = bool(FEMALE_EVIDENCE.search(page + " " + earlier)) or any(
         g.get("gender") == "f" and f" {normalize(g['source'])} " in f" {normalize(page)} " for g in glossary)
+    names = page_names([t for t in translations if isinstance(t, str)]) | {g.get("target", "") for g in glossary}
     notes = []
     for number, (source, text) in enumerate(zip(sources, translations), 1):
         if not isinstance(text, str):
+            continue
+        if same_text(source, text) and re.search(r"[^\W\d_]", text) and unchanged_english(source, names):
+            # The prompt leaves "isolated sound effects" alone, but a region here sits in a bubble
+            # or caption: unchanged, the engine drops it and the English stays on the page.
+            notes.append(f"<|{number}|> {UNCHANGED_NOTE}")
+            continue
+        letters = re.findall(r"[^\W\d_]", text)
+        if len(letters) == 1 and letters[0].lower() not in "aeoéóô" and len(re.findall(r"[^\W\d_]", str(source))) > 2:
+            notes.append(f"<|{number}|> is a lone letter; write the whole line, interjection or sound effect")
             continue
         here = f" {normalize(source)} "
         for g in glossary:

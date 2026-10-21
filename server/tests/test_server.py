@@ -113,7 +113,32 @@ class ServerTest(unittest.TestCase):
                 region.translation = region.text
             return []
         ctx = SimpleNamespace(text_regions=[SimpleNamespace(text="Naruto", translation="")])
-        self.assertEqual(asyncio.run(validate_page_translations(unchanged)(None, None, ctx)), [])
+        # A name reads the same in Portuguese: it is lettered again, never a failed page.
+        self.assertEqual([r.translation for r in asyncio.run(validate_page_translations(unchanged)(None, None, ctx))],
+                         ["Naruto"])
+
+    def test_answer_equal_to_the_source_is_lettered_or_reported(self):
+        # op1161 p16: "AH.." and a scream came back unchanged, the engine dropped them as
+        # untranslated and the English lettering stayed with no trace in regioes.json.
+        async def engine(self, config, ctx):
+            ctx.text_regions[0].translation = "Me espera!"
+            ctx.text_regions[1].translation = "OH.."
+            ctx.text_regions[2].translation = "GUHA- AAA!!!"
+            ctx.text_regions[3].translation = "WAIT, WHAT?"  # an English echo: never lettered as if translated
+            ctx.text_regions[4].translation = "..."
+            # The engine's own filter: an answer equal to the source is dropped.
+            return [r for r in ctx.text_regions if r.translation.strip().lower() != r.text.strip().lower()]
+        regions = [SimpleNamespace(text=text, translation="", mangalate_background={"kind": "interior"})
+                   for text in ("WAIT FOR ME!", "OH..", "GUHA- AAA!!!", "WAIT, WHAT?", "...")]
+        ctx = SimpleNamespace(text_regions=list(regions), mangalate_preserved=[])
+        with patch.dict("os.environ", {"MANGALATE_LEGACY_QUALITY": "false"}):
+            result = asyncio.run(validate_page_translations(engine)(None, None, ctx))
+        # Same order as before translation, so the early cleaning stays valid.
+        self.assertEqual([r.text for r in result], ["WAIT FOR ME!", "OH..", "GUHA- AAA!!!"])
+        self.assertEqual([r.translation for r in result], ["Me espera!", "Oh..", "Guha- aaa!!!"])
+        self.assertEqual([getattr(r, "mangalate_same_as_source", False) for r in result], [False, True, True])
+        self.assertEqual([r.text for r in ctx.mangalate_preserved], ["WAIT, WHAT?"])
+        self.assertTrue(ctx.mangalate_preserved[0].mangalate_background["devolvida_igual"])
 
     def test_byok_provider_without_usage_and_truncated_output(self):
         response = SimpleNamespace(
