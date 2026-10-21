@@ -396,6 +396,31 @@ class PipelineHookTest(unittest.TestCase):
         stacked[letters > 0] = 0
         self.assertFalse(quality.speech_on_paper(stacked, letters, [quad(190, 10, 235, 250)]))
 
+    def test_letters_stacked_in_a_tall_bubble_are_a_bubble(self):
+        # Grand Blue 102 p20: "GUYS!" one letter per row in a tall white bubble.  The box height
+        # (200 px) was taken for the line height, the margin reached the art around the bubble,
+        # and the speech stayed in English.
+        image = noisy_art((300, 300))
+        cv2.ellipse(image, (150, 150), (45, 135), 0, 0, 360, (255, 255, 255), -1)
+        cv2.ellipse(image, (150, 150), (45, 135), 0, 0, 360, (0, 0, 0), 3)
+        letters = np.zeros(image.shape[:2], np.uint8)
+        for i, ch in enumerate("GUYS!"):
+            cv2.putText(letters, ch, (138, 70 + i * 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, 255, 3)
+        image[letters > 0] = 0
+        quads = [quad(132, 45, 168, 250)]
+        self.assertTrue(quality.stacked(quads))
+        self.assertEqual(classify_region(image, letters, quads)["kind"], "interior")
+        self.assertFalse(quality.stacked([quad(100, 40, 300, 70)]))
+
+    def test_stacked_translation_is_written_one_capital_per_row(self):
+        import lettering
+        font = str(Path(__file__).resolve().parents[1] / "fonts" / "ComicNeue-Bold.ttf")
+        plan = lettering.plan_stacked((112, 370, 149, 572), "Pessoal!", font, 8)
+        self.assertEqual(plan["lines"], list("PESSOAL!"))
+        x0, y0, x1, y1 = plan["box"]
+        self.assertTrue(y1 - y0 <= (572 - 370) * lettering.STACK_ROOM + 2 and abs((x0 + x1) / 2 - 130.5) <= 1, plan)
+        self.assertIsNone(lettering.plan_stacked((112, 370, 149, 380), "Pessoal!", font, 8))  # no room: as drawn
+
     def test_line_box_running_onto_a_wall_is_still_speech(self):
         # Grand Blue 106 p16: the box of "IN WINTER?" runs a few px onto the screentone of the
         # wall beside it; those dots are not letters the detector missed.

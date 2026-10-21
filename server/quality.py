@@ -58,6 +58,15 @@ def _fit_background(coords, values):
     return residual
 
 
+STACKED = 2.5  # a line box this many times taller than wide holds letters stacked one per row
+
+
+def stacked(quads):
+    """True when every line box is a column of letters stacked one per row ("GUYS!" in a tall bubble)."""
+    quads = [np.asarray(q, np.float32).reshape(4, 2) for q in quads]
+    return bool(quads) and all(np.ptp(q[:, 1]) > STACKED * max(float(np.ptp(q[:, 0])), 1.0) for q in quads)
+
+
 def classify_region(image, text_mask, quads, line_height=None):
     """Decide whether a text block sits on a clean interior or on artwork.
 
@@ -80,6 +89,8 @@ def classify_region(image, text_mask, quads, line_height=None):
     if line_height is None:
         heights = [max(np.ptp(q[:, 1]), 1.0) for q in quads]
         line_height = float(np.median(heights))
+        if stacked(quads):  # letters one per row: the line is as thick as the column is wide
+            line_height = float(np.median([max(np.ptp(q[:, 0]), 1.0) for q in quads]))
     pad = int(max(4, round(line_height * 0.35)))
     lines = _line_mask(image.shape, quads)
     x0, y0 = np.floor(np.min([q.min(axis=0) for q in quads], axis=0)).astype(int) - pad

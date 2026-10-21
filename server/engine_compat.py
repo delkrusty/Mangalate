@@ -807,6 +807,18 @@ def repair_textlines(original_detect):
     return detect
 
 
+def _line_size(region):
+    """Height of a region's lines; for letters stacked one per row, the width of the column."""
+    import numpy as np
+    from quality import stacked
+    lines = [np.asarray(l, float).reshape(4, 2) for l in region.lines]
+    if not lines:
+        return float(region.font_size)
+    if stacked(lines):
+        return float(np.median([np.ptp(l[:, 0]) for l in lines]))
+    return float(np.median([np.linalg.norm(l[3] - l[0]) for l in lines]))
+
+
 def bubble_layout(rendering, text_render):
     """Replace the engine's 'fit to the original text box' with 'fit to the bubble'.
 
@@ -815,7 +827,7 @@ def bubble_layout(rendering, text_render):
     """
     import numpy as np
     import lettering
-    from quality import has_cjk
+    from quality import has_cjk, stacked
     original_resize = rendering.resize_regions_to_font_size
     original_render = rendering.render
 
@@ -838,6 +850,20 @@ def bubble_layout(rendering, text_render):
             region.mangalate_plan = None
             region.mangalate_shaped = None
             text = region.get_translation_for_rendering()
+            if text and not has_cjk(text) and stacked(region.lines):
+                # Letters stacked one per row in a tall bubble ("GUYS!"): the translation too.
+                try:
+                    plan = lettering.plan_stacked(boxes[i], text, lettering.font_file(), max(8, round(minimum * 0.6)))
+                except Exception as exc:  # never lose a page over the nicer layout
+                    print(f"Stacked layout skipped: {type(exc).__name__}", flush=True)
+                    plan = None
+                if plan is not None:
+                    region.mangalate_shaped = plan
+                    region.font_size = plan["size"]
+                    x0, y0, x1, y1 = plan["box"]
+                    points[i] = np.array([[[x0, y0], [x1, y0], [x1, y1], [x0, y1]]], dtype=np.int64)
+                    planned += 1
+                    continue
             if not text or not horizontal(region) or has_cjk(text):
                 continue
             def layout(size, width, height, text=text, lang=region.target_lang):
@@ -937,9 +963,7 @@ def keep_clean_copy(original_render):
             import numpy as np
             from quality import through_lines
             for region in ctx.text_regions or []:
-                heights = [float(np.linalg.norm(np.asarray(l[3]) - np.asarray(l[0]))) for l in region.lines]
-                lines += through_lines(ctx.img_rgb, ctx.mask, region.xyxy,
-                                       float(np.median(heights)) if heights else float(region.font_size))
+                lines += through_lines(ctx.img_rgb, ctx.mask, region.xyxy, _line_size(region))
         except Exception as exc:  # never lose a page over this
             print(f"Line redraw skipped: {type(exc).__name__}", flush=True)
             lines = []
@@ -1030,9 +1054,7 @@ async def refine_mask_consistently(self, config, ctx):
     h, w = mask.shape[:2]
     grown = np.zeros((h, w), bool)
     for region in ctx.text_regions or []:
-        heights = [float(np.linalg.norm(np.asarray(l[3]) - np.asarray(l[0]))) for l in region.lines]
-        line = float(np.median(heights)) if heights else float(region.font_size)
-        grown |= glyphs_to_clean(ctx.img_rgb, region.xyxy, line)
+        grown |= glyphs_to_clean(ctx.img_rgb, region.xyxy, _line_size(region))
     if grown.any():
         mask = mask.copy()
         mask[grown] = 255
