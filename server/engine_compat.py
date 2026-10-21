@@ -655,7 +655,15 @@ def classify_regions(original_merge):
                     continue
                 fg, bg = outlined_colours(image, region.lines)
                 region.fg_colors, region.bg_colors = np.array(fg), np.array(bg)
-            if region.mangalate_background["kind"] in ("interior", "contorno"):
+            # Lettering on a white part of the drawing, crossed by its strokes: translated, and
+            # only the letters are cleaned (quality.letters_area).
+            if region.mangalate_background["kind"] == "tracos":
+                from quality import letters_area
+                if not letters_area(image, raw, region.lines).any():
+                    region.mangalate_background["kind"] = "art"
+                    ctx.mangalate_preserved.append(region)
+                    continue
+            if region.mangalate_background["kind"] in ("interior", "contorno", "tracos"):
                 kept.append(region)
             else:
                 ctx.mangalate_preserved.append(region)
@@ -822,8 +830,22 @@ def bubble_layout(rendering, text_render):
             def layout(size, width, height, text=text, lang=region.target_lang):
                 return text_render.calc_horizontal(size, text, width, height, lang, False)
             others = boxes[:i] + boxes[i + 1:]
+            page = img
+            if (getattr(region, "mangalate_background", None) or {}).get("kind") == "tracos":
+                # Strokes of the drawing still cross where the letters were: plan as if the
+                # block were paper (quality.paper_under), so the text keeps its room.
+                try:
+                    import cv2
+                    from quality import paper_under
+                    _, colour = paper_under(img, region.lines, line_height(region))
+                    hull = cv2.convexHull(np.concatenate([np.asarray(l, np.int32).reshape(-1, 2) for l in region.lines]))
+                    page = img.copy()
+                    cv2.fillPoly(page, [hull.reshape(-1, 1, 2)], tuple(int(c) for c in colour))
+                except Exception as exc:  # plan on the page as it is
+                    print(f"Stroke room skipped: {type(exc).__name__}", flush=True)
+                    page = img
             try:
-                shaped = lettering.plan_shaped(img, boxes[i], others, text, lettering.font_file(),
+                shaped = lettering.plan_shaped(page, boxes[i], others, text, lettering.font_file(),
                                                line_height(region), max(8, round(minimum * 0.6)),
                                                offset=font_size_offset or 0)
             except Exception as exc:  # never lose a page over the nicer layout
@@ -837,7 +859,7 @@ def bubble_layout(rendering, text_render):
                 planned += 1
                 continue
             try:
-                plan = lettering.plan(img, boxes[i], others, text, layout,
+                plan = lettering.plan(page, boxes[i], others, text, layout,
                                       line_height(region) + 0, max(8, round(minimum * 0.6)),
                                       offset=font_size_offset or 0)
             except Exception as exc:  # never lose a page over the nicer layout
@@ -1012,15 +1034,27 @@ async def refine_mask_consistently(self, config, ctx):
                 mask[keep] = 0
         except Exception as exc:  # never lose a page over this
             print(f"Drawn marks skipped: {type(exc).__name__}", flush=True)
-    # Outlined lettering over the art: the cleaning stays on the letters and their outline.
-    from quality import outlined_area
+    # Outlined lettering over the art, or lettering crossed by strokes of the drawing: the
+    # cleaning stays on the letters (and their outline).
+    from quality import letters_area, outlined_area
     for region in ctx.text_regions or []:
-        if (getattr(region, "mangalate_background", None) or {}).get("kind") != "contorno":
+        kind = (getattr(region, "mangalate_background", None) or {}).get("kind")
+        if kind not in ("contorno", "tracos"):
             continue
         x0, y0, x1, y1 = (int(v) for v in region.xyxy)
         pad = int(max(8, region.font_size))
         x0, y0, x1, y1 = max(0, x0 - pad), max(0, y0 - pad), min(w, x1 + pad), min(h, y1 + pad)
-        allowed = outlined_area(ctx.img_rgb, region.lines)
+        if kind == "contorno":
+            allowed = outlined_area(ctx.img_rgb, region.lines)
+        else:
+            try:
+                raw = ctx.mask_raw
+                if raw.shape[:2] != (h, w):
+                    raw = cv2.resize(raw, (w, h), interpolation=cv2.INTER_NEAREST)
+                allowed = letters_area(ctx.img_rgb, raw, region.lines)
+            except Exception as exc:  # cleaned like a bubble, as before: never lose the speech
+                print(f"Letters-only cleaning skipped: {type(exc).__name__}", flush=True)
+                continue
         for other in ctx.text_regions:  # the cleaning of a bubble next to it stays
             if other is not region:
                 ox0, oy0, ox1, oy1 = (int(v) for v in other.xyxy)

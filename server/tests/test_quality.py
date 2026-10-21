@@ -144,6 +144,87 @@ class BackgroundTest(unittest.TestCase):
         verdict = classify_region(image, mask, [quad(105, 120, 270, 168)])
         self.assertEqual(verdict["kind"], "art", verdict)
 
+    LINES = (("NO WAIT DONT", 60), ("TAKE THOSE TWO", 88), ("THEY ARE THE ONLY", 116), ("WAY I CAN FIX", 144),
+             ("ALL OF THIS NOW", 172))
+
+    def paragraph(self, image):
+        """Five lines of dark lettering; returns the detector mask (letters only) and the line quads."""
+        letters = page(size=(image.shape[1], image.shape[0]))
+        quads = []
+        for text, y in self.LINES:
+            write(image, text, (100, y), (0, 0, 0), 0.7)
+            write(letters, text, (100, y), (0, 0, 0), 0.7)
+            (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+            quads.append(quad(98, y - th - 3, 102 + tw, y + 4))
+        return text_mask(letters, (255, 255, 255)), quads
+
+    def strands(self, image):
+        for x in (150, 205, 250, 290):
+            strand = np.array([[x + 30, 10], [x + 12, 90], [x, 170], [x - 20, 250]], np.int32)
+            cv2.polylines(image, [strand], False, (0, 0, 0), 2, cv2.LINE_AA)
+        return image
+
+    def test_lettering_on_paper_crossed_by_drawn_strokes_cleans_only_its_letters(self):
+        # One Piece 1161 p5: a speech written on a white part of the drawing, with strands of
+        # hair running between the lines.  The margin is mostly paper (0.91), so it was cleaned
+        # as a bubble and the hair went with the letters.  It is still translated, but only
+        # the letters are cleaned.
+        image = self.strands(page(size=(420, 260)))
+        mask, quads = self.paragraph(image)
+        verdict = classify_region(image, mask, quads)
+        self.assertGreaterEqual(verdict["interior_share"], quality.MIN_INTERIOR_SHARE, verdict)
+        self.assertEqual(verdict["kind"], "tracos", verdict)
+        allowed = quality.letters_area(image, mask, quads)
+        self.assertTrue(allowed[mask > 0].all())                 # every letter is cleaned
+        lines = quality._line_mask(image.shape, [np.asarray(q, np.float32) for q in quads]) > 0
+        strand_ink = (image.min(axis=2) < 128) & ~cv2.dilate(lines.astype(np.uint8), np.ones((7, 7), np.uint8)).astype(bool)
+        self.assertTrue(strand_ink.any())
+        self.assertFalse(allowed[strand_ink].any())              # the strands between and around the lines stay
+        # The new lettering is planned as if the line boxes were paper: the strands that
+        # still cross them must not shrink its room.
+        boxes, colour = quality.paper_under(image, quads)
+        self.assertTrue(boxes[lines].all())
+        self.assertTrue((colour >= 240).all(), colour)
+
+    def test_light_outline_of_dark_letters_is_cleaned_with_them(self):
+        # cap146 p178: black letters with a white outline on a lilac page crossed by speed
+        # lines.  With the letters alone, the flat fill took the white outline for the paper
+        # and painted white ghosts of the letters.
+        image = page((235, 222, 240), (420, 260))
+        mask, quads = self.paragraph(page(size=(420, 260)))
+        outline = cv2.dilate(mask, np.ones((11, 11), np.uint8)) > 0  # thicker than LETTER_GROW
+        image[outline] = 255
+        image[mask > 0] = 0
+        allowed = quality.letters_area(image, mask, quads)
+        self.assertTrue(allowed[outline].all())
+        lines = quality._line_mask(image.shape, [np.asarray(q, np.float32) for q in quads]) > 0
+        far = ~cv2.dilate(lines.astype(np.uint8), np.ones((21, 21), np.uint8)).astype(bool)
+        self.assertFalse(allowed[far].any())                      # the page around stays
+
+    def test_tight_bubble_and_one_crossing_line_stay_interior(self):
+        # The outline runs along the margin, and a panel border (Grand Blue 102 p3) or a
+        # tail crosses it only on two sides: still a bubble.
+        image = page(size=(420, 260))
+        cv2.ellipse(image, (210, 118), (170, 100), 0, 0, 360, (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.line(image, (205, 0), (205, 259), (0, 0, 0), 2, cv2.LINE_AA)
+        mask, quads = self.paragraph(image)
+        verdict = classify_region(image, mask, quads)
+        self.assertEqual(verdict["kind"], "interior", verdict)
+        self.assertEqual(verdict["strokes"], 2, verdict)  # the border, above and below the text
+
+    def test_lettering_at_the_edge_of_the_image_is_classified(self):
+        # Ink on the last row or column of the image (a webtoon slice cut under a bubble)
+        # once made the stroke count read past the image and fail the whole page.
+        image = page(size=(420, 260))
+        mask, quads = self.paragraph(image)
+        image, mask = image[:180, :215].copy(), mask[:180, :215].copy()
+        image[179, :] = 120
+        image[:, 214] = 120
+        quads = [[[min(x, 214), min(y, 179)] for x, y in q] for q in quads]
+        self.assertIn(classify_region(image, mask, quads)["kind"], ("interior", "art"))
+        self.assertEqual(quality.crossing_strokes(np.array([10, 179]), np.array([214, 10]), mask > 0,
+                                                  np.ones(mask.shape, np.uint8), 6, 20), 0)
+
     def test_empty_region_is_never_cleaned(self):
         self.assertEqual(classify_region(page(), None, [])["kind"], "art")
 
@@ -246,6 +327,21 @@ class PipelineHookTest(unittest.TestCase):
 
     def test_allow_art_text_keeps_every_region(self):
         self.assertEqual(self.run_merge(0), (["bubble", "art"], []))
+
+    def test_lettering_crossed_by_strokes_is_translated(self):
+        import asyncio
+        from types import SimpleNamespace
+        from engine_compat import classify_regions
+        image = BackgroundTest.strands(None, page(size=(420, 260)))
+        mask, quads = BackgroundTest.paragraph(BackgroundTest, image)
+        region = SimpleNamespace(name="tracos", lines=np.array(quads))
+        async def merge(self, config, ctx):
+            return [region]
+        ctx = SimpleNamespace(img_rgb=image, mask_raw=mask)
+        config = SimpleNamespace(ocr=SimpleNamespace(ignore_bubble=8))
+        kept = asyncio.run(classify_regions(merge)(None, config, ctx))
+        self.assertEqual([r.name for r in kept], ["tracos"])
+        self.assertEqual(region.mangalate_background["kind"], "tracos")
 
 
 class DetectionFallbackTest(unittest.TestCase):
