@@ -280,7 +280,10 @@ async def translate_byok(self, from_lang, to_lang, queries):
                 notes = answer_problems(sources, parsed)
                 if notes:
                     # One second try with the problems pointed out; the better answer stays.
-                    print(f"Second try: {len(notes)} problem(s) in the answer", flush=True)
+                    from quality import UNCHANGED_NOTE
+                    same = sum(UNCHANGED_NOTE in note for note in notes)
+                    print(f"Second try: {len(notes)} problem(s) in the answer"
+                          + (f", {same} returned unchanged" if same else ""), flush=True)
                     try:
                         _, again, again_terms = await ask(provider, prompt + "\n\nA previous answer had these problems; "
                                                           "avoid them and keep every marker:\n" + "\n".join(notes))
@@ -1105,10 +1108,33 @@ def validate_page_translations(original_translate):
         result = await original_translate(self, config, ctx)
         if not legacy_quality() and isinstance(result, list):
             import re
-            from quality import normalize_spacing, page_names, sentence_case, source_names, tidy_start
+            from quality import (normalize_spacing, page_names, same_text, sentence_case, source_names, tidy_start,
+                                 unchanged_english)
             texts = [getattr(region, "translation", None) for region in result]
             names = page_names([t for t in texts if isinstance(t, str)])
             names |= {g["target"] for g in (page_context() or {}).get("glossary", [])}
+            # The engine drops an answer equal to its source, and the English lettering stays
+            # (op1161 p16 "AH.."). What reads the same in Portuguese is lettered like the rest;
+            # an English echo stays as drawn and is reported with the preserved regions.
+            kept = {id(region) for region in result}
+            same = [region for region in regions if id(region) not in kept
+                    and isinstance(getattr(region, "translation", None), str)
+                    and same_text(region.text, region.translation) and re.search(r"[^\W\d_]", region.text)]
+            back = {id(region) for region in same if not unchanged_english(region.text, names)}
+            for region in same:
+                if id(region) in back:
+                    region.mangalate_same_as_source = True  # memory.remember learns no name from it
+            if same:
+                if kept <= {id(region) for region in regions}:  # same order as before: the early cleaning stays
+                    result = [region for region in regions if id(region) in kept or id(region) in back]
+                else:
+                    result = result + [region for region in same if id(region) in back]
+                for region in same:
+                    if id(region) not in back:
+                        region.mangalate_background = dict(getattr(region, "mangalate_background", None) or {},
+                                                           devolvida_igual=True)
+                        ctx.mangalate_preserved = list(getattr(ctx, "mangalate_preserved", None) or []) + [region]
+                print(f"Same as the original: {len(back)} lettered, {len(same) - len(back)} left as drawn", flush=True)
             for region in result:
                 if isinstance(getattr(region, "translation", None), str):
                     # The (m)/(f) marks belong to the terms line only (memory.TERMS_INSTRUCTION);

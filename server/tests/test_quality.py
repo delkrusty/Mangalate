@@ -1056,6 +1056,39 @@ class PortugueseCheckTest(unittest.TestCase):
                              ("UH-OH.", "Oh oh.")):
             self.assertFalse(any("twice" in n for n in quality.translation_problems([source], [text])), text)
 
+    def test_answer_equal_to_the_source_reads_the_same_only_without_english(self):
+        # op1161 p16 and Grand Blue 106 p23: the AI answered an interjection, a scream and the
+        # OCR of a vertical phone buzz unchanged; the engine dropped all three as untranslated.
+        for source in ("OH..", "HMMM...", "AAAH!!", "GUHA- AAA!!!", "HAHAHA!", "BZZZT", "ZORVAN!!"):
+            self.assertEqual(quality.unchanged_english(source), [], source)
+        for source, words in (("YEAAAH!!!", ["YEAAAH"]), ("NOOO!", ["NOOO"]), ("WAIT!", ["WAIT"]),
+                              ("Z 6ZZZ U Z BZZZ", ["Z", "6ZZZ", "U", "Z"]), ("I...", ["I"]), ("HE...", ["HE"])):
+            self.assertEqual(quality.unchanged_english(source), words, source)
+        # A name of the page or of the glossary is no English, even when it is also a word,
+        # and a plain double letter is no held one ("VELLVET" is not "velvet").
+        self.assertEqual(quality.unchanged_english("MAX!!!", {"Max"}), [])
+        self.assertEqual(quality.unchanged_english("IRON PEAKS!", {"Iron Peaks"}), [])
+        self.assertEqual(quality.unchanged_english("SHAGGY", ()), ["SHAGGY"])
+        self.assertEqual(quality.unchanged_english("VELLVET!"), [])
+
+    def test_unchanged_answer_with_english_asks_again(self):
+        notes = quality.translation_problems(["Z 6ZZZ BZZZ", "WAIT FOR ME!"], ["Z 6ZZZ BZZZ", "Me espera!"])
+        self.assertEqual(len(notes), 1)
+        self.assertTrue(notes[0].startswith("<|1|>") and "unchanged" in notes[0])
+        # What already reads the same in Portuguese costs no second request.
+        for source, text in (("OH..", "Oh.."), ("GUHA- AAA!!!", "GUHA- AAA!!!"), ("ZORVAN!!", "Zorvan!!")):
+            self.assertFalse(any("unchanged" in n for n in quality.translation_problems([source], [text])), text)
+        notes = quality.translation_problems(["OH, MAX!!!", "MAX!!!"], ["Ah, Max!!!", "Max!!!"])
+        self.assertFalse(any("unchanged" in n for n in notes))
+        notes = quality.translation_problems(["MAX!"], ["Max!"], [{"source": "MAX", "target": "Max"}])
+        self.assertFalse(any("unchanged" in n for n in notes))
+
+    def test_lone_letter_answer_never_wins_the_second_try(self):
+        # Grand Blue 106 p23: the vertical buzz came back as a lone "V", lettered big in the box.
+        self.assertTrue(any("is a lone letter" in n for n in quality.translation_problems(["Z 6ZZZ BZZZ"], ["Z"])))
+        for source, text in (("A...", "A..."), ("AND?", "E?"), ("OH!", "Ó!"), ("OOOH!", "Ô!"), ("Z!", "Z!")):
+            self.assertFalse(any("is a lone letter" in n for n in quality.translation_problems([source], [text])), text)
+
 
 class BubbleScanTest(unittest.TestCase):
     """Small white bubbles the detector missed (Grand Blue pp. 19/27)."""
