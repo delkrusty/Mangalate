@@ -144,6 +144,87 @@ class BackgroundTest(unittest.TestCase):
         verdict = classify_region(image, mask, [quad(105, 120, 270, 168)])
         self.assertEqual(verdict["kind"], "art", verdict)
 
+    LINES = (("NO WAIT DONT", 60), ("TAKE THOSE TWO", 88), ("THEY ARE THE ONLY", 116), ("WAY I CAN FIX", 144),
+             ("ALL OF THIS NOW", 172))
+
+    def paragraph(self, image):
+        """Five lines of dark lettering; returns the detector mask (letters only) and the line quads."""
+        letters = page(size=(image.shape[1], image.shape[0]))
+        quads = []
+        for text, y in self.LINES:
+            write(image, text, (100, y), (0, 0, 0), 0.7)
+            write(letters, text, (100, y), (0, 0, 0), 0.7)
+            (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+            quads.append(quad(98, y - th - 3, 102 + tw, y + 4))
+        return text_mask(letters, (255, 255, 255)), quads
+
+    def strands(self, image):
+        for x in (150, 205, 250, 290):
+            strand = np.array([[x + 30, 10], [x + 12, 90], [x, 170], [x - 20, 250]], np.int32)
+            cv2.polylines(image, [strand], False, (0, 0, 0), 2, cv2.LINE_AA)
+        return image
+
+    def test_lettering_on_paper_crossed_by_drawn_strokes_cleans_only_its_letters(self):
+        # One Piece 1161 p5: a speech written on a white part of the drawing, with strands of
+        # hair running between the lines.  The margin is mostly paper (0.91), so it was cleaned
+        # as a bubble and the hair went with the letters.  It is still translated, but only
+        # the letters are cleaned.
+        image = self.strands(page(size=(420, 260)))
+        mask, quads = self.paragraph(image)
+        verdict = classify_region(image, mask, quads)
+        self.assertGreaterEqual(verdict["interior_share"], quality.MIN_INTERIOR_SHARE, verdict)
+        self.assertEqual(verdict["kind"], "tracos", verdict)
+        allowed = quality.letters_area(image, mask, quads)
+        self.assertTrue(allowed[mask > 0].all())                 # every letter is cleaned
+        lines = quality._line_mask(image.shape, [np.asarray(q, np.float32) for q in quads]) > 0
+        strand_ink = (image.min(axis=2) < 128) & ~cv2.dilate(lines.astype(np.uint8), np.ones((7, 7), np.uint8)).astype(bool)
+        self.assertTrue(strand_ink.any())
+        self.assertFalse(allowed[strand_ink].any())              # the strands between and around the lines stay
+        # The new lettering is planned as if the line boxes were paper: the strands that
+        # still cross them must not shrink its room.
+        boxes, colour = quality.paper_under(image, quads)
+        self.assertTrue(boxes[lines].all())
+        self.assertTrue((colour >= 240).all(), colour)
+
+    def test_light_outline_of_dark_letters_is_cleaned_with_them(self):
+        # cap146 p178: black letters with a white outline on a lilac page crossed by speed
+        # lines.  With the letters alone, the flat fill took the white outline for the paper
+        # and painted white ghosts of the letters.
+        image = page((235, 222, 240), (420, 260))
+        mask, quads = self.paragraph(page(size=(420, 260)))
+        outline = cv2.dilate(mask, np.ones((11, 11), np.uint8)) > 0  # thicker than LETTER_GROW
+        image[outline] = 255
+        image[mask > 0] = 0
+        allowed = quality.letters_area(image, mask, quads)
+        self.assertTrue(allowed[outline].all())
+        lines = quality._line_mask(image.shape, [np.asarray(q, np.float32) for q in quads]) > 0
+        far = ~cv2.dilate(lines.astype(np.uint8), np.ones((21, 21), np.uint8)).astype(bool)
+        self.assertFalse(allowed[far].any())                      # the page around stays
+
+    def test_tight_bubble_and_one_crossing_line_stay_interior(self):
+        # The outline runs along the margin, and a panel border (Grand Blue 102 p3) or a
+        # tail crosses it only on two sides: still a bubble.
+        image = page(size=(420, 260))
+        cv2.ellipse(image, (210, 118), (170, 100), 0, 0, 360, (0, 0, 0), 3, cv2.LINE_AA)
+        cv2.line(image, (205, 0), (205, 259), (0, 0, 0), 2, cv2.LINE_AA)
+        mask, quads = self.paragraph(image)
+        verdict = classify_region(image, mask, quads)
+        self.assertEqual(verdict["kind"], "interior", verdict)
+        self.assertEqual(verdict["strokes"], 2, verdict)  # the border, above and below the text
+
+    def test_lettering_at_the_edge_of_the_image_is_classified(self):
+        # Ink on the last row or column of the image (a webtoon slice cut under a bubble)
+        # once made the stroke count read past the image and fail the whole page.
+        image = page(size=(420, 260))
+        mask, quads = self.paragraph(image)
+        image, mask = image[:180, :215].copy(), mask[:180, :215].copy()
+        image[179, :] = 120
+        image[:, 214] = 120
+        quads = [[[min(x, 214), min(y, 179)] for x, y in q] for q in quads]
+        self.assertIn(classify_region(image, mask, quads)["kind"], ("interior", "art"))
+        self.assertEqual(quality.crossing_strokes(np.array([10, 179]), np.array([214, 10]), mask > 0,
+                                                  np.ones(mask.shape, np.uint8), 6, 20), 0)
+
     def test_empty_region_is_never_cleaned(self):
         self.assertEqual(classify_region(page(), None, [])["kind"], "art")
 
@@ -246,6 +327,127 @@ class PipelineHookTest(unittest.TestCase):
 
     def test_allow_art_text_keeps_every_region(self):
         self.assertEqual(self.run_merge(0), (["bubble", "art"], []))
+
+    def hatched_speech(self, text, dark=False, tone=False):
+        import asyncio
+        from types import SimpleNamespace
+        from engine_compat import classify_regions
+        image = page(size=(420, 260))
+        if dark:
+            image[:] = noisy_art((420, 260)) // 3
+        mask, quads = BackgroundTest.paragraph(BackgroundTest, image)
+        for x in range(60, 400, 20):  # hatching all around and between the lines
+            cv2.line(image, (x, 0), (x - 40, 259), (0, 0, 0), 2)
+        if tone:
+            image[:] = 255
+            for dy in (0, 1):
+                for dx in (0, 1):
+                    image[dy::4, dx::4] = 0  # screentone dots, 2 px every 4
+            image[cv2.dilate(mask, np.ones((7, 7), np.uint8)) > 0] = 255  # the white outline of the letters
+        image[mask > 0] = 0
+        # The detector also marks the bits of hatching between the letters, as on the real page.
+        boxes = quality._line_mask(image.shape, [np.asarray(q, np.float32) for q in quads]) > 0
+        mask[boxes & (image.min(axis=2) < 128)] = 255
+        region = SimpleNamespace(name="fala", text=text, lines=np.array(quads))
+        async def merge(self, config, ctx):
+            return [region]
+        ctx = SimpleNamespace(img_rgb=image, mask_raw=mask)
+        config = SimpleNamespace(ocr=SimpleNamespace(ignore_bubble=8))
+        kept = asyncio.run(classify_regions(merge)(None, config, ctx))
+        return [r.name for r in kept], region.mangalate_background
+
+    def test_speech_over_hatching_on_a_light_page_is_translated(self):
+        # One Piece 1161 p5 "WELL, CONSIDERING...": the hatching makes the margin art
+        # (0.44), and the speech stayed in English.  Only its letters are cleaned now.
+        kept, background = self.hatched_speech("WELL, I GUESS I DESERVE THIS TOO...")
+        self.assertLess(background["interior_share"], quality.MIN_INTERIOR_SHARE)
+        self.assertEqual((kept, background["kind"]), (["fala"], "tracos"))
+
+    def test_sound_or_dark_art_under_the_letters_stays_as_drawn(self):
+        self.assertEqual(self.hatched_speech("BAM")[0], [])
+        self.assertEqual(self.hatched_speech("WELL, I GUESS I DESERVE THIS TOO...", dark=True)[0], [])
+        # Grand Blue 102 p7: white-outlined letters over screentone; the white between the
+        # dots is not paper, and cleaning the letters smeared the tone.
+        self.assertEqual(self.hatched_speech("WELL, I GUESS I DESERVE THIS TOO...", tone=True)[0], [])
+
+    def test_speech_the_mask_misses_or_two_speeches_stay_as_drawn(self):
+        image = page(size=(420, 260))
+        mask, quads = BackgroundTest.paragraph(BackgroundTest, image)
+        self.assertTrue(quality.speech_on_paper(image, mask, quads))
+        # Grand Blue 106 p16: a tilted line the detector mask missed left an English ghost.
+        missed = mask.copy()
+        missed[40:100] = 0
+        self.assertFalse(quality.speech_on_paper(image, missed, quads))
+        # Grand Blue 102 p33: two speeches side by side in one block, their lines interleaved.
+        side = [quad(98, 40, 200, 64), quad(260, 40, 380, 64), quad(98, 70, 200, 94), quad(260, 70, 380, 94)]
+        self.assertFalse(quality.speech_on_paper(image, mask, side))
+        # Grand Blue 102 p4: a form drawn askew; the new lines are written level over it.
+        centre = (210, 110)
+        turn = cv2.getRotationMatrix2D(centre, 7, 1.0)
+        tilted_image = cv2.warpAffine(image, turn, (420, 260), borderValue=(255, 255, 255))
+        tilted_mask = cv2.warpAffine(mask, turn, (420, 260))
+        tilted = [cv2.transform(np.asarray(q, np.float32).reshape(1, 4, 2), turn).reshape(4, 2) for q in quads]
+        self.assertFalse(quality.speech_on_paper(tilted_image, tilted_mask, tilted))
+        # Grand Blue 102 p20: "GUYS!" stacked one letter per row in a tall bubble came out tiny.
+        stacked = page(size=(420, 260))
+        letters = np.zeros(stacked.shape[:2], np.uint8)
+        for i, ch in enumerate("GUYS!"):
+            cv2.putText(letters, ch, (200, 45 + i * 45), cv2.FONT_HERSHEY_SIMPLEX, 1.2, 255, 3)
+        stacked[letters > 0] = 0
+        self.assertFalse(quality.speech_on_paper(stacked, letters, [quad(190, 10, 235, 250)]))
+
+    def test_letters_stacked_in_a_tall_bubble_are_a_bubble(self):
+        # Grand Blue 102 p20: "GUYS!" one letter per row in a tall white bubble.  The box height
+        # (200 px) was taken for the line height, the margin reached the art around the bubble,
+        # and the speech stayed in English.
+        image = noisy_art((300, 300))
+        cv2.ellipse(image, (150, 150), (45, 135), 0, 0, 360, (255, 255, 255), -1)
+        cv2.ellipse(image, (150, 150), (45, 135), 0, 0, 360, (0, 0, 0), 3)
+        letters = np.zeros(image.shape[:2], np.uint8)
+        for i, ch in enumerate("GUYS!"):
+            cv2.putText(letters, ch, (138, 70 + i * 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, 255, 3)
+        image[letters > 0] = 0
+        quads = [quad(132, 45, 168, 250)]
+        self.assertTrue(quality.stacked(quads))
+        self.assertEqual(classify_region(image, letters, quads)["kind"], "interior")
+        self.assertFalse(quality.stacked([quad(100, 40, 300, 70)]))
+
+    def test_stacked_translation_is_written_one_capital_per_row(self):
+        import lettering
+        font = str(Path(__file__).resolve().parents[1] / "fonts" / "ComicNeue-Bold.ttf")
+        plan = lettering.plan_stacked((112, 370, 149, 572), "Pessoal!", font, 8)
+        self.assertEqual(plan["lines"], list("PESSOAL!"))
+        x0, y0, x1, y1 = plan["box"]
+        self.assertTrue(y1 - y0 <= (572 - 370) * lettering.STACK_ROOM + 2 and abs((x0 + x1) / 2 - 130.5) <= 1, plan)
+        self.assertIsNone(lettering.plan_stacked((112, 370, 149, 380), "Pessoal!", font, 8))  # no room: as drawn
+
+    def test_line_box_running_onto_a_wall_is_still_speech(self):
+        # Grand Blue 106 p16: the box of "IN WINTER?" runs a few px onto the screentone of the
+        # wall beside it; those dots are not letters the detector missed.
+        image = page(size=(420, 260))
+        mask, quads = BackgroundTest.paragraph(BackgroundTest, image)
+        image[:, 300:] = 255
+        for dy in (0, 1):
+            for dx in (0, 1):
+                image[dy::4, 300 + dx::4] = 0
+        quads = [[[x0, y0], [max(x1, 310), y0], [max(x1, 310), y1], [x0, y1]] if i == 2 else q
+                 for i, q in enumerate(quads) for (x0, y0), _, (x1, y1), _ in [q]]
+        self.assertTrue(quality.speech_on_paper(image, mask, quads))
+
+    def test_lettering_crossed_by_strokes_is_translated(self):
+        import asyncio
+        from types import SimpleNamespace
+        from engine_compat import classify_regions
+        image = BackgroundTest.strands(None, page(size=(420, 260)))
+        mask, quads = BackgroundTest.paragraph(BackgroundTest, image)
+        region = SimpleNamespace(name="tracos", lines=np.array(quads))
+        async def merge(self, config, ctx):
+            return [region]
+        ctx = SimpleNamespace(img_rgb=image, mask_raw=mask)
+        config = SimpleNamespace(ocr=SimpleNamespace(ignore_bubble=8))
+        kept = asyncio.run(classify_regions(merge)(None, config, ctx))
+        self.assertEqual([r.name for r in kept], ["tracos"])
+        self.assertEqual(region.mangalate_background["kind"], "tracos")
 
 
 class DetectionFallbackTest(unittest.TestCase):
@@ -543,7 +745,7 @@ class OcrRescueTest(unittest.TestCase):
         def __init__(self, box, text=""):
             self.pts, self.text, self.prob, self.direction = np.asarray(quad(*box)), text, 0.0, "h"
 
-    def run_ocr(self, lines, dropped):
+    def run_ocr(self, lines, dropped, reading="MUSTVE MAL-"):
         import asyncio
         import types
         from types import SimpleNamespace
@@ -552,7 +754,7 @@ class OcrRescueTest(unittest.TestCase):
         async def dispatch(name, image, textlines, config, device, verbose):
             seen["prob"], seen["count"] = config.prob, len(textlines)
             for line in textlines:
-                line.text, line.prob = "MUSTVE MAL-", 0.08
+                line.text, line.prob = reading, 0.08
             return list(textlines)
         module = types.ModuleType("manga_translator.ocr")
         module.dispatch = dispatch
@@ -582,6 +784,24 @@ class OcrRescueTest(unittest.TestCase):
         self.assertEqual(seen["count"], 1)
         self.assertEqual(len(result), 4)
         self.assertEqual(len(ctx.mangalate_ocr_rescued), 1)
+
+    def test_drawn_symbol_read_as_one_letter_repeated_is_not_rescued(self):
+        # One Piece 1161 p16: an anger vein and a broken heart under the last line of a
+        # bubble were read again as "JJJJ", erased, and "Jjjj" was written at the end of the speech.
+        lines = [self.Line((100, 40 + i * 34, 300, 68 + i * 34)) for i in range(4)]
+        result, seen, ctx = self.run_ocr(lines, [lines[3]], reading="JJJJ")
+        self.assertEqual(seen["count"], 1)
+        self.assertEqual(len(result), 3)
+        self.assertEqual(ctx.mangalate_ocr_rescued, [])
+        self.assertEqual(ctx.mangalate_drawn, [[100, 142, 300, 170]])  # left out of the cleaning mask
+        # A drawn-out cry still has two letters: it is speech and is read again.
+        result, _, ctx = self.run_ocr(lines, [lines[3]], reading="WAAAH!!")
+        self.assertEqual(len(result), 4)
+        self.assertEqual(ctx.mangalate_drawn, [])
+        # So is one vowel drawn out, the end of a cry split in two lines ("GYAA- / AAA!!!").
+        result, _, ctx = self.run_ocr(lines, [lines[3]], reading="AAA!!!")
+        self.assertEqual(len(result), 4)
+        self.assertEqual(ctx.mangalate_drawn, [])
 
     def test_lonely_dropped_line_is_left_alone(self):
         lines = [self.Line((100, 40, 300, 68)), self.Line((100, 600, 300, 628))]
@@ -613,6 +833,20 @@ class BubbleGlyphTest(unittest.TestCase):
         image = self.page(double_outline=True)
         found = bubble_glyphs(image, (145, 120, 360, 240), 30, near=3)
         self.assertFalse(found[60:70, 200:300].any())            # top of the inner hairline
+
+    def test_drawing_read_as_one_letter_repeated_stays_whole(self):
+        # One Piece 1161 p16: an anger vein under the last line was read as "JJJJ".  Its own
+        # box gives back only the drawing; the letters of the line above are not touched.
+        image = self.page()
+        vein = np.zeros(image.shape[:2], np.uint8)
+        for dx in (0, 14):
+            cv2.ellipse(vein, (230 + dx, 252), (6, 10), 0, 90, 270, 255, 3)
+            cv2.ellipse(vein, (230 + dx + 28, 252), (6, 10), 0, -90, 90, 255, 3)
+        image[vein > 0] = (10, 10, 10)
+        keep = quality.drawn_marks(image, [(218, 240, 284, 264)])
+        self.assertTrue(keep[vein > 0].all())
+        self.assertFalse(keep[200:232, :].any())       # the line "OF US." just above
+        self.assertFalse(quality.drawn_marks(image, []).any())
 
     def test_text_on_art_gives_nothing(self):
         image = noisy_art((500, 400))
@@ -1258,6 +1492,55 @@ class ColumnTest(unittest.TestCase):
             d.text((250 - w // 2, 20 + 30 * row), text, fill="black", font=font)
             boxes.append((250 - w // 2, 24 + 30 * row, 250 - w // 2 + w, 48 + 30 * row))
         self.assertEqual(quality.column_cuts(cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY), boxes), {})
+
+    def narrow_gutter(self, left_rows, right_rows):
+        """Two columns 10 px apart; the first row's box runs across both, as the detector drew it."""
+        from PIL import Image, ImageDraw, ImageFont
+        img = Image.new("RGB", (420, 260), "white")
+        d = ImageDraw.Draw(img)
+        font = ImageFont.truetype(str(Path(__file__).resolve().parents[1] / "fonts" / "ComicNeue-Bold.ttf"), 20)
+        boxes = []
+        for words, x_right, rows in ((left_rows, True, None), (right_rows, False, None)):
+            for i, (text, y) in enumerate(words):
+                w = int(d.textlength(text, font=font))
+                x = 200 - w if x_right else 210
+                d.text((x, y), text, fill="black", font=font)
+                boxes.append((x, y + 3, x + w, y + 23))
+        return cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY), boxes
+
+    def test_two_columns_with_a_narrow_gutter_are_cut(self):
+        # Grand Blue 102 p33: "I'LL HAVE THE DRINKS..." in small letters beside "THERE'S BEEN A
+        # LITTLE MIX-UP!"; a white outline closes the gutter to 9 px, and one box ran across both.
+        left = [("DRINKS", 50), ("REPLACED", 80), ("RIGHT", 110)]
+        right = [("BEEN A", 56), ("LITTLE", 86), ("MIX-UP!", 116)]
+        gray, boxes = self.narrow_gutter(left, right)
+        across = (min(boxes[0][0], boxes[3][0]), 20, max(boxes[0][2], boxes[3][2]), 44)
+        from PIL import Image, ImageDraw, ImageFont
+        img = Image.fromarray(gray)
+        d = ImageDraw.Draw(img)
+        font = ImageFont.truetype(str(Path(__file__).resolve().parents[1] / "fonts" / "ComicNeue-Bold.ttf"), 20)
+        d.text((200 - int(d.textlength("HAVE THE", font=font)), 21), "HAVE THE", fill=0, font=font)
+        d.text((210, 21), "THERE'S", fill=0, font=font)
+        gray = np.array(img)
+        cuts = quality.column_cuts(gray, [across] + boxes)
+        self.assertIn(0, cuts)
+        gx0, gx1 = cuts[0]
+        self.assertTrue(200 <= gx1 and gx0 <= 210, cuts)
+
+    def test_one_line_split_in_two_boxes_is_not_two_columns(self):
+        # A speech whose middle line the detector boxed in two pieces: one pair side by side only.
+        left = [("I KNOW", 50)]
+        right = [("WHAT", 50)]
+        gray, boxes = self.narrow_gutter(left, right)
+        from PIL import Image, ImageDraw, ImageFont
+        img = Image.fromarray(gray)
+        d = ImageDraw.Draw(img)
+        font = ImageFont.truetype(str(Path(__file__).resolve().parents[1] / "fonts" / "ComicNeue-Bold.ttf"), 20)
+        for text, y in (("YOU MEAN, BUT", 20), ("IT IS TOO LATE", 80)):
+            w = int(d.textlength(text, font=font))
+            d.text((205 - w // 2, y), text, fill=0, font=font)
+            boxes.append((205 - w // 2, y + 3, 205 - w // 2 + w, y + 23))
+        self.assertEqual(quality.column_cuts(np.array(img), boxes), {})
 
     def test_column_groups(self):
         self.assertEqual(quality.column_groups([(0, 0, 50, 10), (60, 0, 120, 10), (10, 12, 40, 22), (70, 12, 110, 22)]),

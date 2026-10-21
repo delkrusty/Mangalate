@@ -92,7 +92,8 @@ def prepare_cleaning(original_translate):
         task = None
         if regions and overlap_enabled() and getattr(ctx, "mask", None) is None:
             snapshot = SimpleNamespace(text_regions=list(regions), img_rgb=ctx.img_rgb,
-                                       mask_raw=ctx.mask_raw, mask=None)
+                                       mask_raw=ctx.mask_raw, mask=None,
+                                       mangalate_drawn=getattr(ctx, "mangalate_drawn", None))
 
             async def clean():
                 started = time.monotonic()
@@ -161,8 +162,12 @@ CROP_PADDING = 96   # context (px) given to the model around text over art
 MAX_CROP_SHARE = 0.6
 
 
-def split_flat(image, mask):
-    """Fill blobs of text that sit on a flat colour; return (page, mask left for the model)."""
+def split_flat(image, mask, ignore=None):
+    """Fill blobs of text that sit on a flat colour; return (page, mask left for the model).
+
+    ``ignore`` marks pixels left out of the ring that is read around a blob: a drawing kept
+    whole next to the text (quality.drawn_marks) does not make the bubble look textured.
+    """
     import cv2
     text = mask > 0
     blobs = cv2.dilate(text.astype(np.uint8), np.ones((GROUP, GROUP), np.uint8))
@@ -178,6 +183,8 @@ def split_flat(image, mask):
         blob = labels[y0:y1, x0:x1] == label
         letters = blob & text[y0:y1, x0:x1]
         ring = cv2.dilate(letters.astype(np.uint8), ring_kernel).astype(bool) & ~text[y0:y1, x0:x1]
+        if ignore is not None:
+            ring &= ~ignore[y0:y1, x0:x1]
         pixels = image[y0:y1, x0:x1][ring]
         if len(pixels) < 4 * RING:
             continue
@@ -207,7 +214,12 @@ def flat_first(original_inpaint):
                 or image.ndim != 3 or mask.shape[:2] != image.shape[:2]):
             return await original_inpaint(self, config, ctx)
         try:
-            page, left = split_flat(image, mask)
+            ignore = None
+            drawn = getattr(ctx, "mangalate_drawn", None)
+            if drawn:
+                from quality import drawn_marks
+                ignore = drawn_marks(image, drawn)
+            page, left = split_flat(image, mask, ignore)
         except Exception as exc:
             print(f"Limpeza lisa falhou ({type(exc).__name__}); usando o modelo.", flush=True)
             return await original_inpaint(self, config, ctx)

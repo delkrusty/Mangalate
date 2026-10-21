@@ -179,6 +179,25 @@ class FlatFillTest(unittest.TestCase):
         self.assertTrue((out[116:144, 96:304] == 255).all())
         self.assertTrue((out[outline] == 0).all())                          # outline intact
 
+    def test_drawing_kept_next_to_the_text_does_not_send_the_bubble_to_the_model(self):
+        # One Piece 1161 p16: an anger vein read as "JJJJ" stays whole right under the mask;
+        # it spoiled the ring, and the model smeared grey over the bubble.
+        import numpy as np
+        engine, seen = self.engine()
+        image = np.full((300, 400, 3), 255, np.uint8)
+        mask = np.zeros((300, 400), np.uint8)
+        image[120:140, 100:300] = 0                           # letters
+        mask[116:144, 96:304] = 255
+        image[145:166, 130:150] = image[145:166, 175:195] = image[145:166, 220:240] = 0  # the drawing, 1 px under the mask
+        drawn = [[125, 145, 255, 167]]
+        out = asyncio.run(engine._run_inpainting(None, SimpleNamespace(img_rgb=image, mask=mask, mangalate_drawn=drawn)))
+        self.assertEqual(seen, [])
+        self.assertTrue((out[116:144, 96:304] == 255).all())
+        self.assertTrue((out[145:166, 130:150] == 0).all())                  # drawing intact
+        engine, seen = self.engine()
+        asyncio.run(engine._run_inpainting(None, SimpleNamespace(img_rgb=image, mask=mask)))
+        self.assertEqual(len(seen), 1)                        # without it, the model was used
+
     def test_outline_running_under_the_mask_still_goes_to_the_model(self):
         engine, seen = self.engine()
         image, mask, _ = self.outlined_bubble(gap=0)

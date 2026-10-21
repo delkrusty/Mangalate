@@ -475,6 +475,44 @@ def plan_shaped(image, region_box, others, text, font_path, original_size, minim
             "font": font_path, "box": box}
 
 
+STACK_ADVANCE = 1.3   # rows of stacked letters, in cap heights
+STACK_ROOM = 1.1      # the stacked letters may take this share of the original column's height...
+STACK_WIDTH = 1.6     # ...and be this many times as wide as it
+
+
+def plan_stacked(region_box, text, font_path, minimum):
+    """Capitals stacked one per row in the column of the original ("GUYS!" in a tall bubble).
+
+    A plan for draw_shaped, or None when the letters do not fit at ``minimum`` size.
+    Spaces between words become an empty row.
+    """
+    if not font_path:
+        return None
+    chars = list(" ".join(text.split()).upper())
+    if not chars:
+        return None
+    x0, y0, x1, y1 = region_box
+    room, wide = (y1 - y0) * STACK_ROOM, max(1, x1 - x0) * STACK_WIDTH
+    best = None
+    for size in range(int(minimum), 400):
+        measure = Measure(font_path, size)
+        _, top, _, bottom = measure.font.getbbox("H")
+        cap = bottom - top
+        advance = cap * STACK_ADVANCE
+        if cap + advance * (len(chars) - 1) > room or max(measure(c) for c in chars) > wide:
+            break
+        best = (size, cap, advance, top)
+    if best is None:
+        return None
+    size, cap, advance, offset = best
+    height = cap + advance * (len(chars) - 1)
+    x, top = (x0 + x1) / 2, (y0 + y1) / 2 - height / 2
+    width = max(Measure(font_path, size)(c) for c in chars)
+    box = (int(x - width / 2), int(top), int(x + width / 2) + 1, int(top + height) + 1)
+    return {"size": size, "lines": chars, "x": x, "top": top, "slot": cap, "advance": advance,
+            "font": font_path, "box": box, "offset": offset}
+
+
 def draw_shaped(img, plan, fg, bg):
     """Draw a plan_shaped result on the RGB page (in place)."""
     from PIL import Image, ImageDraw
@@ -491,7 +529,7 @@ def draw_shaped(img, plan, fg, bg):
     draw = ImageDraw.Draw(layer)
     for i, (line, lw) in enumerate(zip(plan["lines"], widths)):
         x = plan["x"] - lw / 2 - left
-        y = plan["top"] + i * plan["advance"] - measure.offset - top
+        y = plan["top"] + i * plan["advance"] - plan.get("offset", measure.offset) - top
         draw.text((x, y), line, font=measure.font, fill=tuple(int(c) for c in fg) + (255,),
                   stroke_width=stroke, stroke_fill=tuple(int(c) for c in bg) + (255,) if stroke else None)
     box = np.asarray(layer)

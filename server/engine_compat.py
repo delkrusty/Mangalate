@@ -400,12 +400,15 @@ def is_credit(text):
 
     TBATE new p84 "THE BEGINNING AFTER™END"; TBATE 236 p27 the "thunderscans"
     watermark was translated; TBATE 240 p68 "Original Art by: YOYO" became "Arte original por: YOY".
+    A chapter subtitle read with its staff ("By ... Translation: ... Lettering: ...", One Piece
+    1153 p1) would otherwise be cleaned and written over as one paragraph.
     """
     import re
     global CREDIT
     if CREDIT is None:
         CREDIT = re.compile(r"[™©®]|\b\w{3,}scans?\b|discord|patreon|ko-?fi|www\.|\.(?:com|net|org|gg)\b"
                             r"|by\s*:|\b(?:tl|pr|ts|qc|raws?|editor|proofreader|typesetter|translator|cleaner|redrawer)\s*:"
+                            r"|\b(?:translation|lettering|letterer|illustrations?)\s*:"
                             r"|\btapa\w*\W{0,3}origin"
                             r"|read (?:the |this |more |latest )?chapters? (?:at|on)|support us|our (?:web)?site",
                             re.I)
@@ -658,7 +661,25 @@ def classify_regions(original_merge):
                     continue
                 fg, bg = outlined_colours(image, region.lines)
                 region.fg_colors, region.bg_colors = np.array(fg), np.array(bg)
-            if region.mangalate_background["kind"] in ("interior", "contorno"):
+            # A speech written over the drawing, on a mostly light page (One Piece 1161 p5
+            # "WELL, CONSIDERING..."), is translated too: only its letters are cleaned.
+            if region.mangalate_background["kind"] == "art":
+                try:
+                    from quality import reads_as_speech, speech_on_paper
+                    if reads_as_speech(text, len(region.lines) > 1) and speech_on_paper(image, raw, region.lines):
+                        region.mangalate_background["kind"] = "tracos"
+                        region.mangalate_background["fala"] = True
+                except Exception as exc:  # the speech stays as drawn, as before
+                    print(f"Speech on paper skipped: {type(exc).__name__}", flush=True)
+            # Lettering on a white part of the drawing, crossed by its strokes: translated, and
+            # only the letters are cleaned (quality.letters_area).
+            if region.mangalate_background["kind"] == "tracos":
+                from quality import letters_area
+                if not letters_area(image, raw, region.lines).any():
+                    region.mangalate_background["kind"] = "art"
+                    ctx.mangalate_preserved.append(region)
+                    continue
+            if region.mangalate_background["kind"] in ("interior", "contorno", "tracos"):
                 kept.append(region)
             else:
                 ctx.mangalate_preserved.append(region)
@@ -789,6 +810,18 @@ def repair_textlines(original_detect):
     return detect
 
 
+def _line_size(region):
+    """Height of a region's lines; for letters stacked one per row, the width of the column."""
+    import numpy as np
+    from quality import stacked
+    lines = [np.asarray(l, float).reshape(4, 2) for l in region.lines]
+    if not lines:
+        return float(region.font_size)
+    if stacked(lines):
+        return float(np.median([np.ptp(l[:, 0]) for l in lines]))
+    return float(np.median([np.linalg.norm(l[3] - l[0]) for l in lines]))
+
+
 def bubble_layout(rendering, text_render):
     """Replace the engine's 'fit to the original text box' with 'fit to the bubble'.
 
@@ -797,7 +830,7 @@ def bubble_layout(rendering, text_render):
     """
     import numpy as np
     import lettering
-    from quality import has_cjk
+    from quality import has_cjk, stacked
     original_resize = rendering.resize_regions_to_font_size
     original_render = rendering.render
 
@@ -820,13 +853,41 @@ def bubble_layout(rendering, text_render):
             region.mangalate_plan = None
             region.mangalate_shaped = None
             text = region.get_translation_for_rendering()
+            if text and not has_cjk(text) and stacked(region.lines):
+                # Letters stacked one per row in a tall bubble ("GUYS!"): the translation too.
+                try:
+                    plan = lettering.plan_stacked(boxes[i], text, lettering.font_file(), max(8, round(minimum * 0.6)))
+                except Exception as exc:  # never lose a page over the nicer layout
+                    print(f"Stacked layout skipped: {type(exc).__name__}", flush=True)
+                    plan = None
+                if plan is not None:
+                    region.mangalate_shaped = plan
+                    region.font_size = plan["size"]
+                    x0, y0, x1, y1 = plan["box"]
+                    points[i] = np.array([[[x0, y0], [x1, y0], [x1, y1], [x0, y1]]], dtype=np.int64)
+                    planned += 1
+                    continue
             if not text or not horizontal(region) or has_cjk(text):
                 continue
             def layout(size, width, height, text=text, lang=region.target_lang):
                 return text_render.calc_horizontal(size, text, width, height, lang, False)
             others = boxes[:i] + boxes[i + 1:]
+            page = img
+            if (getattr(region, "mangalate_background", None) or {}).get("kind") == "tracos":
+                # Strokes of the drawing still cross where the letters were: plan as if the
+                # block were paper (quality.paper_under), so the text keeps its room.
+                try:
+                    import cv2
+                    from quality import paper_under
+                    _, colour = paper_under(img, region.lines, line_height(region))
+                    hull = cv2.convexHull(np.concatenate([np.asarray(l, np.int32).reshape(-1, 2) for l in region.lines]))
+                    page = img.copy()
+                    cv2.fillPoly(page, [hull.reshape(-1, 1, 2)], tuple(int(c) for c in colour))
+                except Exception as exc:  # plan on the page as it is
+                    print(f"Stroke room skipped: {type(exc).__name__}", flush=True)
+                    page = img
             try:
-                shaped = lettering.plan_shaped(img, boxes[i], others, text, lettering.font_file(),
+                shaped = lettering.plan_shaped(page, boxes[i], others, text, lettering.font_file(),
                                                line_height(region), max(8, round(minimum * 0.6)),
                                                offset=font_size_offset or 0)
             except Exception as exc:  # never lose a page over the nicer layout
@@ -840,7 +901,7 @@ def bubble_layout(rendering, text_render):
                 planned += 1
                 continue
             try:
-                plan = lettering.plan(img, boxes[i], others, text, layout,
+                plan = lettering.plan(page, boxes[i], others, text, layout,
                                       line_height(region) + 0, max(8, round(minimum * 0.6)),
                                       offset=font_size_offset or 0)
             except Exception as exc:  # never lose a page over the nicer layout
@@ -905,9 +966,7 @@ def keep_clean_copy(original_render):
             import numpy as np
             from quality import through_lines
             for region in ctx.text_regions or []:
-                heights = [float(np.linalg.norm(np.asarray(l[3]) - np.asarray(l[0]))) for l in region.lines]
-                lines += through_lines(ctx.img_rgb, ctx.mask, region.xyxy,
-                                       float(np.median(heights)) if heights else float(region.font_size))
+                lines += through_lines(ctx.img_rgb, ctx.mask, region.xyxy, _line_size(region))
         except Exception as exc:  # never lose a page over this
             print(f"Line redraw skipped: {type(exc).__name__}", flush=True)
             lines = []
@@ -936,6 +995,7 @@ def rescue_ocr(original_ocr):
     """
     async def ocr(self, config, ctx):
         before = list(ctx.textlines or [])
+        ctx.mangalate_drawn = []
         result = await original_ocr(self, config, ctx)
         kept = {id(line) for line in result}
         lost = [line for line in before if id(line) not in kept and getattr(line, "direction", "h") == "h"]
@@ -955,7 +1015,17 @@ def rescue_ocr(original_ocr):
         retry = config.ocr.model_copy(deep=True) if hasattr(config.ocr, "model_copy") else config.ocr
         retry.prob = RESCUE_PROB
         read = await dispatch_ocr(config.ocr.ocr, ctx.img_rgb, candidates, retry, self.device, self.verbose)
-        rescued = [line for line in read if sum(ch.isalpha() for ch in str(line.text)) >= 2]
+        # A drawing the detector took for a line (an anger vein, One Piece 1161 p16) comes back
+        # as one consonant repeated, "JJJJ": real speech has two different letters or a vowel.
+        # A drawn-out vowel ("AAA!!!", the end of a cry split in two lines) is still speech.
+        def letters(line):
+            return [ch.upper() for ch in str(line.text) if ch.isalpha()]
+        def drawing(line):
+            found = set(letters(line))
+            return len(found) == 1 and not found & set("AEIOUY")
+        rescued = [line for line in read if len(letters(line)) >= 2 and not drawing(line)]
+        # Kept out of the cleaning mask by refine_mask_consistently.
+        ctx.mangalate_drawn = [list(_box(l.pts)) for l in read if len(letters(l)) >= 2 and drawing(l)]
         render = getattr(config, "render", None)
         for line in rescued:
             if getattr(render, "font_color_fg", None):
@@ -987,21 +1057,42 @@ async def refine_mask_consistently(self, config, ctx):
     h, w = mask.shape[:2]
     grown = np.zeros((h, w), bool)
     for region in ctx.text_regions or []:
-        heights = [float(np.linalg.norm(np.asarray(l[3]) - np.asarray(l[0]))) for l in region.lines]
-        line = float(np.median(heights)) if heights else float(region.font_size)
-        grown |= glyphs_to_clean(ctx.img_rgb, region.xyxy, line)
+        grown |= glyphs_to_clean(ctx.img_rgb, region.xyxy, _line_size(region))
     if grown.any():
         mask = mask.copy()
         mask[grown] = 255
-    # Outlined lettering over the art: the cleaning stays on the letters and their outline.
-    from quality import outlined_area
+    # A drawing the OCR read as "JJJJ" (quality.drawn_marks) stays whole.
+    drawn = getattr(ctx, "mangalate_drawn", None)
+    if drawn:
+        try:
+            from quality import drawn_marks
+            keep = drawn_marks(ctx.img_rgb, drawn)
+            if keep.any():
+                mask = mask.copy()
+                mask[keep] = 0
+        except Exception as exc:  # never lose a page over this
+            print(f"Drawn marks skipped: {type(exc).__name__}", flush=True)
+    # Outlined lettering over the art, or lettering crossed by strokes of the drawing: the
+    # cleaning stays on the letters (and their outline).
+    from quality import letters_area, outlined_area
     for region in ctx.text_regions or []:
-        if (getattr(region, "mangalate_background", None) or {}).get("kind") != "contorno":
+        kind = (getattr(region, "mangalate_background", None) or {}).get("kind")
+        if kind not in ("contorno", "tracos"):
             continue
         x0, y0, x1, y1 = (int(v) for v in region.xyxy)
         pad = int(max(8, region.font_size))
         x0, y0, x1, y1 = max(0, x0 - pad), max(0, y0 - pad), min(w, x1 + pad), min(h, y1 + pad)
-        allowed = outlined_area(ctx.img_rgb, region.lines)
+        if kind == "contorno":
+            allowed = outlined_area(ctx.img_rgb, region.lines)
+        else:
+            try:
+                raw = ctx.mask_raw
+                if raw.shape[:2] != (h, w):
+                    raw = cv2.resize(raw, (w, h), interpolation=cv2.INTER_NEAREST)
+                allowed = letters_area(ctx.img_rgb, raw, region.lines)
+            except Exception as exc:  # cleaned like a bubble, as before: never lose the speech
+                print(f"Letters-only cleaning skipped: {type(exc).__name__}", flush=True)
+                continue
         for other in ctx.text_regions:  # the cleaning of a bubble next to it stays
             if other is not region:
                 ox0, oy0, ox1, oy1 = (int(v) for v in other.xyxy)
