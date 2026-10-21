@@ -347,7 +347,10 @@ def remember(memory, work, regions, terms):
     pairs = page_pairs(regions)
     text = " ".join(p["original"] for p in pairs)
     listed = {normalize(source) for source, _ in terms}
-    terms = list(terms) + [t for t in kept_names(pairs) if normalize(t[0]) not in listed]
+    # A line the AI returned unchanged and the page letters as is ("BOGYA- AAA!!!" -> "Bogya- aaa!!!",
+    # engine_compat.validate_page_translations) is no evidence of a name.
+    named = page_pairs([r for r in regions or [] if not getattr(r, "mangalate_same_as_source", False)])
+    terms = list(terms) + [t for t in kept_names(named) if normalize(t[0]) not in listed]
     added = memory.record(work["obra"], work["capitulo"], work["pagina"], pairs, terms, text)
     if added:
         print("Memória da obra: termos novos " + "; ".join(f"{s}={t}" for s, t in added), flush=True)
