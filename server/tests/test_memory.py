@@ -179,6 +179,9 @@ class KeptNamesTest(unittest.TestCase):
         self.assertFalse(engine_compat.is_credit("IT SCANS THE AREA"))
         self.assertTrue(engine_compat.is_credit("YOU CAN READ THE CHAPTER AT"))
         self.assertTrue(engine_compat.is_credit("SUPPORT US BY READING ON OUR WEBSITE"))
+        # One Piece 1153 p1: a chapter subtitle read in one block with its staff.
+        self.assertTrue(engine_compat.is_credit("PILGRIMAGE, VOL.37 By EIICHIRO ODA Iation: STEPHEN PAUL Lettering: VANESSA"))
+        self.assertFalse(engine_compat.is_credit("THAT'S THE STORY: HE LEFT"))
         self.assertFalse(engine_compat.is_credit("I READ THE LETTER AT HOME"))
 
     def test_comma_before_final_mark_is_dropped(self):

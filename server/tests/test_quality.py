@@ -328,6 +328,87 @@ class PipelineHookTest(unittest.TestCase):
     def test_allow_art_text_keeps_every_region(self):
         self.assertEqual(self.run_merge(0), (["bubble", "art"], []))
 
+    def hatched_speech(self, text, dark=False, tone=False):
+        import asyncio
+        from types import SimpleNamespace
+        from engine_compat import classify_regions
+        image = page(size=(420, 260))
+        if dark:
+            image[:] = noisy_art((420, 260)) // 3
+        mask, quads = BackgroundTest.paragraph(BackgroundTest, image)
+        for x in range(60, 400, 20):  # hatching all around and between the lines
+            cv2.line(image, (x, 0), (x - 40, 259), (0, 0, 0), 2)
+        if tone:
+            image[:] = 255
+            for dy in (0, 1):
+                for dx in (0, 1):
+                    image[dy::4, dx::4] = 0  # screentone dots, 2 px every 4
+            image[cv2.dilate(mask, np.ones((7, 7), np.uint8)) > 0] = 255  # the white outline of the letters
+        image[mask > 0] = 0
+        # The detector also marks the bits of hatching between the letters, as on the real page.
+        boxes = quality._line_mask(image.shape, [np.asarray(q, np.float32) for q in quads]) > 0
+        mask[boxes & (image.min(axis=2) < 128)] = 255
+        region = SimpleNamespace(name="fala", text=text, lines=np.array(quads))
+        async def merge(self, config, ctx):
+            return [region]
+        ctx = SimpleNamespace(img_rgb=image, mask_raw=mask)
+        config = SimpleNamespace(ocr=SimpleNamespace(ignore_bubble=8))
+        kept = asyncio.run(classify_regions(merge)(None, config, ctx))
+        return [r.name for r in kept], region.mangalate_background
+
+    def test_speech_over_hatching_on_a_light_page_is_translated(self):
+        # One Piece 1161 p5 "WELL, CONSIDERING...": the hatching makes the margin art
+        # (0.44), and the speech stayed in English.  Only its letters are cleaned now.
+        kept, background = self.hatched_speech("WELL, I GUESS I DESERVE THIS TOO...")
+        self.assertLess(background["interior_share"], quality.MIN_INTERIOR_SHARE)
+        self.assertEqual((kept, background["kind"]), (["fala"], "tracos"))
+
+    def test_sound_or_dark_art_under_the_letters_stays_as_drawn(self):
+        self.assertEqual(self.hatched_speech("BAM")[0], [])
+        self.assertEqual(self.hatched_speech("WELL, I GUESS I DESERVE THIS TOO...", dark=True)[0], [])
+        # Grand Blue 102 p7: white-outlined letters over screentone; the white between the
+        # dots is not paper, and cleaning the letters smeared the tone.
+        self.assertEqual(self.hatched_speech("WELL, I GUESS I DESERVE THIS TOO...", tone=True)[0], [])
+
+    def test_speech_the_mask_misses_or_two_speeches_stay_as_drawn(self):
+        image = page(size=(420, 260))
+        mask, quads = BackgroundTest.paragraph(BackgroundTest, image)
+        self.assertTrue(quality.speech_on_paper(image, mask, quads))
+        # Grand Blue 106 p16: a tilted line the detector mask missed left an English ghost.
+        missed = mask.copy()
+        missed[40:100] = 0
+        self.assertFalse(quality.speech_on_paper(image, missed, quads))
+        # Grand Blue 102 p33: two speeches side by side in one block, their lines interleaved.
+        side = [quad(98, 40, 200, 64), quad(260, 40, 380, 64), quad(98, 70, 200, 94), quad(260, 70, 380, 94)]
+        self.assertFalse(quality.speech_on_paper(image, mask, side))
+        # Grand Blue 102 p4: a form drawn askew; the new lines are written level over it.
+        centre = (210, 110)
+        turn = cv2.getRotationMatrix2D(centre, 7, 1.0)
+        tilted_image = cv2.warpAffine(image, turn, (420, 260), borderValue=(255, 255, 255))
+        tilted_mask = cv2.warpAffine(mask, turn, (420, 260))
+        tilted = [cv2.transform(np.asarray(q, np.float32).reshape(1, 4, 2), turn).reshape(4, 2) for q in quads]
+        self.assertFalse(quality.speech_on_paper(tilted_image, tilted_mask, tilted))
+        # Grand Blue 102 p20: "GUYS!" stacked one letter per row in a tall bubble came out tiny.
+        stacked = page(size=(420, 260))
+        letters = np.zeros(stacked.shape[:2], np.uint8)
+        for i, ch in enumerate("GUYS!"):
+            cv2.putText(letters, ch, (200, 45 + i * 45), cv2.FONT_HERSHEY_SIMPLEX, 1.2, 255, 3)
+        stacked[letters > 0] = 0
+        self.assertFalse(quality.speech_on_paper(stacked, letters, [quad(190, 10, 235, 250)]))
+
+    def test_line_box_running_onto_a_wall_is_still_speech(self):
+        # Grand Blue 106 p16: the box of "IN WINTER?" runs a few px onto the screentone of the
+        # wall beside it; those dots are not letters the detector missed.
+        image = page(size=(420, 260))
+        mask, quads = BackgroundTest.paragraph(BackgroundTest, image)
+        image[:, 300:] = 255
+        for dy in (0, 1):
+            for dx in (0, 1):
+                image[dy::4, 300 + dx::4] = 0
+        quads = [[[x0, y0], [max(x1, 310), y0], [max(x1, 310), y1], [x0, y1]] if i == 2 else q
+                 for i, q in enumerate(quads) for (x0, y0), _, (x1, y1), _ in [q]]
+        self.assertTrue(quality.speech_on_paper(image, mask, quads))
+
     def test_lettering_crossed_by_strokes_is_translated(self):
         import asyncio
         from types import SimpleNamespace

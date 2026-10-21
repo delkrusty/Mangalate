@@ -170,10 +170,60 @@ def _quads_height(quads):
 
 LETTER_GROW = 2     # px around the letters cleaned with them (anti-aliased edges)
 LETTER_REACH = 0.3  # letters are taken this far around the line boxes, in line heights (overhangs)
+LETTER_SOFT = 0.15  # and their rim this far around them, in line heights...
+LETTER_DARK = 100   # ...except pixels this much darker than the paper (0-255 grey): strokes of the drawing
 
 
 HALO_REACH = 0.3    # an outline around the letters is looked for this far from them, in line heights
 HALO_DELTA = 12     # and is this much (0-255 grey) further from the paper, on the side opposite to the letters
+
+
+LETTER_WHOLE = 1.5  # a piece of ink up to this size (line heights) touching the mask is a letter, taken whole
+LETTER_CHAIN = 0.4  # a letter this close beside a taken one, on the same row, is taken too (in line heights)
+LETTER_STROKE = 0.6  # if its strokes are at least this share as thick as the letters' (hatching is thinner)
+
+
+def whole_letters(image, letters, lines, paper, line_height):
+    """``letters`` completed: every letter-sized piece of ink the detector mask touches, whole, and
+    the letters right beside them on the same row.
+
+    The detector mask is clipped to the line boxes: a tilted line (Grand Blue 106 p16, "IN
+    WINTER?") lost the tops of its letters and its question mark, and they were left as an
+    English ghost.  Long strokes of the drawing are larger than a letter, and hatching is
+    thinner than the letters' strokes, so neither is taken.
+    """
+    lh = max(4.0, float(line_height))
+    pixels = np.asarray(image)[:, :, :3].astype(int)
+    window = cv2.dilate(lines.astype(np.uint8), np.ones((2 * int(lh) + 1, 2 * int(lh) + 1), np.uint8)) > 0
+    ink = window & (np.abs(pixels - np.asarray(paper, int)).max(axis=2) > GLYPH_TOLERANCE)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(ink.astype(np.uint8), connectivity=8)
+    if count <= 1:
+        return letters
+    size = (stats[:, cv2.CC_STAT_WIDTH] <= LETTER_WHOLE * lh) & (stats[:, cv2.CC_STAT_HEIGHT] <= LETTER_WHOLE * lh)
+    size[0] = False
+    touched = np.zeros(count, bool)
+    touched[np.unique(labels[letters & ink])] = True
+    taken = touched & size
+    if not taken.any():
+        return letters
+    depth = cv2.distanceTransform(ink.astype(np.uint8), cv2.DIST_L2, 3)
+    thick = np.zeros(count)
+    np.maximum.at(thick, labels.ravel(), depth.ravel())
+    stroke = float(np.median(thick[taken]))
+    gap = LETTER_CHAIN * lh
+    grew = True
+    while grew:
+        grew = False
+        for k in np.flatnonzero(size & ~taken & (thick >= LETTER_STROKE * stroke)):
+            kx, ky, kw, kh = stats[k, :4]
+            for t in np.flatnonzero(taken):
+                tx, ty, tw, th = stats[t, :4]
+                rows = min(ky + kh, ty + th) - max(ky, ty)
+                apart = max(kx - (tx + tw), tx - (kx + kw))
+                if rows >= 0.5 * min(kh, th) and apart <= gap:
+                    taken[k] = grew = True
+                    break
+    return letters | taken[labels]
 
 
 def letters_area(image, text_mask, quads, line_height=None):
@@ -195,6 +245,7 @@ def letters_area(image, text_mask, quads, line_height=None):
     near = cv2.dilate(lines.astype(np.uint8), np.ones((reach, reach), np.uint8)) > 0
     letters = (np.asarray(text_mask) > INK) & near
     if letters.any():
+        letters = whole_letters(image, letters, lines, paper, line_height)
         gray = cv2.cvtColor(np.ascontiguousarray(np.asarray(image)[:, :, :3]), cv2.COLOR_RGB2GRAY).astype(int)
         ground = int(cv2.cvtColor(paper.reshape(1, 1, 3).astype(np.uint8), cv2.COLOR_RGB2GRAY)[0, 0])
         ink = np.percentile(gray[letters], 10), np.percentile(gray[letters], 90)
@@ -206,7 +257,79 @@ def letters_area(image, text_mask, quads, line_height=None):
             around = cv2.dilate(letters.astype(np.uint8), np.ones((halo, halo), np.uint8)) > 0
             letters |= around & (side * (gray - ground) > HALO_DELTA)
     grow = 2 * LETTER_GROW + 1
-    return cv2.dilate(letters.astype(np.uint8), np.ones((grow, grow), np.uint8)) > 0
+    area = cv2.dilate(letters.astype(np.uint8), np.ones((grow, grow), np.uint8)) > 0
+    if letters.any():
+        # The anti-aliased rim is wider than LETTER_GROW on large letters, and the cleaner drew
+        # it back as a ghost next to a wall (Grand Blue 106 p16): a little further out, the
+        # pixels that are not dark strokes of the drawing are cleaned too.
+        soft = 2 * int(max(1, round(LETTER_SOFT * line_height))) + 1
+        area |= (cv2.dilate(letters.astype(np.uint8), np.ones((soft, soft), np.uint8)) > 0) & (gray >= ground - LETTER_DARK)
+    return area
+
+
+PAPER_LIGHT = 200   # a light page is brighter than this (0-255 grey)...
+PAPER_CLEAN = 2     # ...with no darker pixel this close (px): the white between screentone dots is not paper
+PAPER_SHARE = 0.45  # share of the margin around the lines that is clean paper, for a speech over the drawing
+PAPER_CONTRAST = 2 * HALO_DELTA  # and the letters are this much darker than the page
+PAPER_MASKED = 0.85  # share of the ink on the lines inside the detector mask: only the letters it marks are cleaned
+PAPER_INK = 60       # ink on the lines is this much darker than the page (0-255 grey)
+PAPER_DOT = 0.2      # specks smaller than this squared (line heights) are screentone, not letters
+PAPER_TILT = 3.0     # degrees: tilted lettering (a sheet of paper drawn askew) is written back level, over half-cleaned lines
+
+
+def speech_on_paper(image, text_mask, quads, line_height=None):
+    """True for dark letters on clean paper, crossed by the drawing.
+
+    Such a speech (One Piece 1161 p5, "WELL, CONSIDERING...": hair and hatching between the
+    lines) is classified as art by its margin, but cleaning only its letters (letters_area)
+    keeps the drawing.  Letters with a white outline over screentone (Grand Blue 102 p7) look
+    light around the lines, but the white between the dots is not paper: cleaning them left a
+    smudge on the tone.  Those, a dark or mid-tone background and light letters stay as drawn.
+    So do letters the detector mask misses (a tilted line, Grand Blue 106 p16: an English ghost
+    was left under the translation) and two speeches side by side in one block (Grand Blue 102
+    p33: their lines interleave and one of them sits on the hair), and tilted lettering (Grand
+    Blue 102 p4, a form drawn askew: the boxes missed part of it and English was left), and
+    letters stacked one per row in a tall bubble (Grand Blue 102 p20).
+    """
+    quads = [np.asarray(q, np.float32).reshape(4, 2) for q in quads]
+    if text_mask is None or not quads:
+        return False
+    if line_height is None:
+        line_height = _quads_height(quads)
+    lines, paper = paper_under(image, quads, line_height)
+    pad = int(max(4, round(line_height * 0.35)))
+    margin = (cv2.dilate(lines.astype(np.uint8), np.ones((2 * pad + 1, 2 * pad + 1), np.uint8)) > 0) & ~lines
+    letters = (np.asarray(text_mask) > INK) & lines
+    if not margin.any() or not letters.any():
+        return False
+    gray = cv2.cvtColor(np.ascontiguousarray(np.asarray(image)[:, :, :3]), cv2.COLOR_RGB2GRAY).astype(int)
+    ground = int(cv2.cvtColor(paper.reshape(1, 1, 3).astype(np.uint8), cv2.COLOR_RGB2GRAY)[0, 0])
+    size = 2 * PAPER_CLEAN + 1
+    clean = cv2.erode(gray.astype(np.uint8), np.ones((size, size), np.uint8)) > PAPER_LIGHT
+    if clean[margin].mean() < PAPER_SHARE or ground - np.median(gray[letters]) <= PAPER_CONTRAST:
+        return False
+    ink = lines & (gray < ground - PAPER_INK)
+    # Screentone dots of a wall the line box runs onto (Grand Blue 106 p16) are not missed letters.
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(ink.astype(np.uint8), connectivity=8)
+    dots = stats[:, cv2.CC_STAT_AREA] < (PAPER_DOT * line_height) ** 2
+    dots[0] = False
+    ink &= ~dots[labels]
+    marked = whole_letters(image, np.asarray(text_mask) > INK, lines, paper, line_height)
+    marked = cv2.dilate(marked.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+    if ink.any() and marked[ink].mean() < PAPER_MASKED:
+        return False
+    tilt = np.median([abs(np.degrees(np.arctan2(q[1, 1] - q[0, 1], q[1, 0] - q[0, 0]))) for q in quads])
+    if tilt > PAPER_TILT:
+        return False
+    if any(np.ptp(q[:, 1]) > np.ptp(q[:, 0]) for q in quads):
+        return False  # letters stacked one per row (Grand Blue 102 p20 "GUYS!"): the lettering would be tiny
+    boxes = [(q[:, 0].min(), q[:, 1].min(), q[:, 0].max(), q[:, 1].max()) for q in quads]
+    for i, a in enumerate(boxes):
+        for b in boxes[i + 1:]:
+            rows = min(a[3], b[3]) - max(a[1], b[1])
+            if rows > 0.5 * min(a[3] - a[1], b[3] - b[1]) and min(a[2], b[2]) <= max(a[0], b[0]):
+                return False  # two lines side by side: two speeches in one block
+    return True
 
 
 def paper_under(image, quads, line_height=None):

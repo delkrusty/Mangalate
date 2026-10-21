@@ -397,12 +397,15 @@ def is_credit(text):
 
     TBATE new p84 "THE BEGINNING AFTER™END"; TBATE 236 p27 the "thunderscans"
     watermark was translated; TBATE 240 p68 "Original Art by: YOYO" became "Arte original por: YOY".
+    A chapter subtitle read with its staff ("By ... Translation: ... Lettering: ...", One Piece
+    1153 p1) would otherwise be cleaned and written over as one paragraph.
     """
     import re
     global CREDIT
     if CREDIT is None:
         CREDIT = re.compile(r"[™©®]|\b\w{3,}scans?\b|discord|patreon|ko-?fi|www\.|\.(?:com|net|org|gg)\b"
                             r"|by\s*:|\b(?:tl|pr|ts|qc|raws?|editor|proofreader|typesetter|translator|cleaner|redrawer)\s*:"
+                            r"|\b(?:translation|lettering|letterer|illustrations?)\s*:"
                             r"|\btapa\w*\W{0,3}origin"
                             r"|read (?:the |this |more |latest )?chapters? (?:at|on)|support us|our (?:web)?site",
                             re.I)
@@ -655,6 +658,16 @@ def classify_regions(original_merge):
                     continue
                 fg, bg = outlined_colours(image, region.lines)
                 region.fg_colors, region.bg_colors = np.array(fg), np.array(bg)
+            # A speech written over the drawing, on a mostly light page (One Piece 1161 p5
+            # "WELL, CONSIDERING..."), is translated too: only its letters are cleaned.
+            if region.mangalate_background["kind"] == "art":
+                try:
+                    from quality import reads_as_speech, speech_on_paper
+                    if reads_as_speech(text, len(region.lines) > 1) and speech_on_paper(image, raw, region.lines):
+                        region.mangalate_background["kind"] = "tracos"
+                        region.mangalate_background["fala"] = True
+                except Exception as exc:  # the speech stays as drawn, as before
+                    print(f"Speech on paper skipped: {type(exc).__name__}", flush=True)
             # Lettering on a white part of the drawing, crossed by its strokes: translated, and
             # only the letters are cleaned (quality.letters_area).
             if region.mangalate_background["kind"] == "tracos":
