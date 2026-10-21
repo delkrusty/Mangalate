@@ -1435,6 +1435,55 @@ class ColumnTest(unittest.TestCase):
             boxes.append((250 - w // 2, 24 + 30 * row, 250 - w // 2 + w, 48 + 30 * row))
         self.assertEqual(quality.column_cuts(cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY), boxes), {})
 
+    def narrow_gutter(self, left_rows, right_rows):
+        """Two columns 10 px apart; the first row's box runs across both, as the detector drew it."""
+        from PIL import Image, ImageDraw, ImageFont
+        img = Image.new("RGB", (420, 260), "white")
+        d = ImageDraw.Draw(img)
+        font = ImageFont.truetype(str(Path(__file__).resolve().parents[1] / "fonts" / "ComicNeue-Bold.ttf"), 20)
+        boxes = []
+        for words, x_right, rows in ((left_rows, True, None), (right_rows, False, None)):
+            for i, (text, y) in enumerate(words):
+                w = int(d.textlength(text, font=font))
+                x = 200 - w if x_right else 210
+                d.text((x, y), text, fill="black", font=font)
+                boxes.append((x, y + 3, x + w, y + 23))
+        return cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY), boxes
+
+    def test_two_columns_with_a_narrow_gutter_are_cut(self):
+        # Grand Blue 102 p33: "I'LL HAVE THE DRINKS..." in small letters beside "THERE'S BEEN A
+        # LITTLE MIX-UP!"; a white outline closes the gutter to 9 px, and one box ran across both.
+        left = [("DRINKS", 50), ("REPLACED", 80), ("RIGHT", 110)]
+        right = [("BEEN A", 56), ("LITTLE", 86), ("MIX-UP!", 116)]
+        gray, boxes = self.narrow_gutter(left, right)
+        across = (min(boxes[0][0], boxes[3][0]), 20, max(boxes[0][2], boxes[3][2]), 44)
+        from PIL import Image, ImageDraw, ImageFont
+        img = Image.fromarray(gray)
+        d = ImageDraw.Draw(img)
+        font = ImageFont.truetype(str(Path(__file__).resolve().parents[1] / "fonts" / "ComicNeue-Bold.ttf"), 20)
+        d.text((200 - int(d.textlength("HAVE THE", font=font)), 21), "HAVE THE", fill=0, font=font)
+        d.text((210, 21), "THERE'S", fill=0, font=font)
+        gray = np.array(img)
+        cuts = quality.column_cuts(gray, [across] + boxes)
+        self.assertIn(0, cuts)
+        gx0, gx1 = cuts[0]
+        self.assertTrue(200 <= gx1 and gx0 <= 210, cuts)
+
+    def test_one_line_split_in_two_boxes_is_not_two_columns(self):
+        # A speech whose middle line the detector boxed in two pieces: one pair side by side only.
+        left = [("I KNOW", 50)]
+        right = [("WHAT", 50)]
+        gray, boxes = self.narrow_gutter(left, right)
+        from PIL import Image, ImageDraw, ImageFont
+        img = Image.fromarray(gray)
+        d = ImageDraw.Draw(img)
+        font = ImageFont.truetype(str(Path(__file__).resolve().parents[1] / "fonts" / "ComicNeue-Bold.ttf"), 20)
+        for text, y in (("YOU MEAN, BUT", 20), ("IT IS TOO LATE", 80)):
+            w = int(d.textlength(text, font=font))
+            d.text((205 - w // 2, y), text, fill=0, font=font)
+            boxes.append((205 - w // 2, y + 3, 205 - w // 2 + w, y + 23))
+        self.assertEqual(quality.column_cuts(np.array(img), boxes), {})
+
     def test_column_groups(self):
         self.assertEqual(quality.column_groups([(0, 0, 50, 10), (60, 0, 120, 10), (10, 12, 40, 22), (70, 12, 110, 22)]),
                          [[0, 2], [1, 3]])

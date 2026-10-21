@@ -1269,6 +1269,7 @@ def fit_lines(ink, items, height, changes, gray=None):
 COLUMN_GAP = 0.3      # blank stripe through every line of a stack, in line heights
 COLUMN_ROW_GAP = 0.6  # a line crossing the stripe has this much blank there
 COLUMN_WORD_GAP = 2   # and that blank is this many times its widest word gap
+COLUMN_PAIRS = 2      # unless this many lines wholly on each side share their rows: two columns side by side
 INK_LEVEL = 110       # dark lettering on a light bubble
 
 
@@ -1291,6 +1292,17 @@ def _stacks(boxes):
     for i in range(len(boxes)):
         groups.setdefault(root(i), []).append(i)
     return list(groups.values())
+
+
+def _side_by_side(left, right):
+    """Pairs of line boxes, one from each list, that share most of their rows."""
+    pairs = 0
+    for a in left:
+        for b in right:
+            rows = min(a[3], b[3]) - max(a[1], b[1])
+            if rows > 0.5 * min(a[3] - a[1], b[3] - b[1]):
+                pairs += 1
+    return pairs
 
 
 def column_cuts(gray, boxes):
@@ -1330,8 +1342,12 @@ def column_cuts(gray, boxes):
             both = left & right
             if not both or len(left) < 2 or len(right) < 2:
                 continue
+            # Lines wholly on each side at the same height: two columns read side by side, even
+            # when the gutter is narrow (Grand Blue 102 p33: a white outline runs into the bubble
+            # beside it).  One speech never has two of its lines next to each other.
+            side = _side_by_side([boxes[idx[k]] for k in left - right], [boxes[idx[k]] for k in right - left]) >= COLUMN_PAIRS
             ok = True
-            for k in both:
+            for k in ([] if side else both):
                 cols = np.flatnonzero(ink[k])
                 last = cols[cols < start].max()
                 first = cols[cols >= x].min()
