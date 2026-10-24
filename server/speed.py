@@ -93,7 +93,8 @@ def prepare_cleaning(original_translate):
         if regions and overlap_enabled() and getattr(ctx, "mask", None) is None:
             snapshot = SimpleNamespace(text_regions=list(regions), img_rgb=ctx.img_rgb,
                                        mask_raw=ctx.mask_raw, mask=None,
-                                       mangalate_drawn=getattr(ctx, "mangalate_drawn", None))
+                                       mangalate_drawn=getattr(ctx, "mangalate_drawn", None),
+                                       mangalate_preserved=getattr(ctx, "mangalate_preserved", None))
 
             async def clean():
                 started = time.monotonic()
@@ -158,6 +159,12 @@ GROUP = 15          # letters this close (px) belong to the same blob of text
 RING = 6            # width (px) of the border read around a blob
 EDGE = 2            # width (px) of the ring touching the letters; it must be flat on its own
 FLAT_SHARE = 0.8    # min share of the whole ring in the edge colour when the outline crosses the ring
+MARK_SIZE = 40      # max size (px) of a small drawing the text mask cut into, inside a plain bubble...
+MARK_CUT = 0.25     # ...with at least this share of its ink under the mask...
+MARK_CLEAR = 3      # ...and no other ink this close (px) outside the mask...
+MARK_SPECK = 8      # ...counting only pieces of ink of at least this many px
+DUST_SIZE = 6       # a speck of dust of the scan is at most this many px...
+DUST_SHARE = 0.04   # ...and the specks are at most this share of the band beside the letters (screentone has more)
 CROP_PADDING = 96   # context (px) given to the model around text over art
 MAX_CROP_SHARE = 0.6
 
@@ -189,7 +196,26 @@ def split_flat(image, mask, ignore=None):
         if len(pixels) < 4 * RING:
             continue
         colour = np.median(pixels, axis=0)
-        spread = np.percentile(np.abs(pixels.astype(np.int16) - colour).max(axis=1), 95)
+        distance = np.abs(pixels.astype(np.int16) - colour).max(axis=1)
+        spread = np.percentile(distance, 95)
+        marks = None
+        if spread > FLAT_SPREAD and (distance <= FLAT_SPREAD).mean() >= FLAT_SHARE:
+            # A small drawing the mask cut into (One Piece 1161 p8: an anger vein beside the
+            # last line) spoils the ring on its own: the model then painted a ghost of the letters
+            # over the bubble.  Without that drawing the ring is flat: the bubble is filled, and
+            # the rest of the drawing goes with the letters instead of being left cut in half.
+            wx0, wy0 = max(0, x - MARK_SIZE - 1), max(0, y - MARK_SIZE - 1)
+            wx1, wy1 = min(width, x + w + MARK_SIZE + 1), min(height, y + h + MARK_SIZE + 1)
+            found = cut_marks(image[wy0:wy1, wx0:wx1], text[wy0:wy1, wx0:wx1],
+                              (labels[wy0:wy1, wx0:wx1] == label) & text[wy0:wy1, wx0:wx1], colour,
+                              None if ignore is None else ignore[wy0:wy1, wx0:wx1])
+            if found.any():
+                found = cv2.dilate(found.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool)
+                rest = image[y0:y1, x0:x1][ring & ~found[y0 - wy0:y1 - wy0, x0 - wx0:x1 - wx0]]
+                if (len(rest) >= 4 * RING
+                        and np.percentile(np.abs(rest.astype(np.int16) - colour).max(axis=1), 95) <= FLAT_SPREAD):
+                    marks = (wx0, wy0, found)
+                    spread = 0
         if spread > FLAT_SPREAD:
             # A bubble outline near the text spoils the ring without touching the letters.
             # Still flat if the band next to the letters is flat and holds most of the ring.
@@ -199,12 +225,73 @@ def split_flat(image, mask, ignore=None):
                 continue
             colour = np.median(near, axis=0)
             if np.percentile(np.abs(near.astype(np.int16) - colour).max(axis=1), 95) > FLAT_SPREAD:
-                continue
+                # Specks of dust of the scan beside the letters (Grand Blue 106 p22) spoil the band on
+                # their own; screentone has many more.
+                dust = specks(image[y0:y1, x0:x1], text[y0:y1, x0:x1], colour) & edge & ring
+                if dust.sum() > DUST_SHARE * (edge & ring).sum():
+                    continue
+                near = image[y0:y1, x0:x1][edge & ring & ~dust]
+                if np.percentile(np.abs(near.astype(np.int16) - colour).max(axis=1), 95) > FLAT_SPREAD:
+                    continue
             if (np.abs(pixels.astype(np.int16) - colour).max(axis=1) <= FLAT_SPREAD).mean() < FLAT_SHARE:
                 continue
         page[y0:y1, x0:x1][letters] = colour.round().astype(image.dtype)
         left[y0:y1, x0:x1][letters] = 0
+        if marks is not None:
+            wx0, wy0, found = marks
+            fh, fw = found.shape
+            page[wy0:wy0 + fh, wx0:wx0 + fw][found] = colour.round().astype(image.dtype)
     return page, left
+
+
+def specks(image, text, colour):
+    """Pieces of ink of at most DUST_SIZE px outside ``text``: dust of the scan, or screentone dots."""
+    import cv2
+    off = (np.abs(image.astype(np.int16) - colour).max(axis=2) > FLAT_SPREAD) & ~text
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(off.astype(np.uint8), connectivity=8)
+    small = stats[:, cv2.CC_STAT_AREA] <= DUST_SIZE
+    small[0] = False
+    return small[labels]
+
+
+def cut_marks(image, text, letters, colour, ignore=None):
+    """Small drawings in a plain bubble that the mask of ``letters`` cut into: the part left out.
+
+    All arguments are crops of the same window around one blob of text.  A piece of ink up to
+    MARK_SIZE px that stays inside the window and lies at least MARK_CUT under the letters' mask
+    counts; the bubble outline, a tail or the art beyond the bubble are larger and reach the
+    edge of the window, and a drawing the mask only grazes (a sound effect beside the bubble,
+    Grand Blue 102 p34) stays.  The part left out is never larger than the letters being cleaned:
+    a speck of mask on a letter of the art does not take the letter.  The same rule takes the
+    rest of a letter the mask cut (the top of a word, the stroke of a "!").  A mark with other
+    ink within MARK_CLEAR px that is not taken too is a letter of a word kept as drawn (the small
+    print of a form, Grand Blue 102 p4): then nothing is taken.
+    """
+    import cv2
+    ink = np.abs(image.astype(np.int16) - colour).max(axis=2) > FLAT_SPREAD
+    if ignore is not None:
+        ink &= ~ignore
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(ink.astype(np.uint8), connectivity=8)
+    if count <= 1:
+        return np.zeros(ink.shape, bool)
+    height, width = ink.shape
+    x, y, w, h, area = stats.T
+    under = np.bincount(labels[letters], minlength=count)
+    left_out = np.bincount(labels[ink & ~text], minlength=count)
+    cut = ((np.maximum(w, h) <= MARK_SIZE) & (x > 0) & (y > 0) & (x + w < width) & (y + h < height)
+           & (under >= MARK_CUT * area) & (left_out <= letters.sum()))
+    cut[0] = False
+    marks = cut[labels] & ~text
+    if marks.any():
+        size = 2 * MARK_CLEAR + 1
+        near = cv2.dilate(marks.astype(np.uint8), np.ones((size, size), np.uint8)) > 0
+        # A letter is a piece of ink of a letter's size: not a speck of the scan's noise, not the
+        # bubble outline or the art beyond it.
+        letter = (area >= MARK_SPECK) & (np.maximum(w, h) <= MARK_SIZE) & ~cut
+        letter[0] = False
+        if (near & ~text & letter[labels]).any():
+            return np.zeros(ink.shape, bool)
+    return marks
 
 
 def flat_first(original_inpaint):

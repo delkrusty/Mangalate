@@ -174,6 +174,132 @@ def crossing_strokes(ys, xs, text, near, pad, line_height):
     return crossing
 
 
+# A logo or a title drawn as a graphic (One Piece 1161 p2: the series logo on a blank page)
+# also reads as lettering on paper crossed by strokes, its own outlines and ornaments.  Its
+# letters are several times as tall as any speech written over the drawing: those measured at
+# most 0.039 of the shorter side of the page (0.033 for 95% of them), the logo 0.14.  Such a
+# block stays as drawn unless its text reads as a line of English (engine_compat).
+LOGO_LINE = 0.12  # line height, in shares of the shorter side of the page, of lettering drawn as a logo
+
+
+def drawn_title(shape, quads):
+    """True when the lines of a block are as tall as a logo's, not a speech's."""
+    quads = [np.asarray(q, np.float32).reshape(4, 2) for q in quads]
+    if not quads:
+        return False
+    if stacked(quads):  # letters one per row: the letters are as tall as the column is wide
+        line = float(np.median([max(np.ptp(q[:, 0]), 1.0) for q in quads]))
+    else:
+        line = _quads_height(quads)
+    return line >= LOGO_LINE * min(shape[:2])
+
+
+KEEP_DUPLICATE = 0.5  # share of overlap that makes a kept line and a translated block two boxes of the same text
+KEEP_RING = 0.5       # around a kept line, in the shorter side of its box, the mask of a translated block leaves too...
+KEEP_RING_MAX = 8     # ...at most this many px (a tall column of a sound effect is not a line height)
+KEEP_REACH = 0.4      # and never within this many line heights of a translated line (overhanging letters)
+KEEP_REACH_MAX = 12   # px: the reach of a huge title line (108 px) is not 43 px of overhang
+KEEP_RIM = 3          # px around such a stroke that go with it (its anti-aliased rim)
+KEEP_INK = 128        # strokes darker than this (0-255 grey) are split between crossing kept and translated boxes
+
+
+def kept_lines(shape, preserved, kept, gray=None):
+    """Pixels the mask of a translated block must leave: the lines of blocks kept as drawn, with a ring.
+
+    ``preserved`` and ``kept`` are regions with ``lines`` (quadrilaterals).  The mask of a
+    translated title whose box ran onto the small print of a form under it erased words of
+    that print, kept as drawn (Grand Blue 102 p4); a ring of KEEP_RING line heights around the
+    print is left too (at most KEEP_RING_MAX px), or the cleaning model draws letters there from
+    the print beside it.  The ring stays KEEP_REACH line heights away from translated lines, whose
+    letters often overhang their boxes (a tall sound effect beside a bubble, Grand Blue 106 p38).  A kept
+    line and a translated block that mostly overlap, either way (a duplicate box of the same
+    speech, or a box read as a sound effect around a whole speech), are the same text: the
+    translated block is cleaned as usual.  The ring never reaches into translated lines.
+    """
+    h, w = shape[:2]
+    blocks = []
+    for region in kept or []:
+        lines = getattr(region, "lines", None)
+        own = np.zeros((h, w), np.uint8)
+        for line in lines if lines is not None else []:
+            cv2.fillPoly(own, [np.asarray(line, np.int32).reshape(-1, 1, 2)], 1)
+        if own.any():
+            blocks.append(own > 0)
+    translated = np.zeros((h, w), bool)
+    boxed = np.zeros((h, w), bool)  # the translated lines themselves, without the reach around them
+    boxed_size = np.zeros((h, w), np.float32)  # and the height of their letters
+    for region in kept or []:
+        lines = getattr(region, "lines", None)
+        for line in lines if lines is not None else []:
+            quad = np.asarray(line, np.float32).reshape(4, 2)
+            own = np.zeros((h, w), np.uint8)
+            cv2.fillPoly(own, [quad.astype(np.int32).reshape(-1, 1, 2)], 1)
+            boxed |= own > 0
+            boxed_size[own > 0] = _letter_size(quad)
+            reach = 2 * int(min(KEEP_REACH_MAX, round(KEEP_REACH * _quads_height([quad])))) + 1
+            translated |= cv2.dilate(own, np.ones((reach, reach), np.uint8)) > 0
+    keep = np.zeros((h, w), bool)
+    lines_kept = np.zeros((h, w), bool)
+    ring = np.zeros((h, w), bool)
+    ring_size = np.zeros((h, w), np.float32)
+    for region in preserved or []:
+        lines = getattr(region, "lines", None)
+        for line in lines if lines is not None else []:
+            quad = np.asarray(line, np.float32).reshape(4, 2)
+            own = np.zeros((h, w), np.uint8)
+            cv2.fillPoly(own, [quad.astype(np.int32).reshape(-1, 1, 2)], 1)
+            inside = own > 0
+            if not inside.any():
+                continue
+            if any((inside & block).sum() >= KEEP_DUPLICATE * min(inside.sum(), block.sum()) for block in blocks):
+                continue
+            keep |= inside
+            lines_kept |= inside
+            # The box often ends before the last letter: the ring follows the size of the letters.
+            short = min(_quads_height([quad]), float(np.ptp(quad[:, 0])))
+            size = 2 * int(min(KEEP_RING_MAX, round(KEEP_RING * short))) + 1
+            around = cv2.dilate(own, np.ones((size, size), np.uint8)) > 0
+            ring |= around
+            ring_size[around] = _letter_size(quad)
+    keep |= ring & ~translated
+    if gray is not None and (keep & boxed).any():
+        # Where the boxes cross, each stroke touching a translated line goes with the block whose
+        # letters are its size: the foot of "SMILE" (15 px) with its line, not with the column of
+        # a sound effect beside it, so no English is left; the "y" of small print (18 px) with the
+        # print, not with the 108 px title box over it.
+        dark = (np.asarray(gray) < KEEP_INK).astype(np.uint8)
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(dark, connectivity=8)
+        touched = np.unique(labels[boxed & (dark > 0)])
+        for k in touched[touched > 0]:
+            x, y, cw, ch = stats[k, :4]
+            part = labels[y:y + ch, x:x + cw] == k
+            if not keep[y:y + ch, x:x + cw][part].any() and not ring[y:y + ch, x:x + cw][part].any():
+                continue
+            mine, theirs = boxed_size[y:y + ch, x:x + cw][part], ring_size[y:y + ch, x:x + cw][part]
+            height = float(max(ch, 1))
+            closer = not (theirs > 0).any() or (
+                abs(np.log(height / np.median(mine[mine > 0]))) <= abs(np.log(height / np.median(theirs[theirs > 0]))))
+            # The stroke with its anti-aliased rim: a lighter rim left out of the mask is a ghost.
+            x0, y0, x1, y1 = max(0, x - KEEP_RIM), max(0, y - KEEP_RIM), min(w, x + cw + KEEP_RIM), min(h, y + ch + KEEP_RIM)
+            whole = labels[y0:y1, x0:x1] == k
+            grown = cv2.dilate(whole.astype(np.uint8), np.ones((2 * KEEP_RIM + 1, 2 * KEEP_RIM + 1), np.uint8)) > 0
+            if closer:
+                keep[y0:y1, x0:x1][grown] = False
+                continue
+            # A stroke of the kept text past its box gets the ring too, or the model draws from it.
+            size = int(min(KEEP_RING_MAX, round(KEEP_RING * float(np.median(theirs[theirs > 0])))))
+            x0, y0, x1, y1 = max(0, x - size), max(0, y - size), min(w, x + cw + size), min(h, y + ch + size)
+            whole = labels[y0:y1, x0:x1] == k
+            around = cv2.dilate(whole.astype(np.uint8), np.ones((2 * size + 1, 2 * size + 1), np.uint8)) > 0
+            keep[y0:y1, x0:x1] |= around & ~(boxed[y0:y1, x0:x1] & ~whole & (labels[y0:y1, x0:x1] > 0))
+    return keep
+
+
+def _letter_size(quad):
+    """Height of the letters a line box holds: the shorter side (a column of stacked letters is as wide as one)."""
+    return max(1.0, min(_quads_height([quad]), float(np.linalg.norm(quad[1] - quad[0]))))
+
+
 def _quads_height(quads):
     """Median line height measured along the sides of the quads: a tilted box is taller than its letters."""
     return float(np.median([max(1.0, (np.linalg.norm(q[3] - q[0]) + np.linalg.norm(q[2] - q[1])) / 2) for q in quads]))
@@ -938,6 +1064,7 @@ SPLIT_CHECK = 1.3     # boxes from this height up are checked for a second line 
 SPLIT_REACH = 0.6     # rows read past the box edge, in line heights
 SPLIT_INSIDE = 0.25   # a row run must reach this far into the box to be one of its lines
 MIN_PART = 0.45       # a split part shorter than this share of a line is noise
+STACK_WIDE = 2.0      # in a box as tall as wide, rows this many times wider than tall are lines, not stacked letters
 ORPHAN_COVERED = 0.2  # mask pixels already under a box above this share are not orphans
 NEAR_LINES = 1.6      # an orphan line must sit this many line heights from a known one
 ORPHAN_MIN = 0.5      # an orphan line is at least this many line heights tall
@@ -1028,10 +1155,10 @@ def repair_lines(mask, boxes, gray=None):
     for index, (x0, y0, x1, y1) in enumerate(boxes):
         x0, x1, y0, y1 = max(0, x0), min(w, x1), max(0, y0), min(h, y1)
         others = [b for j, b in enumerate(boxes) if j != index]
-        # Vertical lettering (Japanese SFX, stacked letters) is never split into rows.
-        if y1 - y0 < SPLIT_CHECK * height or x1 - x0 <= y1 - y0:
+        if y1 - y0 < SPLIT_CHECK * height:
             result.append(((x0, y0, x1, y1), index))
             continue
+        tall = x1 - x0 <= y1 - y0
         parts = []
         # A line the box cuts in half still counts (Grand Blue p25: one box over
         # "DON'T" and the top of "TELL ME"), so the rows are read a little past the box.
@@ -1044,6 +1171,15 @@ def repair_lines(mask, boxes, gray=None):
             part = (x0 + int(cols[0]), wy0 + r0, x0 + int(cols[-1]) + 1, wy0 + r1)
             if _covered(part, others) < 0.5:
                 parts.append(part)
+        rows = float(np.median([p[3] - p[1] for p in parts])) if parts else 0.0
+        if tall and (len(parts) < 2 or max(p[2] - p[0] for p in parts) < STACK_WIDE * rows
+                     or rows > SPLIT_FACTOR * height):
+            # Vertical lettering (Japanese SFX, letters stacked one per row, a giant "DOOM") is never
+            # split into rows.  A short block of wide lines of the page's size in a box as tall as it
+            # is wide is (One Piece 1153 p6 "YES, / MAJESTY / !!", Grand Blue 106 p22 "CON- / DOMS /
+            # ?!": the OCR dropped it).
+            result.append(((x0, y0, x1, y1), index))
+            continue
         if len(parts) < 2 and y1 - y0 < SPLIT_FACTOR * height:
             result.append(((x0, y0, x1, y1), index))
             continue
@@ -1058,6 +1194,10 @@ def repair_lines(mask, boxes, gray=None):
                     max(0, ox0 - side - x0):max(0, ox1 + side - x0)] = False
             parts = stair_lines(own, x0, y0, height)
         if len(parts) >= 2:
+            # A row of one letter ("I" over "KNEW IT.", Grand Blue 106 p40) is taller than wide and
+            # was read as vertical text, then lost: it stays a horizontal line, a little wider.
+            parts = [(max(x0, a - (d - b - (c - a)) // 2 - 1), b, min(x1, c + (d - b - (c - a)) // 2 + 1), d)
+                     if c - a < d - b <= SPLIT_FACTOR * height else (a, b, c, d) for a, b, c, d in parts]
             result.extend((part, index) for part in parts)
             changes.append(("split", (x0, y0, x1, y1), parts))
         else:

@@ -201,6 +201,27 @@ class BackgroundTest(unittest.TestCase):
         far = ~cv2.dilate(lines.astype(np.uint8), np.ones((21, 21), np.uint8)).astype(bool)
         self.assertFalse(allowed[far].any())                      # the page around stays
 
+    def logo(self):
+        """Lettering five times taller than a speech, crossed by the lines of its ornaments."""
+        image, letters = page(size=(800, 600)), page(size=(800, 600))
+        for canvas in (image, letters):
+            cv2.putText(canvas, "LOGO", (150, 420), cv2.FONT_HERSHEY_SIMPLEX, 5.0, (0, 0, 0), 28, cv2.LINE_AA)
+        for x in (170, 260, 350, 440, 530):
+            cv2.line(image, (x + 20, 150), (x - 20, 600), (0, 0, 0), 3, cv2.LINE_AA)
+        return image, text_mask(letters, (255, 255, 255)), [quad(140, 271, 560, 434)]
+
+    def test_logo_crossed_by_its_ornaments_is_a_drawn_title(self):
+        # One Piece 1161 p2: the series logo on a blank page read as lettering crossed by
+        # strokes; it was cleaned and written over as "One Piece".
+        image, mask, quads = self.logo()
+        self.assertEqual(classify_region(image, mask, quads)["kind"], "tracos")
+        self.assertTrue(quality.drawn_title(image.shape, quads))
+        # Speech over the drawing, and letters stacked one per row in a tall bubble, are not.
+        speech = self.strands(page(size=(420, 260)))
+        _, lines = self.paragraph(speech)
+        self.assertFalse(quality.drawn_title(speech.shape, lines))
+        self.assertFalse(quality.drawn_title((1145, 784), [quad(112, 370, 149, 572)]))  # Grand Blue 102 p20 "GUYS!"
+
     def test_tight_bubble_and_one_crossing_line_stay_interior(self):
         # The outline runs along the margin, and a panel border (Grand Blue 102 p3) or a
         # tail crosses it only on two sides: still a bubble.
@@ -449,6 +470,79 @@ class PipelineHookTest(unittest.TestCase):
         self.assertEqual([r.name for r in kept], ["tracos"])
         self.assertEqual(region.mangalate_background["kind"], "tracos")
 
+    def test_lines_kept_as_drawn_are_never_cleaned(self):
+        # Grand Blue 102 p4: the box of a translated title ran onto the small print of a form
+        # kept as drawn, and its mask erased words of that print.
+        from types import SimpleNamespace
+        title = SimpleNamespace(lines=np.array([[[100, 20], [300, 20], [300, 66], [100, 66]]]))
+        form = SimpleNamespace(lines=np.array([[[40, 60], [360, 60], [360, 74], [40, 74]],
+                                               [[40, 78], [360, 78], [360, 92], [40, 92]]]))
+        keep = quality.kept_lines((200, 400), [form], [title])
+        self.assertTrue(keep[82, 50] and keep[66, 350])            # the small print stays...
+        self.assertTrue(keep[63, 200])                             # ...also where the title box ran onto it
+        self.assertFalse(keep[35, 200])                            # the title is cleaned
+        self.assertTrue(keep[56, 350])                             # with a ring around the print...
+        self.assertFalse(keep[56, 200])                            # ...that never reaches into the title
+        # A kept box lying inside the translated lines is a duplicate of that speech, and a kept box
+        # around the whole speech (read as a sound effect) is the same text: both cleaned with it.
+        duplicate = SimpleNamespace(lines=np.array([[[120, 30], [280, 30], [280, 50], [120, 50]]]))
+        self.assertFalse(quality.kept_lines((200, 400), [duplicate], [title]).any())
+        around = SimpleNamespace(lines=np.array([[[90, 10], [310, 10], [310, 76], [90, 76]]]))
+        self.assertFalse(quality.kept_lines((200, 400), [around], [title]).any())
+        self.assertFalse(quality.kept_lines((200, 400), [], [title]).any())
+
+    def test_tall_kept_column_does_not_unmask_the_speech_beside_it(self):
+        # Grand Blue 106 p38: a tall vertical sound effect kept as drawn next to a bubble.  A ring
+        # as wide as its "line height" (the whole column) took the overhanging tips, comma and
+        # "!" of the speech out of the mask, and they stayed in English.
+        from types import SimpleNamespace
+        column = SimpleNamespace(lines=np.array([[[300, 20], [340, 20], [340, 420], [300, 420]]]))
+        speech = SimpleNamespace(lines=np.array([[[120, 200], [280, 200], [280, 222], [120, 222]]]))
+        keep = quality.kept_lines((450, 400), [column], [speech])
+        self.assertTrue(keep[200, 320])                            # the column stays
+        self.assertFalse(keep[226, 200])                           # a tail just under the speech box is still cleaned
+        self.assertFalse(keep[210, 285])                           # and a "!" just past its end
+        self.assertLessEqual(int(keep[200, 340:].sum()), quality.KEEP_RING_MAX + 1)  # the ring is a few px
+
+    def test_stroke_crossing_both_boxes_goes_with_the_block_holding_most_of_it(self):
+        # Grand Blue 102 p6: the box of a vertical sound effect kept as drawn ran over the bottom
+        # of "SMILE" (translated): those letters stayed half masked.  Grand Blue 102 p4: the "y"
+        # of the small print ran into the title's box and lost its tip.
+        from types import SimpleNamespace
+        gray = np.full((200, 300), 255, np.uint8)
+        gray[60:80, 100:110] = 0                                   # a letter of the speech, its foot in the column box
+        gray[110:150, 200:204] = 0                                 # a stroke of the kept print, its tip in the speech box
+        speech = SimpleNamespace(lines=np.array([[[90, 58], [210, 58], [210, 76], [90, 76]]]))
+        column = SimpleNamespace(lines=np.array([[[95, 74], [130, 74], [130, 190], [95, 190]]]))
+        print_ = SimpleNamespace(lines=np.array([[[150, 116], [260, 116], [260, 150], [150, 150]]]))
+        keep = quality.kept_lines(gray.shape, [column, print_], [speech], gray)
+        self.assertFalse(keep[60:80, 100:110].any())               # the letter of the speech is cleaned whole
+        self.assertTrue(keep[110:150, 200:204].all())              # the stroke of the print is kept whole
+        self.assertTrue(keep[150, 112])                            # the rest of the column stays
+
+    def test_drawn_title_stays_as_drawn(self):
+        import asyncio
+        from types import SimpleNamespace
+        from engine_compat import classify_regions
+        image, mask, quads = BackgroundTest.logo(None)
+        region = SimpleNamespace(name="logo", lines=np.array(quads), text="LOGO")
+        async def merge(self, config, ctx):
+            return [region]
+        ctx = SimpleNamespace(img_rgb=image, mask_raw=mask)
+        config = SimpleNamespace(ocr=SimpleNamespace(ignore_bubble=8))
+        kept = asyncio.run(classify_regions(merge)(None, config, ctx))
+        self.assertEqual(kept, [])
+        self.assertEqual(region.mangalate_background["kind"], "logo")
+        self.assertEqual(ctx.mangalate_preserved, [region])
+        # The same lettering read as a line of English is a big shout over speed lines: translated.
+        shout = SimpleNamespace(name="grito", lines=np.array(quads), text="GET OUT!!")
+        async def merge_shout(self, config, ctx):
+            return [shout]
+        ctx = SimpleNamespace(img_rgb=image, mask_raw=mask)
+        kept = asyncio.run(classify_regions(merge_shout)(None, config, ctx))
+        self.assertEqual([r.name for r in kept], ["grito"])
+        self.assertEqual(shout.mangalate_background["kind"], "tracos")
+
 
 class DetectionFallbackTest(unittest.TestCase):
     class Detector(str):
@@ -537,6 +631,26 @@ class LineRepairTest(unittest.TestCase):
         lines = [(20, 20, 160, 40), (20, 250, 160, 270)]
         repaired, changes = repair_lines(mask, lines + [(85, 15, 125, 215)])
         self.assertEqual([c for c in changes if c[0] == "split"], [])
+
+    def test_square_box_of_wide_lines_is_split(self):
+        # One Piece 1153 p6 "YES, / MAJESTY / !!", Grand Blue 106 p22 "CON- / DOMS / ?!": one box as
+        # tall as wide held three short lines; it was taken for vertical lettering, not split, and
+        # the OCR dropped it.  Lines of one letter ("I" over "KNEW IT.") stay horizontal.
+        mask = np.zeros((320, 300), np.uint8)
+        lines = [(20, 20, 280, 40), (20, 280, 280, 300)]          # the page's usual lines
+        rows = []
+        for i, text in enumerate(["I", "KNEW", "IT."]):
+            (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
+            x, y = 150 - w // 2, 120 + i * 34
+            cv2.putText(mask, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.9, 255, 2)
+            rows.append((x, y - h, x + w, y))
+        box = (min(r[0] for r in rows) - 4, rows[0][1] - 4, max(r[2] for r in rows) + 4, rows[-1][3] + 4)
+        self.assertLessEqual(box[2] - box[0], box[3] - box[1])    # as tall as wide
+        repaired, changes = repair_lines(mask, lines + [box])
+        self.assertEqual([kind for kind, _, _ in changes if kind == "split"], ["split"])
+        parts = sorted((b for b, source in repaired if source == 2), key=lambda b: b[1])
+        self.assertEqual(len(parts), 3)
+        self.assertTrue(all(b[2] - b[0] >= b[3] - b[1] for b in parts), parts)  # all horizontal
 
     def test_far_away_blob_is_not_a_line(self):
         mask, boxes = self.bubble_mask()
@@ -736,6 +850,78 @@ class LineRepairTest(unittest.TestCase):
         self.assertEqual(len(result[0]), 4)
         self.assertEqual(len(ctx.mangalate_line_repairs), 1)
         self.assertIs(result[1], mask)
+
+    def run_hook(self, mask, lines):
+        import asyncio
+        import types
+        from types import SimpleNamespace
+        from engine_compat import repair_textlines
+        fake = types.ModuleType("manga_translator.utils")
+        fake.Quadrilateral = self.Quad
+        package = types.ModuleType("manga_translator")
+        package.utils = fake
+        async def detect(self, config, ctx):
+            return lines, mask, mask
+        ctx = SimpleNamespace(img_rgb=np.zeros(mask.shape + (3,), np.uint8))
+        saved = {k: sys.modules.get(k) for k in ("manga_translator", "manga_translator.utils")}
+        sys.modules.update({"manga_translator": package, "manga_translator.utils": fake})
+        try:
+            return asyncio.run(repair_textlines(detect)(None, None, ctx))[0]
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    sys.modules.pop(key, None)
+                else:
+                    sys.modules[key] = value
+
+    class Quad:
+        def __init__(self, pts, text, prob, direction="h"):
+            self.pts, self.text, self.prob, self.direction = np.asarray(pts), text, prob, direction
+
+    def test_square_vertical_box_of_short_lines_is_split(self):
+        # Grand Blue 106 p22: "CON- / DOMS / ?!" in a narrow bubble came as one box a little
+        # taller than wide, called vertical; it never reached the line repair and was misread.
+        mask = np.zeros((320, 300), np.uint8)
+        lines = [self.Quad(quad(20, 20, 280, 40), "", 0.9), self.Quad(quad(20, 280, 280, 300), "", 0.9)]
+        rows = []
+        for i, text in enumerate(["CON-", "DOMS", "?!"]):
+            (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
+            x, y = 150 - w // 2, 120 + i * 34
+            cv2.putText(mask, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.9, 255, 2)
+            rows.append((x, y - h, x + w, y))
+        x0, x1 = min(r[0] for r in rows) - 2, max(r[2] for r in rows) + 2
+        box = self.Quad(quad(x0, rows[0][1] - 4, x1, rows[-1][3] + 4), "", 0.9, "v")
+        result = self.run_hook(mask, lines + [box])
+        self.assertNotIn(box, result)
+        self.assertEqual(len(result), 5)
+        # A column of single letters (a vertical sound effect) comes back as it was.
+        column = np.zeros((320, 300), np.uint8)
+        for i, letter in enumerate("BOOM"):
+            cv2.putText(column, letter, (140, 90 + i * 40), cv2.FONT_HERSHEY_SIMPLEX, 1.2, 255, 3)
+        sound = self.Quad(quad(130, 55, 185, 255), "", 0.9, "v")
+        result = self.run_hook(column, lines + [sound])
+        self.assertIn(sound, result)
+
+    def test_square_vertical_box_never_takes_the_lines_of_its_neighbour(self):
+        # One Piece 1161 p4: a "vertical" box over "...TO / FIND" beside a box over "FIND / US A /
+        # BOAT!".  Checked together, it hid "FIND" from its neighbour's split and the speech came
+        # out as "US A BOAT!".  When it does not split, the lines around it are the same as without it.
+        mask = np.zeros((360, 300), np.uint8)
+        lines = [self.Quad(quad(20, 20, 280, 40), "", 0.9), self.Quad(quad(20, 320, 280, 340), "", 0.9)]
+        rows = []
+        for i, text in enumerate(["...TO", "FIND", "US A", "BOAT!"]):
+            (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
+            x, y = 150 - w // 2, 120 + i * 30
+            cv2.putText(mask, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, 255, 2)
+            rows.append((x, y - h, x + w, y))
+        x0, x1 = min(r[0] for r in rows) - 6, max(r[2] for r in rows) + 6
+        below = self.Quad(quad(x0, rows[1][1] + 5, x1, rows[3][3] + 4), "", 0.9)
+        above = self.Quad(quad(x0 + 4, rows[0][1] - 6, x1 - 4, rows[1][3] + 6), "", 0.9, "v")
+        def boxes(result):
+            return sorted(tuple(int(v) for v in np.asarray(q.pts).min(axis=0)) + tuple(int(v) for v in np.asarray(q.pts).max(axis=0))
+                          for q in result if q is not above)
+        without = boxes(self.run_hook(mask, lines + [below]))
+        self.assertEqual(boxes(self.run_hook(mask, lines + [below, above])), without)
 
 
 class OcrRescueTest(unittest.TestCase):

@@ -674,7 +674,13 @@ def classify_regions(original_merge):
             # Lettering on a white part of the drawing, crossed by its strokes: translated, and
             # only the letters are cleaned (quality.letters_area).
             if region.mangalate_background["kind"] == "tracos":
-                from quality import letters_area
+                from quality import drawn_title, letters_area, reads_as_speech
+                if drawn_title(image.shape, region.lines) and not reads_as_speech(text, len(region.lines) > 1):
+                    # A logo or a title drawn as a graphic: its outlines read as strokes.  A big
+                    # shout over speed lines reads as a line of English and is still translated.
+                    region.mangalate_background["kind"] = "logo"
+                    ctx.mangalate_preserved.append(region)
+                    continue
                 if not letters_area(image, raw, region.lines).any():
                     region.mangalate_background["kind"] = "art"
                     ctx.mangalate_preserved.append(region)
@@ -711,6 +717,9 @@ def detection_fallback(original_detect):
     return detect
 
 
+SQUARE_VERTICAL = 1.3  # a "vertical" detector box at most this many times taller than wide is also checked for lines
+
+
 def repair_textlines(original_detect):
     """Give every lettered line of the detector mask its own box before OCR.
 
@@ -724,7 +733,7 @@ def repair_textlines(original_detect):
         textlines, mask_raw, mask = list(result[0] or []), result[1], result[2]
         import cv2
         import numpy as np
-        from quality import repair_lines, _box
+        from quality import repair_lines, _box, _covered
         from manga_translator.utils import Quadrilateral
         image = getattr(ctx, "img_rgb", None)
         if image is not None and np.asarray(mask_raw).shape[:2] != np.asarray(image).shape[:2]:
@@ -740,6 +749,32 @@ def repair_textlines(original_detect):
                 seen = seen | bubble_glyphs(np.asarray(image), box, box[3] - box[1], near=NEAR_LINES)
         gray = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2GRAY) if image is not None else None
         repaired, changes = repair_lines(seen.astype(np.uint8) * 255, boxes, gray)
+        # A box the detector called vertical but about as tall as wide may hold short lines of a
+        # narrow bubble ("CON- / DOMS / ?!", Grand Blue 106 p22).  It is tried on its own: when it
+        # splits into lines, they replace it; otherwise it stays as it was and changes nothing around
+        # it (One Piece 1161 p4: checked with its neighbour, it took the neighbour's lines).
+        unfolded = set()
+        for i, line in enumerate(textlines):
+            pts = np.asarray(line.pts)
+            if getattr(line, "direction", "h") == "h" or np.ptp(pts[:, 1]) > SQUARE_VERTICAL * np.ptp(pts[:, 0]):
+                continue
+            box = _box(line.pts)
+            try:
+                trial, trial_changes = repair_lines(seen.astype(np.uint8) * 255, boxes + [box], gray)
+            except Exception as exc:  # the vertical box stays as it was
+                print(f"Square box check skipped: {type(exc).__name__}", flush=True)
+                continue
+            parts = [part for part, source in trial if source == len(boxes)]
+            if len(parts) >= 2 and any(kind == "split" and before == box for kind, before, _ in trial_changes):
+                # Its lines replace it.  A line another detector box already holds is not read twice;
+                # a line found only in the mask (often cut short: a lone "?!") gives way to its line.
+                boxed = [part for part, source in repaired if source is not None]
+                parts = [part for part in parts if _covered(part, boxed) < 0.5]
+                repaired = [(b, source) for b, source in repaired
+                            if source is not None or not any(_covered(b, [part]) >= 0.5 for part in parts)]
+                unfolded.add(i)
+                repaired.extend((part, None) for part in parts)
+                changes.append(("split", box, parts))
         ctx.mangalate_line_repairs = [{"tipo": kind, "antes": before, "depois": after} for kind, before, after in changes]
         # One box across two columns of text in the same bubble is cut at the gutter.
         if image is not None:
@@ -791,7 +826,7 @@ def repair_textlines(original_detect):
             print(f"Bubble scan: {len(scanned)} bubble(s) at {ctx.mangalate_scanned}", flush=True)
         if not changes:
             return result
-        lines = [line for i, line in enumerate(textlines) if i not in set(horizontal)]
+        lines = [line for i, line in enumerate(textlines) if i not in set(horizontal) and i not in unfolded]
         for box, source in repaired:
             original = textlines[horizontal[source]] if source is not None else None
             if original is not None and box == boxes[source]:
@@ -1072,6 +1107,18 @@ async def refine_mask_consistently(self, config, ctx):
                 mask[keep] = 0
         except Exception as exc:  # never lose a page over this
             print(f"Drawn marks skipped: {type(exc).__name__}", flush=True)
+    # The lines of a block kept as drawn (art, a logo, a sound effect, the small print of a form)
+    # are never cleaned by the mask of a translated block whose box runs onto them.
+    preserved = getattr(ctx, "mangalate_preserved", None)
+    if preserved:
+        try:
+            from quality import kept_lines
+            keep = kept_lines(mask.shape, preserved, ctx.text_regions, cv2.cvtColor(np.asarray(ctx.img_rgb), cv2.COLOR_RGB2GRAY))
+            if keep.any():
+                mask = mask.copy()
+                mask[keep] = 0
+        except Exception as exc:  # never lose a page over this
+            print(f"Kept lines skipped: {type(exc).__name__}", flush=True)
     # Outlined lettering over the art, or lettering crossed by strokes of the drawing: the
     # cleaning stays on the letters (and their outline).
     from quality import letters_area, outlined_area
