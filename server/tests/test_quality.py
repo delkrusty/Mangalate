@@ -924,6 +924,131 @@ class LineRepairTest(unittest.TestCase):
         self.assertEqual(boxes(self.run_hook(mask, lines + [below, above])), without)
 
 
+class LostLineTest(unittest.TestCase):
+    """Lines of a speech that fell out of its region (triagem op1161, group 2)."""
+
+    def test_dropped_box_over_the_line_above_is_trimmed_and_read_again(self):
+        # One Piece 1161 p8: the box of "HIM?!" also covered the bottom of "TO FIGHT" and a vein.
+        kept = [(77, 576, 135, 596), (66, 598, 147, 617), (67, 615, 145, 643)]
+        lost = (47, 632, 135, 669)
+        self.assertEqual(quality.near_lines([lost], kept), [])                    # too tall as it was
+        trimmed = quality.trim_lost(lost, kept)
+        self.assertEqual(trimmed, (47, 643, 135, 669))
+        self.assertEqual(quality.near_lines([trimmed], kept), [0])
+        # A line beside the paragraph, not under it, keeps its box.
+        self.assertEqual(quality.trim_lost((300, 600, 380, 640), kept), (300, 600, 380, 640))
+
+    def test_two_boxes_of_the_same_line_become_one(self):
+        # One Piece 1161 p4: a small box inside a large one both fit "PIRATES": read twice.
+        mask = np.zeros((300, 400), np.uint8)
+        cv2.putText(mask, "PIRATES", (120, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.9, 255, 2)
+        (w, h), _ = cv2.getTextSize("PIRATES", cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
+        lines = [(20, 20, 380, 44), (20, 240, 380, 264)]
+        full, inner = (118, 120 - h - 3, 122 + w, 124), (180, 120 - h, 230, 122)
+        repaired, _ = repair_lines(mask, lines + [full, inner])
+        boxes = [b for b, _ in repaired if b[1] > 60 and b[3] < 200]
+        self.assertEqual(len(boxes), 1, repaired)
+        # Two different lines close together stay two.
+        cv2.putText(mask, "AHOY", (150, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.9, 255, 2)
+        (w2, h2), _ = cv2.getTextSize("AHOY", cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
+        repaired, _ = repair_lines(mask, lines + [full, (148, 160 - h2 - 3, 152 + w2, 164)])
+        self.assertEqual(len([b for b, _ in repaired if b[1] > 60 and b[3] < 200]), 2)
+
+    def test_two_boxes_of_the_same_line_keep_the_whole_line(self):
+        # Grand Blue 102 p4: the box kept was the shorter one, and the title came out as "Mayuts".
+        mask = np.zeros((300, 400), np.uint8)
+        cv2.putText(mask, "CHURCH", (100, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.9, 255, 2)
+        (w, h), _ = cv2.getTextSize("CHURCH", cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
+        lines = [(20, 20, 380, 44), (20, 240, 380, 264)]
+        short, full = (100, 120 - h - 2, 100 + w - 12, 123), (98, 120 - h - 3, 102 + w, 124)
+        for order in ([short, full], [full, short]):
+            repaired, changes = repair_lines(mask, lines + order)
+            # Every change lists its boxes after the repair (the diagnostics draw each one).
+            self.assertTrue(all(len(b) == 4 for _, _, after in changes for b in after), changes)
+            boxes = [b for b, _ in repaired if 60 < b[1] < 200]
+            self.assertEqual(len(boxes), 1, repaired)
+            self.assertGreaterEqual(boxes[0][2], 100 + w - 2, boxes)      # the end of the word is in
+
+    def test_punctuation_beside_the_word_on_its_row_is_its_end(self):
+        # "WHAT" and "?!" in two boxes on one row: the engine used to join them.
+        self.assertEqual(quality.punctuation_owners([(100, 50, 160, 70), (164, 50, 180, 70)], ["WHAT", "?!"]), {1: 0})
+        # Far along the row it is not.
+        self.assertEqual(quality.punctuation_owners([(100, 50, 160, 70), (260, 50, 276, 70)], ["WHAT", "?!"]), {})
+        # Right before a word on its row, it is not that word's end.
+        self.assertEqual(quality.punctuation_owners([(100, 50, 160, 70), (82, 50, 96, 70)], ["WHAT", "!!"]), {})
+
+    def test_one_glyph_marks_are_plain_punctuation_before_translation(self):
+        from types import SimpleNamespace
+        from engine_compat import fix_ocr
+        regions = [SimpleNamespace(text="DAD ⁈"), SimpleNamespace(text="WAIT‼ WHAT⁉ HUH⁇")]
+        fix_ocr(regions)
+        self.assertEqual([r.text for r in regions], ["DAD ?!", "WAIT!! WHAT!? HUH??"])
+
+    def test_punctuation_line_ends_the_speech_above_it(self):
+        # One Piece 1161 p5: "URGH" over a taller "...!!": dropped as text with no letters.
+        boxes = [(322, 464, 385, 492), (323, 484, 384, 527), (500, 100, 600, 130)]
+        texts = ["URGH", "...!", "HELLO"]
+        self.assertEqual(quality.punctuation_owners(boxes, texts), {1: 0})
+        # Punctuation far from any speech, or a line with letters, joins nothing.
+        self.assertEqual(quality.punctuation_owners([(10, 10, 60, 40), (300, 600, 350, 640)], ["HEY", "!!"]), {})
+        self.assertEqual(quality.punctuation_owners(boxes[:1] + [(323, 494, 384, 520)], ["URGH", "OH!"]), {})
+        # "WHAT" over a lone "⁈" (One Piece 1161 p7) is punctuation too.
+        self.assertEqual(quality.punctuation_owners([(612, 31, 662, 50), (628, 55, 646, 73)], ["WHAT", "⁈"]), {1: 0})
+
+
+    def test_punctuation_joins_only_a_kept_speech_after_the_art_decision(self):
+        from functools import cached_property
+        from types import SimpleNamespace
+        from engine_compat import end_punctuation, set_aside_punctuation
+
+        class Block:
+            def __init__(self, box, text):
+                x0, y0, x1, y1 = box
+                self.lines = np.array([[[x0, y0], [x1, y0], [x1, y1], [x0, y1]]], np.int32)
+                self.text, self.texts = text, [text]
+
+            @cached_property
+            def xyxy(self):
+                return np.array([self.lines[..., 0].min(), self.lines[..., 1].min(),
+                                 self.lines[..., 0].max(), self.lines[..., 1].max()])
+
+        def line(box, text):
+            x0, y0, x1, y1 = box
+            return SimpleNamespace(pts=np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]), text=text, direction="h")
+        word, dots = line((322, 464, 385, 492), "URGH"), line((323, 484, 384, 527), "...!")
+        ctx = SimpleNamespace(textlines=[word, dots])
+        set_aside_punctuation(ctx)
+        self.assertEqual(ctx.textlines, [word])                    # the engine never sees the dots
+        speech = Block((322, 464, 385, 492), "URGH")
+        speech.xyxy
+        end_punctuation(ctx, [speech])
+        self.assertEqual(speech.text, "URGH ...!")
+        self.assertEqual(len(speech.lines), 2)                     # one box per line
+        self.assertEqual(int(speech.xyxy[3]), 527)                 # the cached box was refreshed
+        # With no kept speech near it (the word went to the art), nothing is joined.
+        ctx = SimpleNamespace(textlines=[word, dots])
+        set_aside_punctuation(ctx)
+        far = Block((600, 100, 700, 130), "HELLO")
+        end_punctuation(ctx, [far])
+        self.assertEqual(far.text, "HELLO")
+        # Its owner went to the art (a sound effect): the line is not given to the next speech.
+        ctx = SimpleNamespace(textlines=[word, dots])
+        set_aside_punctuation(ctx)
+        sound, other = Block((322, 464, 385, 492), "URGH"), Block((320, 532, 390, 552), "HEY THERE")
+        ctx.mangalate_preserved = [sound]
+        end_punctuation(ctx, [other])
+        self.assertEqual(other.text, "HEY THERE")
+        # A "!!!" well below the last line of a long speech (One Piece 1161 p16, the end of a sound
+        # effect) is measured from that line, not from the whole block: nothing is joined.
+        long = Block((80, 740, 230, 760), "NOW TAKE")
+        long.lines = np.concatenate([long.lines] + [long.lines + [0, 24 * k] for k in range(1, 4)])
+        long.__dict__.pop("xyxy", None)
+        ctx = SimpleNamespace(textlines=[line((83, 912, 135, 949), "!!!")])
+        set_aside_punctuation(ctx)
+        end_punctuation(ctx, [long])
+        self.assertEqual(long.text, "NOW TAKE")
+
+
 class OcrRescueTest(unittest.TestCase):
     """A line dropped by the OCR threshold inside a paragraph is read again (TBATE 236 p6)."""
 

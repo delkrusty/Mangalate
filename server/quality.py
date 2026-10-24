@@ -1122,6 +1122,82 @@ def _near(box, others, height):
                and max(b[1] - box[3], box[1] - b[3]) <= NEAR_LINES * height for b in others)
 
 
+SAME_BOX = 0.8  # two line boxes overlapping this much (intersection over union) hold the same line
+
+
+def _same_box(a, b):
+    ix = min(a[2], b[2]) - max(a[0], b[0])
+    iy = min(a[3], b[3]) - max(a[1], b[1])
+    if ix <= 0 or iy <= 0:
+        return False
+    inter = ix * iy
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter >= SAME_BOX * union
+
+
+TRIM_EDGE = 0.5  # a dropped box is trimmed only over at most this share of the kept line it runs onto
+
+
+def trim_lost(box, kept):
+    """A dropped line box without the rows a kept line box above or below already holds.
+
+    One Piece 1161 p8: the box of "HIM?!" also covered the bottom of "TO FIGHT" above it and a
+    drawn vein beside it; too tall for a line, it was never read again and stayed out of the
+    speech.  Only rows at the top or bottom edge are cut, never the middle.
+    """
+    x0, y0, x1, y1 = box
+    for kx0, ky0, kx1, ky1 in kept:
+        if min(x1, kx1) - max(x0, kx0) <= OVERLAP_SIDE * min(x1 - x0, kx1 - kx0):
+            continue
+        # Only a box that runs onto the edge of the kept line (its last rows), not half of it:
+        # two lines of a logo or a shout overlapping by half are one block, not a lost line.
+        if ky0 <= y0 < ky1 < y1 and ky1 - y0 <= TRIM_EDGE * (ky1 - ky0):
+            y0 = ky1
+        elif y0 < ky0 < y1 <= ky1 and y1 - ky0 <= TRIM_EDGE * (ky1 - ky0):
+            y1 = ky0
+    return x0, y0, x1, y1
+
+
+PUNCT_REACH = 1.0  # a line of only punctuation joins a speech line this many line heights above it (or beside it)
+PUNCT_SIDE = 0.5   # share of their heights two boxes share to be on the same row
+OVERLAP_SIDE = 0.3  # share of the narrower box two boxes share sideways to be in the same column
+
+
+def punctuation_owners(boxes, texts):
+    """{index of a line of only punctuation: index of the speech line it ends}.
+
+    One Piece 1161 p5: "URGH" over "...!!" in one bubble.  The punctuation line, taller than the
+    word, was not joined to it and was then dropped as text with no letters: the dots and "!!"
+    stayed in English under "Urgh".  It joins the nearest line above it (or below, for a
+    leading "...") that overlaps it sideways and is close.
+    """
+    owners = {}
+    for i, (box, text) in enumerate(zip(boxes, texts)):
+        if not text or any(ch.isalnum() for ch in str(text)) or not re.search(r"[.!?…‼⁇⁈⁉]", str(text)):
+            continue
+        x0, y0, x1, y1 = box
+        best = None
+        for j, (other, words) in enumerate(zip(boxes, texts)):
+            if j == i or not any(ch.isalnum() for ch in str(words or "")):
+                continue
+            ox0, oy0, ox1, oy1 = other
+            if min(y1, oy1) - max(y0, oy0) >= PUNCT_SIDE * min(y1 - y0, oy1 - oy0):
+                if x0 < ox0:
+                    continue  # punctuation on the same row ends the word on its left, not the one after it
+                gap = x0 - ox1  # on the same row, right after the word ("WHAT ?!")
+            elif min(x1, ox1) - max(x0, ox0) <= OVERLAP_SIDE * min(x1 - x0, ox1 - ox0):
+                continue
+            else:
+                gap = y0 - oy1 if oy1 <= y0 + 0.5 * (y1 - y0) else oy0 - y1
+            if gap > PUNCT_REACH * (oy1 - oy0):
+                continue
+            if best is None or gap < best[0]:
+                best = (gap, j)
+        if best is not None:
+            owners[i] = best[1]
+    return owners
+
+
 def near_lines(lost, kept):
     """Indexes of dropped horizontal lines lying next to a kept line of similar height."""
     height = _line_height(kept) or _line_height(lost)
@@ -1203,6 +1279,21 @@ def repair_lines(mask, boxes, gray=None):
         else:
             result.append(((x0, y0, x1, y1), index))
     result = fit_lines(ink, result, height, changes, gray)
+    # Two detector boxes over the same line (a small one inside a large one) fit to the same
+    # letters: one is enough, or the line is read twice ("PIRATES PIRATES", One Piece 1161 p4).
+    unique = []
+    for box, source in result:
+        for k, (other, kept_source) in enumerate(unique):
+            if _same_box(box, other):
+                # Both boxes together: the fitted one may have lost the end of the line (a
+                # title read as "Mayuts", Grand Blue 102 p4).
+                unique[k] = ((min(box[0], other[0]), min(box[1], other[1]), max(box[2], other[2]),
+                              max(box[3], other[3])), kept_source)
+                changes.append(("same", box, [other]))
+                break
+        else:
+            unique.append((box, source))
+    result = unique
     # Lines of the mask that no box covers.
     known = np.zeros_like(ink)
     for (x0, y0, x1, y1), _ in result:

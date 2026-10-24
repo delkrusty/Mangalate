@@ -546,12 +546,19 @@ def join_split_blocks(regions, image, text_mask=None):
     return joined + others
 
 
+PUNCTUATION_GLYPHS = str.maketrans({"⁈": "?!", "⁉": "!?", "‼": "!!", "⁇": "??"})
+
+
 def fix_ocr(regions):
     """OCR letter mix-ups ("TM LINEAMILIAR" -> "I'M UNFAMILIAR") fixed before translation."""
     from quality import fix_ocr_words
     keep = [g.get("source", "") for g in (page_context() or {}).get("glossary") or [] if isinstance(g, dict)]
     total = 0
     for region in regions:
+        # One-glyph marks the lettering font lacks ("⁈") came back from the AI and were drawn as
+        # boxes (One Piece 1161 p7, p9): they are written as plain punctuation before translation.
+        if isinstance(getattr(region, "text", None), str):
+            region.text = region.text.translate(PUNCTUATION_GLYPHS)
         try:
             text, changed = fix_ocr_words(getattr(region, "text", ""), keep)
         except Exception as exc:  # never lose a page over this
@@ -606,6 +613,77 @@ def drop_duplicates(regions):
     return [r for i, r in enumerate(regions) if i not in drop]
 
 
+def set_aside_punctuation(ctx):
+    """Take lines of only punctuation ("...!!") out before the engine merges the lines.
+
+    The engine joins lines of about the same height and drops text with no letters, so the
+    dots and "!!" under a word stayed in English (One Piece 1161 p5, "URGH / ...!!").  They
+    are given back to the speech they end once the blocks are classified (end_punctuation).
+    """
+    import re
+    lines = list(getattr(ctx, "textlines", None) or [])
+    alone = [l for l in lines if getattr(l, "direction", "h") == "h" and str(getattr(l, "text", "") or "").strip()
+             and not any(ch.isalnum() for ch in str(l.text)) and re.search(r"[.!?…‼⁇⁈⁉]", str(l.text))]
+    ctx.mangalate_punctuation = alone
+    if alone:
+        ctx.textlines = [l for l in lines if all(l is not a for a in alone)]
+
+
+def owned_punctuation(regions, alone):
+    """(region, punctuation line) pairs: each line set aside goes to the speech it ends."""
+    from quality import punctuation_owners, _box
+    # Each line of a block on its own: the distance is measured to its nearest line, in that
+    # line's height, not to the whole block (One Piece 1161 p16: a "!!!" of a sound effect
+    # below a long speech is not its end).
+    lines, owner, texts = [], [], []
+    for k, region in enumerate(regions):
+        text = getattr(region, "text", "") or "x"
+        for quad in getattr(region, "lines", []):
+            lines.append(_box(quad))
+            owner.append(k)
+            texts.append(text)
+    count = len(lines)
+    found = punctuation_owners(lines + [_box(l.pts) for l in alone], texts + [str(l.text) for l in alone])
+    return [(regions[owner[j]], alone[i - count]) for i, j in found.items() if i >= count and j < count]
+
+
+def end_punctuation(ctx, kept):
+    """Each line set aside by set_aside_punctuation joins the translated block it ends.
+
+    Only blocks kept for translation take one, and the line is added to their lines (so it is
+    cleaned and the box still follows each line), after the art decision was taken on the
+    speech alone.  A line no kept speech owns is dropped, as the engine did.
+    """
+    alone = getattr(ctx, "mangalate_punctuation", None) or []
+    if not alone or not kept:
+        return
+    try:
+        from functools import cached_property
+        import numpy as np
+        from quality import _box
+        joined = 0
+        kept_ids = {id(r) for r in kept}
+        everyone = list(kept) + [r for r in (getattr(ctx, "mangalate_preserved", None) or []) if id(r) not in kept_ids
+                                 and getattr(r, "lines", None) is not None and len(r.lines)]
+        for region, line in owned_punctuation(everyone, alone):
+            if id(region) not in kept_ids:
+                continue  # it ends a sound effect or speech left as drawn: it stays as drawn too
+            quad = np.asarray(line.pts, np.int32).reshape(1, 4, 2)
+            below = _box(line.pts)[1] >= region.xyxy[1]
+            region.lines = np.concatenate([region.lines, quad] if below else [quad, region.lines])
+            region.texts = list(getattr(region, "texts", []) or [])
+            region.texts = region.texts + [str(line.text)] if below else [str(line.text)] + region.texts
+            region.text = f"{region.text} {line.text}" if below else f"{line.text} {region.text}"
+            for name, attr in type(region).__dict__.items():
+                if isinstance(attr, cached_property):
+                    region.__dict__.pop(name, None)
+            joined += 1
+        if joined:
+            print(f"Punctuation joined: {joined} line(s)", flush=True)
+    except Exception as exc:  # the punctuation is dropped, as before
+        print(f"Punctuation join skipped: {type(exc).__name__}", flush=True)
+
+
 def classify_regions(original_merge):
     """Decide once, before translation, which blocks are cleaned and translated.
 
@@ -617,6 +695,7 @@ def classify_regions(original_merge):
         import cv2
         import numpy as np
         from quality import classify_region
+        set_aside_punctuation(ctx)
         regions = await original_merge(self, config, ctx)
         ctx.mangalate_preserved = []
         if regions:
@@ -629,6 +708,7 @@ def classify_regions(original_merge):
                                             getattr(ctx, "mangalate_scanned_rows", None))
             ctx.mangalate_preserved.extend(drawn)
         if not regions or not protect_art(config):
+            end_punctuation(ctx, regions or [])
             fix_ocr(regions or [])
             return regions
         image, raw = ctx.img_rgb, ctx.mask_raw
@@ -640,6 +720,10 @@ def classify_regions(original_merge):
             # (TBATE 240 p68: the logo read as "FTERTHEEND" became "After the end").
             follow |= {id(r) for r in regions}
         kept = []
+        try:  # "HUH" over "?" reads as speech only with its "?" (One Piece 1161 p7)
+            endings = owned_punctuation(regions, getattr(ctx, "mangalate_punctuation", None) or [])
+        except Exception:
+            endings = []
         for region in regions:
             text = getattr(region, "text", "")
             if is_sound_effect(text) or is_credit(text) or id(region) in follow:
@@ -666,7 +750,9 @@ def classify_regions(original_merge):
             if region.mangalate_background["kind"] == "art":
                 try:
                     from quality import reads_as_speech, speech_on_paper
-                    if reads_as_speech(text, len(region.lines) > 1) and speech_on_paper(image, raw, region.lines):
+                    ending = " ".join(str(line.text) for owner, line in endings if owner is region)
+                    if (reads_as_speech(f"{text} {ending}".strip(), len(region.lines) > 1)
+                            and speech_on_paper(image, raw, region.lines)):
                         region.mangalate_background["kind"] = "tracos"
                         region.mangalate_background["fala"] = True
                 except Exception as exc:  # the speech stays as drawn, as before
@@ -690,6 +776,7 @@ def classify_regions(original_merge):
             else:
                 ctx.mangalate_preserved.append(region)
         print(f"Region check: kept={len(kept)} preserved_original={len(ctx.mangalate_preserved)}", flush=True)
+        end_punctuation(ctx, kept)
         fix_ocr(kept)
         return kept
     return merge
@@ -717,7 +804,7 @@ def detection_fallback(original_detect):
     return detect
 
 
-SQUARE_VERTICAL = 1.3  # a "vertical" detector box at most this many times taller than wide is also checked for lines
+SQUARE_VERTICAL = 1.5  # a "vertical" detector box at most this many times taller than wide is also checked for lines
 
 
 def repair_textlines(original_detect):
@@ -839,8 +926,9 @@ def repair_textlines(original_detect):
         scan = sum(1 for kind, _, _ in changes if kind == "bubble")
         column = sum(1 for kind, _, _ in changes if kind == "column")
         fit = sum(1 for kind, _, _ in changes if kind in ("fit", "refit"))
-        print(f"Line repair: split={split} added={len(changes) - split - scan - column - fit} scanned={scan} "
-              f"column_cuts={column} fitted={fit}", flush=True)
+        same = sum(1 for kind, _, _ in changes if kind == "same")
+        print(f"Line repair: split={split} added={len(changes) - split - scan - column - fit - same} scanned={scan} "
+              f"column_cuts={column} fitted={fit} same_line={same}", flush=True)
         return (lines, mask_raw, mask) + tuple(result[3:])
     return detect
 
@@ -1041,9 +1129,23 @@ def rescue_ocr(original_ocr):
         ctx.mangalate_ocr_lost = [list(_box(l.pts)) for l in lost]
         if not lost:
             return result
-        from quality import near_lines
-        candidates = [lost[i] for i in near_lines([_box(l.pts) for l in lost],
-                                                   [_box(l.pts) for l in result if getattr(l, "direction", "h") == "h"])]
+        import numpy as np
+        from quality import near_lines, trim_lost
+        # Only lines with letters are a paragraph to rescue into: a lone "!!" is not.
+        kept_boxes = [_box(l.pts) for l in result if getattr(l, "direction", "h") == "h"
+                      and any(ch.isalnum() for ch in str(getattr(l, "text", "") or ""))]
+        # A dropped box that also covers a kept line beside it is too tall to look like a line:
+        # it is read again without those rows (One Piece 1161 p8, "HIM?!").
+        trimmed = [trim_lost(_box(l.pts), kept_boxes) for l in lost]
+        candidates = []
+        for i in near_lines(trimmed, kept_boxes):
+            line = lost[i]
+            if trimmed[i] != _box(line.pts):
+                from manga_translator.utils import Quadrilateral
+                x0, y0, x1, y1 = trimmed[i]
+                line = Quadrilateral(np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=np.int64), "",
+                                     getattr(line, "prob", 0.0))
+            candidates.append(line)
         if not candidates:
             return result
         from manga_translator.ocr import dispatch as dispatch_ocr
