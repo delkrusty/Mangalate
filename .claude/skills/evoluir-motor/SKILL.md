@@ -88,7 +88,13 @@ Nesse caso, prepare o commit (um assunto, mensagem em português como as do hist
 
 Leve a ficha, a tabela antes e depois, os caminhos das imagens no PC e uma recomendação.
 
-Todo resultado mostrado ao Lucas vem com amostras ampliadas dos balões afetados, lado a lado (Original | 1ª versão traduzida | Correção), e com pelo menos um balão de controle que não pode mudar. Salve em `teste-curto/<rodada>/amostras/` com um `amostras.html` que tenha uma legenda por amostra.
+Todo resultado mostrado ao Lucas vem com amostras ampliadas dos balões afetados, lado a lado (Original | 1ª versão traduzida | Correção), e com pelo menos um balão de controle que não pode mudar. Salve em `teste-curto/<rodada>/amostras/` com um `amostras.html` que tenha uma legenda por amostra. Regras das amostras:
+- **Ordem:** a mesma ordem e a mesma numeração dos grupos do texto (1, 1a, 1b...), com os controles no fim.
+- **Página final:** as colunas mostram sempre a página **traduzida final** (`translated/`) de uma rodada real. Página limpa, máscara ou simulação offline só entram como coluna extra, com o nome dito na própria coluna, e nunca no lugar da traduzida.
+- **Legenda conferida:** abra cada imagem antes de escrever a legenda e confira que o texto descrito é o que aparece.
+- **Toda página que mudou:** cada página que a mudança alterou entra nas amostras, e não só as do motivador.
+
+Antes de mostrar, faça você mesmo a inspeção visual que o `revisor-motor` faz (arte, limpeza, fala, tradução e letreiramento, balão por balão) e diga o que ainda está ruim.
 
 ## 7. Registrar
 
