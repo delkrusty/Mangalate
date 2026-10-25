@@ -23,7 +23,7 @@ CHECKED = {"colab/batch.py": "/mangalate/batch.py", "engine_compat.py": "/mangal
            "providers.py": "/mangalate/providers.py", "seams.py": "/mangalate/seams.py",
            "quality.py": "/mangalate/quality.py",
            "lettering.py": "/mangalate/lettering.py", "memory.py": "/mangalate/memory.py", "speed.py": "/mangalate/speed.py",
-           "core.py": "/mangalate/core.py"}
+           "core.py": "/mangalate/core.py", "words/hyph_pt_BR/hyph_pt_BR.dic": "/mangalate/words/hyph_pt_BR/hyph_pt_BR.dic"}
 
 
 def hardware_from_env(root=ROOT):

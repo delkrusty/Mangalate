@@ -24,6 +24,7 @@ Two defects observed on real pages motivate this module:
    a paragraph of kept lines, so they are read again with a lower threshold.
 """
 import re
+import string
 
 import cv2
 import numpy as np
@@ -582,6 +583,7 @@ def normalize_spacing(text):
     if not text or has_cjk(text):
         return text
     text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"</?(?:i|b|u|em|strong)>", "", text, flags=re.I)  # "<I>Tá</I>": the AI's emphasis, not text
     text = text.replace("\u2011", "-")  # no glyph in the lettering font
     text = re.sub(r"(?<!-)--(?!-)", "—", text)  # "Eu--" -> "Eu—" (TBATE 199 p22)
     text = re.sub(r"[,;:]\s*(?=[.!?…—])", "", text)  # "da muralha,." (TBATE new p108)
@@ -633,13 +635,17 @@ def same_block(a, b, inside=None):
 
 
 def same_row(a, b, line):
-    """``b`` continues ``a``'s last line to the right: "THE REAL" | "TRAINING" (OF 237 p62)."""
+    """``b`` continues ``a``'s last line to the right: "THE REAL" | "TRAINING" (OF 237 p62).
+
+    A block that starts higher than that last line is a column beside it (One Piece 1161 p4,
+    a caption box with columns side by side), not its last word.
+    """
     bx0, by0, bx1, by1 = (float(v) for v in b.xyxy)
     last = max(np.asarray(a.lines, dtype=float), key=lambda q: q[:, 1].mean())
     lx0, ly0, lx1, ly1 = last[:, 0].min(), last[:, 1].min(), last[:, 0].max(), last[:, 1].max()
     shared = min(ly1, by1) - max(ly0, by0)
     gap = bx0 - lx1
-    return shared >= 0.6 * line and -0.5 * line <= gap <= 1.2 * line
+    return shared >= 0.6 * line and -0.5 * line <= gap <= 1.2 * line and by0 >= ly0 - 0.5 * line
 
 
 def join_blocks(regions, make, inside=None):
@@ -811,6 +817,7 @@ CLEAN_MARK = 0.4         # a punctuation dot is smaller than this, in line heigh
 DOT_ASPECT = 2           # and at most this much longer than wide (a hairline is longer)
 DOT_SIZE = 5             # a dot thinner than a stroke is at most this big (px): small print is not punctuation
 DOT_INK = 128            # and has ink darker than this (0-255): light screentone specks are not
+ELLIPSIS_ALIKE = 2.0     # the dots of "..." differ in size by less than this factor
 DOT_FILL = 0.5           # and fills this share of its box: a short diagonal stroke of hatching does not
 DOT_CLEAR = 2            # and has no other dark ink this close (px), unlike a fragment of hatching
 DOT_ROW = 0.6            # and another dot on its row this close, in line heights (the dots of "...")
@@ -952,8 +959,16 @@ def glyphs_to_clean(image, box, line_height):
         if not side:
             continue
         # Only a row of dots alone: a letter on the same row makes it a line of text that was not read.
+        # For a true "..." (three or more alike dots in a row) a letter farther than a line height
+        # is another block (the next column of a caption, One Piece 1161 p4), not a word of its row.
         r0, r1 = min(stats[k, 1] for k in side), max(stats[k, 1] + stats[k, 3] for k in side)
+        c0, c1 = min(stats[k, 0] for k in side), max(stats[k, 0] + stats[k, 2] for k in side)
+        sizes = [max(stats[k, 2], stats[k, 3]) for k in side]
+        middles = [stats[k, 1] + stats[k, 3] / 2 for k in side]
+        ellipsis = len(side) >= 3 and max(sizes) <= ELLIPSIS_ALIKE * min(sizes) and np.ptp(middles) <= max(sizes)
+        reach = lh if ellipsis else float("inf")
         if not any(stats[k, 1] < r1 and stats[k, 1] + stats[k, 3] > r0 and k not in side and k not in queue
+                   and stats[k, 0] < c1 + reach and stats[k, 0] + stats[k, 2] > c0 - reach
                    for k in range(1, count)):
             queue += side
     taken = set(queue)
@@ -992,6 +1007,139 @@ def drawn_marks(image, boxes):
     if keep.any():
         keep = cv2.dilate(keep.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
     return keep
+
+
+SYMBOL_GAP = 0.8    # blank between a drawn symbol and the first letter of its line, in letter heights
+SYMBOL_TALL = 0.8   # the symbol is at least this many letter heights tall (dots and commas are not)
+SYMBOL_FILL = 0.5   # each of its strokes fills less than this share of its box: curves, not a letter's bar
+SYMBOL_DOT = 0.3    # and none is a dot this small (letter heights): "...?" is punctuation
+SYMBOL_INK = 110    # ink darker than this (0-255 grey)
+SYMBOL_TALLEST = 0.75  # the letter height is read from pieces at least this share of the second tallest
+SYMBOL_LETTER = 0.3  # the line's letters are within this share of the usual letter height
+SYMBOL_BAND = 0.25  # a letter starts and ends within this many letter heights of the line's row; a symbol's strokes do not
+SYMBOL_JOIN = 0.3   # a stroke this close to the symbol (letter heights) and outside every line box joins it
+
+
+def line_symbols(image, lines):
+    """Pixels of a symbol drawn at the end of a line of speech, to be left out of the cleaning.
+
+    One Piece 1161 p8 and 1153 p6: an anger vein beside "HIM?!" and "GO" got into the
+    detector's line box and was cleaned with the letters.  A group of two or more curved
+    strokes at one end of a line, apart from its letters by a blank of ``SYMBOL_GAP``
+    letter heights and at least ``SYMBOL_TALL`` of them tall, is a drawing.  Returns the
+    pixels of those strokes, grown by two pixels.
+    """
+    gray = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2GRAY) if np.asarray(image).ndim == 3 else np.asarray(image)
+    h, w = gray.shape[:2]
+    keep = np.zeros((h, w), bool)
+    count, labels, stats, centres = cv2.connectedComponentsWithStats((gray < SYMBOL_INK).astype(np.uint8), connectivity=8)
+    boxes = [_box(quad) for quad in ([] if lines is None else lines)]
+    for quad in [] if lines is None else lines:
+        x0, y0, x1, y1 = _box(quad)
+        inside = [k for k in range(1, count) if stats[k, cv2.CC_STAT_AREA] >= 4
+                  and x0 <= centres[k][0] <= x1 and y0 <= centres[k][1] <= y1
+                  and stats[k, cv2.CC_STAT_WIDTH] < x1 - x0 + 1]  # not the bubble outline running past the line
+        if len(inside) < 3:
+            continue
+        tall = sorted(stats[k, cv2.CC_STAT_HEIGHT] for k in inside)[-2]  # one tall stroke of a drawing does not set it
+        height = float(np.median([stats[k, cv2.CC_STAT_HEIGHT] for k in inside
+                                  if stats[k, cv2.CC_STAT_HEIGHT] >= SYMBOL_TALLEST * tall]))  # dots do not set it
+        inside.sort(key=lambda k: stats[k, cv2.CC_STAT_LEFT])
+        found = []
+        for end in (inside, inside[::-1]):
+            group, rest = [end[0]], end[1:]
+            while rest and _x_gap(stats, group, rest[0]) < SYMBOL_GAP * height:
+                group.append(rest.pop(0))
+            if not rest or len(group) < 2 or len(group) > len(rest):
+                continue
+            if _x_gap(stats, group, rest[0]) < SYMBOL_GAP * height:
+                continue
+            top = min(stats[k, cv2.CC_STAT_TOP] for k in group)
+            bottom = max(stats[k, cv2.CC_STAT_TOP] + stats[k, cv2.CC_STAT_HEIGHT] for k in group)
+            strokes = [(stats[k, cv2.CC_STAT_WIDTH], stats[k, cv2.CC_STAT_HEIGHT], stats[k, cv2.CC_STAT_AREA]) for k in group]
+            letters = [k for k in rest if abs(stats[k, cv2.CC_STAT_HEIGHT] - height) <= SYMBOL_LETTER * height]
+            if len(letters) < 2:  # the rest is dots or strokes: no row of letters to tell a drawing from
+                continue
+            band_top = np.median([stats[k, cv2.CC_STAT_TOP] for k in letters])
+            band_bottom = np.median([stats[k, cv2.CC_STAT_TOP] + stats[k, cv2.CC_STAT_HEIGHT] for k in letters])
+
+            def in_row(k):
+                return (abs(stats[k, cv2.CC_STAT_TOP] - band_top) <= SYMBOL_BAND * height
+                        and abs(stats[k, cv2.CC_STAT_TOP] + stats[k, cv2.CC_STAT_HEIGHT] - band_bottom) <= SYMBOL_BAND * height)
+
+            if sum(map(in_row, letters)) < max(2, len(letters) / 2):  # strokes of a drawing are no row to measure by
+                continue
+            lettered = [k for k in group if in_row(k)]
+            if (bottom - top >= SYMBOL_TALL * height and len(lettered) <= 1
+                    and all(a / float(sw * sh) < SYMBOL_FILL for sw, sh, a in strokes)
+                    and not any(sw <= SYMBOL_DOT * height and sh <= SYMBOL_DOT * height for sw, sh, a in strokes)):
+                found.append(group)
+        if len(found) == 1:  # both ends alike (a short word beside a drawing): not sure which is which
+            group = list(found[0])
+            # A stroke of the symbol that pokes out of the line box (its centre outside every line
+            # box, so it is no letter that was read) and touches the group is part of it.
+            gx0 = min(stats[k, cv2.CC_STAT_LEFT] for k in group) - SYMBOL_JOIN * height
+            gx1 = max(stats[k, cv2.CC_STAT_LEFT] + stats[k, cv2.CC_STAT_WIDTH] for k in group) + SYMBOL_JOIN * height
+            gy0 = min(stats[k, cv2.CC_STAT_TOP] for k in group) - SYMBOL_JOIN * height
+            gy1 = max(stats[k, cv2.CC_STAT_TOP] + stats[k, cv2.CC_STAT_HEIGHT] for k in group) + SYMBOL_JOIN * height
+            for k in range(1, count):
+                sx, sy, sw, sh = (int(v) for v in stats[k, :4])
+                if (k not in group and sx < gx1 and sx + sw > gx0 and sy < gy1 and sy + sh > gy0
+                        and max(sw, sh) <= height
+                        and not any(bx0 <= centres[k][0] <= bx1 and by0 <= centres[k][1] <= by1 for bx0, by0, bx1, by1 in boxes)):
+                    group.append(k)
+            for k in group:
+                keep |= labels == k
+    if keep.any():  # with the anti-aliased rim: grown by a pixel, the cleaner smeared it grey around the strokes
+        keep = cv2.dilate(keep.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+    return keep
+
+
+DRAWING_SIZE = 3.0   # an ink piece this many line heights tall or wide is part of the drawing, not a letter
+DRAWING_REACH = 1.5  # looked for this far around the lines, in line heights
+
+
+def drawing_around(image, lines, line_height=None):
+    """Pixels of large drawn strokes near ``lines`` that lie outside the line boxes.
+
+    One Piece 1161 p11: a label under a face on a map; the detector mask took the bottom
+    of the face, and the bubble was cleaned over it.  Ink joined into a piece much larger
+    than a letter is the drawing (or the bubble outline); outside the line boxes it is
+    left out of the cleaning, while letters touching it are still cleaned inside them.
+    """
+    gray = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2GRAY) if np.asarray(image).ndim == 3 else np.asarray(image)
+    h, w = gray.shape[:2]
+    keep = np.zeros((h, w), bool)
+    if lines is None or not len(lines):
+        return keep
+    boxes = [_box(q) for q in lines]
+    lh = float(line_height or np.median([b[3] - b[1] for b in boxes]))
+    reach = int(round(DRAWING_REACH * lh))
+    x0 = max(0, min(b[0] for b in boxes) - reach); y0 = max(0, min(b[1] for b in boxes) - reach)
+    x1 = min(w, max(b[2] for b in boxes) + reach + 1); y1 = min(h, max(b[3] for b in boxes) + reach + 1)
+    if np.median(gray[y0:y1, x0:x1]) < PAPER_LIGHT:  # light letters on a dark bubble: the dark is what is cleaned
+        return keep
+    ink = gray < SYMBOL_INK
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(ink.astype(np.uint8), connectivity=8)
+    window = labels[y0:y1, x0:x1]
+    big = [k for k in np.unique(window) if k and max(stats[k, cv2.CC_STAT_WIDTH], stats[k, cv2.CC_STAT_HEIGHT]) >= DRAWING_SIZE * lh]
+    if not big:
+        return keep
+    part = np.isin(window, big)
+    for bx0, by0, bx1, by1 in boxes:
+        part[max(0, by0 - y0):max(0, by1 - y0 + 1), max(0, bx0 - x0):max(0, bx1 - x0 + 1)] = False
+    keep[y0:y1, x0:x1] = part
+    if keep.any():
+        keep = cv2.dilate(keep.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+    return keep
+
+
+def _x_gap(stats, group, k):
+    """Blank columns between the strokes of ``group`` and stroke ``k`` (either side)."""
+    gx0 = min(stats[g, cv2.CC_STAT_LEFT] for g in group)
+    gx1 = max(stats[g, cv2.CC_STAT_LEFT] + stats[g, cv2.CC_STAT_WIDTH] for g in group)
+    kx0, kx1 = stats[k, cv2.CC_STAT_LEFT], stats[k, cv2.CC_STAT_LEFT] + stats[k, cv2.CC_STAT_WIDTH]
+    return max(kx0 - gx1, gx0 - kx1)
 
 
 THROUGH_DARK = 135    # line art is darker than this (0-255; thin anti-aliased lines reach ~130)
@@ -2383,6 +2531,7 @@ def translation_problems(sources, translations, glossary=(), earlier=""):
 OCR_CONFUSIONS = (("LI", "U"), ("LJ", "U"), ("IJ", "U"), ("E", "F"), ("F", "E"), ("O", "D"), ("O", "C"), ("O", "Q"),
                   ("C", "D"), ("I", "D"), ("I", "L"), ("I", "T"), ("L", "I"), ("0", "O"), ("1", "I"), ("5", "S"),
                   ("7", "T"), ("8", "B"), ("/", "I"), ("|", "I"), ("VV", "W"), ("RN", "M"))
+DIGIT_WORD_LETTERS = 3  # a word with one stray digit is retried as every letter only with this many letters
 _WORDS = None
 
 
@@ -2411,7 +2560,7 @@ def english_words():
 # Comic speech the dictionary does not list; never "fixed" into another word ("LIL" -> "LII").
 SLANG = {"lil", "gonna", "wanna", "gotta", "ya", "yall", "kinda", "sorta", "dunno", "nah", "yup", "nope",
          "cmon", "em", "outta", "lotta", "gimme", "lemme", "whatcha", "gotcha", "betcha", "dude", "bro", "sis",
-         "goin", "doin", "nothin", "somethin", "huh", "heh", "hmph", "tch", "ugh", "oi", "eh", "uh", "um", "hm"}
+         "goin", "doin", "nothin", "somethin", "dammit", "huh", "heh", "hmph", "tch", "ugh", "oi", "eh", "uh", "um", "hm"}
 
 
 def _known(word, common, names):
@@ -2463,16 +2612,31 @@ def fix_ocr_words(text, keep=()):
         head, tail = parts[i], parts[i + 2]
         dash = head.endswith("-") and not head.endswith("--")
         h = head[:-1] if dash else head
+        lead = re.match(r"[.…]*", h).group(0) if dash else ""  # "...FIRE- BLITZ"
+        h = h[len(lead):]
         if re.fullmatch(r"[A-Z]{2,}", h) and re.fullmatch(r"[A-Z]{2,}\W*", tail):
             t = re.match(r"[A-Z]+", tail).group(0)
             whole = h + t
+            if dash and f"{h}-{t}".lower() in keep:
+                parts[i:i + 3] = [f"{lead}{h}-{tail}"]  # a name of the glossary: "JI- HYUN" -> "JI-HYUN"
+                changed += 1
+                continue
             if whole.lower() in common and (dash or t.lower() in SUFFIXES
                                             or not (_known(h, common, names) and _known(t, common, names))):
-                parts[i:i + 3] = [whole + tail[len(t):]]
+                parts[i:i + 3] = [lead + whole + tail[len(t):]]
                 changed += 1
                 continue
             if dash and (t.lower() in HONORIFICS or (_known(h, common, names) and _known(t, common, names))):
-                parts[i:i + 3] = [f"{h}-{tail}"]  # "AZUSA- SAN" -> "AZUSA-SAN", "HIGH- SCHOOL" -> "HIGH-SCHOOL"
+                parts[i:i + 3] = [f"{lead}{h}-{tail}"]  # "AZUSA- SAN" -> "AZUSA-SAN", "HIGH- SCHOOL" -> "HIGH-SCHOOL"
+                changed += 1
+                continue
+            # A tail that is no word of its own is the rest of a name or a cry ("NEP- TUNIANS",
+            # "SHAK- KYYY"), unless it repeats the head, a stutter ("STOP- STOOOOP"), or the head is
+            # a word cut short before a name or a cry ("WAIT- ZORAN!") and the whole is no name.
+            plain = re.sub(r"(.)\1+", r"\1", t).startswith(re.sub(r"(.)\1+", r"\1", h))
+            if (dash and not _known(t, common, names) and not plain
+                    and (not _known(h, common, names) or _known(whole, common, names))):
+                parts[i:i + 3] = [lead + whole + tail[len(t):]]
                 changed += 1
                 continue
         i += 2
@@ -2499,6 +2663,18 @@ def fix_ocr_words(text, keep=()):
                 return word.replace(core, hits.pop())
             if hits:
                 return word  # more than one word fits: leave it to the translator
+        # One digit inside a capital word ("ADMIRA4", "7AMMIT") no pair above covers: any letter may
+        # have been read as it.  Ordinals and units ("4TH", "10PM") have too few letters or two digits,
+        # and a number after a word ("SECTOR7") is not read as a plural "S".
+        digits = re.findall(r"\d", core)
+        if len(digits) == 1 and len(letters) >= DIGIT_WORD_LETTERS:
+            at = core.index(digits[0])
+            hits = {c for c in (core[:at] + ch + core[at + 1:] for ch in string.ascii_uppercase
+                                if not (ch == "S" and at == len(core) - 1))
+                    if c.lower() in common or c.lower() in SLANG}
+            if len(hits) == 1:
+                changed += 1
+                return word.replace(core, hits.pop())
         return word
 
     fixed = re.sub(r"[A-Za-z0-9/|']*[A-Za-z][A-Za-z0-9/|']*", repl, text)

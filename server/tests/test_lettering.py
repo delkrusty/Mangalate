@@ -1,4 +1,5 @@
 """Translation fitted to the bubble instead of the original text box (lettering.py)."""
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -207,6 +208,97 @@ class ShapedLetteringTest(unittest.TestCase):
         words = "Você gostou de alguma coisa um".split()
         self.assertIsNone(lettering.wrap(words, [measure("Você gostou de alguma coisa") + 2] * 2, measure))
         self.assertEqual(lettering.wrap(["Oi"], [500], measure), ["Oi"])
+
+    def test_word_with_its_own_hyphen_may_end_a_line_there(self):
+        # One Piece 1161 p9: "...fogo-Blitz!!" in a narrow bubble shrank to fit as one word.
+        measure = lettering.Measure(FONT, 30)
+        narrow = [measure("...fogo-") + 2] * 2
+        self.assertEqual(lettering.wrap(["...fogo-Blitz!!"], narrow, measure), ["...fogo-", "Blitz!!"])
+        self.assertEqual(lettering.wrap(["...fogo-Blitz!!"], [500], measure), ["...fogo-Blitz!!"])
+        # A pronoun after the hyphen stays with its verb, and a dash is no break.
+        self.assertIsNone(lettering.wrap(["salvá-la"], [measure("salvá-") + 2] * 2, measure))
+        self.assertIsNone(lettering.wrap(["vivo--residente"], [measure("vivo--") + 2] * 2, measure))
+        # A stutter is one word: "V-" / "você?!" and "Nã-" / "não!" read as a broken line.
+        self.assertIsNone(lettering.wrap(["V-você?!"], [measure("você?!") + 2] * 2, measure))
+        self.assertIsNone(lettering.wrap(["Nã-não!"], [measure("não!") + 2] * 2, measure))
+
+    def test_syllable_breaks_follow_portuguese_rules(self):
+        # Points where a long word may be cut, from the pt-BR patterns: never fewer than HYPHEN_SIDE
+        # letters on a side, never in a short word or a name.
+        cuts = lambda word: [word[:k] for k in lettering.syllable_breaks(word)]
+        self.assertIn("inesca", cuts("inescapável"))
+        self.assertIn("transfor", cuts("transformando"))
+        for word in ("inescapável", "transformando", "considerando"):
+            for k in lettering.syllable_breaks(word):
+                self.assertGreaterEqual(k, lettering.HYPHEN_SIDE)
+                self.assertGreaterEqual(len(word) - k, lettering.HYPHEN_SIDE)
+        for word in ("casa", "Ana", "você", "Rex", "Marcus", "Kenjirou", "certeza", "verdade"):
+            self.assertEqual(lettering.syllable_breaks(word), [], word)
+
+    def test_long_word_is_cut_at_a_syllable_only_when_asked(self):
+        measure = lettering.Measure(FONT, 30)
+        narrow = [measure("...transfor-") + 2] * 3
+        self.assertIsNone(lettering.wrap(["...transformando", "tudo"], narrow, measure))
+        lines = lettering.wrap(["...transformando", "tudo"], narrow, measure, syllables=True)
+        self.assertEqual(lines[0][-1], "-")
+        self.assertEqual(" ".join(lines).replace("- ", ""), "...transformando tudo")
+        # A word is cut once at most: "ines-" / "capá-" / "vel." reads as noise.
+        tiny = [measure("ines-") + 2] * 4
+        self.assertIsNone(lettering.wrap(["inescapável."], tiny, measure, syllables=True))
+        # Between two vowels only when no other cut fits: "continu-" / "armos" reads as another word.
+        self.assertEqual(lettering.syllable_cut("continuarmos", 1000, measure), len("continuar"))
+        self.assertEqual(lettering.syllable_cut("continuarmos", measure("continu-") + 1, measure), len("conti"))
+        # A word that fits its line is never cut.
+        self.assertEqual(lettering.wrap(["Vamos", "lá"], [500], measure, syllables=True), ["Vamos lá"])
+
+    def test_narrow_bubble_grows_the_letters_by_cutting_a_long_word(self):
+        # One Piece 1161 p4: a caption column 61 px wide; a long word had to fit whole on a line
+        # and the letters fell to half the original size.
+        image = page_with_bubble(axes=(48, 150))
+        text = "...transformando a cidade num lugar inescapável..."
+        box = (275, 220, 325, 380)
+        whole = lettering.plan_shaped(image, box, [], text, FONT, 22, 8, syllables=False)
+        cut = lettering.plan_shaped(image, box, [], text, FONT, 22, 8)
+        self.assertGreaterEqual(cut["size"], lettering.HYPHEN_GAIN * whole["size"])
+        self.assertTrue(any(line.endswith("-") for line in cut["lines"]), cut["lines"])
+        self.assertLessEqual(cut["size"], 22)  # cut only to come back near the original, never past it
+        # The roomy oval keeps every word whole.
+        roomy = lettering.plan_shaped(page_with_bubble(axes=(150, 200)), (220, 240, 380, 360), [], self.TEXT, FONT, 30, 10)
+        self.assertFalse(any(line.endswith("-") for line in roomy["lines"]), roomy["lines"])
+
+    def test_symbol_the_font_lacks_comes_from_the_symbol_font(self):
+        # One Piece 1161 p5: "♡", which the comic font has not, was drawn as a box.
+        from unittest import mock
+        symbols = next((p for p in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                                    "C:/Windows/Fonts/seguisym.ttf", "/Library/Fonts/Arial Unicode.ttf")
+                        if os.path.exists(p)), None)
+        if symbols is None:
+            self.skipTest("no font with symbols on this machine")
+        with mock.patch.object(lettering, "SYMBOL_FONT", symbols):
+            measure = lettering.Measure(FONT, 30)
+            pieces = measure.runs("Oi ♡ tchau")
+            self.assertEqual([p for p, f in pieces], ["Oi ", "♡", " tchau"])
+            self.assertEqual([f.path for p, f in pieces], [FONT, symbols, FONT])
+            self.assertEqual(measure("Oi ♡"), measure.font.getlength("Oi ") + pieces[1][1].getlength("♡"))
+            # Drawn in the symbol font (not the box), sitting on the baseline of "Oi".
+            image = page_with_bubble(axes=(150, 200))
+            plan = lettering.plan_shaped(image, (220, 240, 380, 360), [], "Oi ♡", FONT, 30, 10)
+            out = image.copy()
+            lettering.draw_shaped(out, plan, (0, 0, 0), None)
+        with mock.patch.object(lettering, "SYMBOL_FONT", None):
+            boxed = image.copy()
+            lettering.draw_shaped(boxed, plan, (0, 0, 0), None)
+        paper = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) > 128
+        ink = (cv2.cvtColor(out, cv2.COLOR_RGB2GRAY) < 128) & paper
+        self.assertFalse(np.array_equal(ink, (cv2.cvtColor(boxed, cv2.COLOR_RGB2GRAY) < 128) & paper))
+        cols = np.nonzero(ink.any(axis=0))[0]
+        gaps = np.nonzero(np.diff(cols) > 5)[0]
+        heart = cols[gaps[-1] + 1]  # the last piece of ink after the space
+        letters = np.nonzero(ink[:, :heart].any(axis=1))[0]
+        drawn = np.nonzero(ink[:, heart:].any(axis=1))[0]
+        self.assertLessEqual(abs(int(drawn.max()) - int(letters.max())), 3)
+        # Text in the comic font alone is one run, as before.
+        self.assertEqual(len(lettering.Measure(FONT, 30).runs("Oi, tchau!")), 1)
 
     def test_no_font_falls_back(self):
         self.assertIsNone(lettering.plan_shaped(page_with_bubble(), (220, 240, 380, 360), [], self.TEXT, None, 30, 10))
