@@ -266,6 +266,13 @@ class SpacingTest(unittest.TestCase):
         for text in ("Custa 3,5 moedas.", "Às 10:30 em ponto.", "Bem... talvez.", "Eu...", "V.S.O.P"):
             self.assertEqual(normalize_spacing(text), text)
 
+    def test_drops_formatting_tags(self):
+        # One Piece 1161 p12: the AI marked the stressed word as "<I>Tá</I>", lettered as written.
+        self.assertEqual(normalize_spacing("<I>Tá</I> de brincadeira?!"), "Tá de brincadeira?!")
+        self.assertEqual(normalize_spacing("Isso é <b>meu</b>!"), "Isso é meu!")
+        for text in ("Eu te amo <3", "Use <nome> aqui.", "3 < 5 > 2"):
+            self.assertEqual(normalize_spacing(text), text)
+
     def test_cjk_is_untouched(self):
         self.assertEqual(normalize_spacing("何、これ？"), "何、これ？")
 
@@ -2130,6 +2137,24 @@ class BrokenWordTest(unittest.TestCase):
         for text, fixed in cases.items():
             self.assertEqual(quality.fix_ocr_words(text)[0], fixed)
 
+    def test_name_or_cry_broken_across_lines(self):
+        # One Piece 1161 p8/p9/p14: "NEP- TUNIANS" became "Nep-Tunians", "...FIRE- BLITZ" "fogo- Blitz".  A tail
+        # that is no word of its own is the rest of the head; two words keep one hyphen without the space.
+        cases = {"COME QUIETLY, YOU MAR- TIANS!!": "COME QUIETLY, YOU MARTIANS!!",
+                 "COME QUIETLY, YOU ZOR- TANIANS!!": "COME QUIETLY, YOU ZORTANIANS!!",
+                 "HELLO, PAT- RICIA!": "HELLO, PATRICIA!",     # a word as head, a name as a whole
+                 "...STEEL- STORM!!": "...STEEL-STORM!!",
+                 "BEL- LAAA!!": "BELLAAA!!"}
+        for text, fixed in cases.items():
+            self.assertEqual(quality.fix_ocr_words(text)[0], fixed)
+        # A name of the glossary keeps its hyphen ("JI-HYUN" is found there, "JIHYUN" is not).
+        self.assertEqual(quality.fix_ocr_words("THANK YOU, JI- HYUN!", keep={"Ji-hyun"})[0], "THANK YOU, JI-HYUN!")
+        # A stutter repeats the head, also stretched; a word cut short before a name or a cry is
+        # speech broken off; a tail the word list knows ("AAA") is left as it was: all untouched.
+        for text in ("NO- NOOO!!", "STO- STOOOP!", "WHA- WHAT?!", "GYAA- AAA!!!", "STOP- STOOOOP!",
+                     "HELP- HEEELP!", "WAIT- ZORAN!", "WHAT THE- GRAAAH!", "UGH- NNGH!"):
+            self.assertEqual(quality.fix_ocr_words(text), (text, 0))
+
     def test_real_words_kept_apart(self):
         for text in ("WALK IN TO THE ROOM", "A LOT OF FUN", "THE KING IS DEAD", "I CAN SING", "WAIT-- WHAT"):
             self.assertEqual(quality.fix_ocr_words(text), (text, 0))
@@ -2140,6 +2165,17 @@ class OuroSevenTest(unittest.TestCase):
         self.assertEqual(quality.fix_ocr_words("IWO BODIES IN PAIN")[0], "TWO BODIES IN PAIN")
         self.assertEqual(quality.fix_ocr_words("ITLL PASS RIGHI THROUGH--")[0], "ITLL PASS RIGHT THROUGH--")
         for text in ("A LIL?", "I GOTTA GO", "YOU AND THE"):
+            self.assertEqual(quality.fix_ocr_words(text), (text, 0))
+
+    def test_digit_read_inside_a_word(self):
+        # One Piece 1161 p9/p10: "ADMIRA4" became "Vice Admirador" and "7AMMIT!!" was left in English as a
+        # sound effect; a digit no confusion pair covers is tried as every letter.
+        self.assertEqual(quality.fix_ocr_words("THE ADMIRA4 IS COMING")[0], "THE ADMIRAL IS COMING")
+        self.assertEqual(quality.fix_ocr_words("7AMMIT!!")[0], "DAMMIT!!")
+        self.assertEqual(quality.fix_ocr_words("WE HAVE NO CHOI4E")[0], "WE HAVE NO CHOICE")
+        for text in ("I'M 6ORRY",      # SORRY and WORRY both fit: left to the translator
+                     "THE 4TH FLOOR", "ON THE 2ND", "AT 10PM", "3D GLASSES", "MP3", "B4 YOU GO", "X2",
+                     "TO SECTOR7", "ROUND2!"):  # a number after a word is no plural "S"
             self.assertEqual(quality.fix_ocr_words(text), (text, 0))
 
     def test_two_rows_of_letters_are_speech(self):

@@ -25,6 +25,7 @@ internal object MangalateWhatsNew {
                 "Falas curtas que a IA devolvia em inglês, como \"AH..\", risadas e sons, agora aparecem no balão.",
                 "Português mais cuidadoso: a IA tenta de novo quando escreve em espanhol, erra o gênero, repete palavra ou erra o formato, e nomes de lugares ficam iguais no capítulo todo.",
                 "Sinais como \"⁈\" não aparecem mais como quadradinho.",
+                "Menos erros de leitura: número no lugar de letra e palavra partida no fim da linha saem certos.",
             ),
         ),
         WhatsNewRelease(

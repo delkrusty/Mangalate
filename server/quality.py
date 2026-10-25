@@ -24,6 +24,7 @@ Two defects observed on real pages motivate this module:
    a paragraph of kept lines, so they are read again with a lower threshold.
 """
 import re
+import string
 
 import cv2
 import numpy as np
@@ -582,6 +583,7 @@ def normalize_spacing(text):
     if not text or has_cjk(text):
         return text
     text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"</?(?:i|b|u|em|strong)>", "", text, flags=re.I)  # "<I>Tá</I>": the AI's emphasis, not text
     text = text.replace("\u2011", "-")  # no glyph in the lettering font
     text = re.sub(r"(?<!-)--(?!-)", "—", text)  # "Eu--" -> "Eu—" (TBATE 199 p22)
     text = re.sub(r"[,;:]\s*(?=[.!?…—])", "", text)  # "da muralha,." (TBATE new p108)
@@ -2529,6 +2531,7 @@ def translation_problems(sources, translations, glossary=(), earlier=""):
 OCR_CONFUSIONS = (("LI", "U"), ("LJ", "U"), ("IJ", "U"), ("E", "F"), ("F", "E"), ("O", "D"), ("O", "C"), ("O", "Q"),
                   ("C", "D"), ("I", "D"), ("I", "L"), ("I", "T"), ("L", "I"), ("0", "O"), ("1", "I"), ("5", "S"),
                   ("7", "T"), ("8", "B"), ("/", "I"), ("|", "I"), ("VV", "W"), ("RN", "M"))
+DIGIT_WORD_LETTERS = 3  # a word with one stray digit is retried as every letter only with this many letters
 _WORDS = None
 
 
@@ -2557,7 +2560,7 @@ def english_words():
 # Comic speech the dictionary does not list; never "fixed" into another word ("LIL" -> "LII").
 SLANG = {"lil", "gonna", "wanna", "gotta", "ya", "yall", "kinda", "sorta", "dunno", "nah", "yup", "nope",
          "cmon", "em", "outta", "lotta", "gimme", "lemme", "whatcha", "gotcha", "betcha", "dude", "bro", "sis",
-         "goin", "doin", "nothin", "somethin", "huh", "heh", "hmph", "tch", "ugh", "oi", "eh", "uh", "um", "hm"}
+         "goin", "doin", "nothin", "somethin", "dammit", "huh", "heh", "hmph", "tch", "ugh", "oi", "eh", "uh", "um", "hm"}
 
 
 def _known(word, common, names):
@@ -2609,16 +2612,31 @@ def fix_ocr_words(text, keep=()):
         head, tail = parts[i], parts[i + 2]
         dash = head.endswith("-") and not head.endswith("--")
         h = head[:-1] if dash else head
+        lead = re.match(r"[.…]*", h).group(0) if dash else ""  # "...FIRE- BLITZ"
+        h = h[len(lead):]
         if re.fullmatch(r"[A-Z]{2,}", h) and re.fullmatch(r"[A-Z]{2,}\W*", tail):
             t = re.match(r"[A-Z]+", tail).group(0)
             whole = h + t
+            if dash and f"{h}-{t}".lower() in keep:
+                parts[i:i + 3] = [f"{lead}{h}-{tail}"]  # a name of the glossary: "JI- HYUN" -> "JI-HYUN"
+                changed += 1
+                continue
             if whole.lower() in common and (dash or t.lower() in SUFFIXES
                                             or not (_known(h, common, names) and _known(t, common, names))):
-                parts[i:i + 3] = [whole + tail[len(t):]]
+                parts[i:i + 3] = [lead + whole + tail[len(t):]]
                 changed += 1
                 continue
             if dash and (t.lower() in HONORIFICS or (_known(h, common, names) and _known(t, common, names))):
-                parts[i:i + 3] = [f"{h}-{tail}"]  # "AZUSA- SAN" -> "AZUSA-SAN", "HIGH- SCHOOL" -> "HIGH-SCHOOL"
+                parts[i:i + 3] = [f"{lead}{h}-{tail}"]  # "AZUSA- SAN" -> "AZUSA-SAN", "HIGH- SCHOOL" -> "HIGH-SCHOOL"
+                changed += 1
+                continue
+            # A tail that is no word of its own is the rest of a name or a cry ("NEP- TUNIANS",
+            # "SHAK- KYYY"), unless it repeats the head, a stutter ("STOP- STOOOOP"), or the head is
+            # a word cut short before a name or a cry ("WAIT- ZORAN!") and the whole is no name.
+            plain = re.sub(r"(.)\1+", r"\1", t).startswith(re.sub(r"(.)\1+", r"\1", h))
+            if (dash and not _known(t, common, names) and not plain
+                    and (not _known(h, common, names) or _known(whole, common, names))):
+                parts[i:i + 3] = [lead + whole + tail[len(t):]]
                 changed += 1
                 continue
         i += 2
@@ -2645,6 +2663,18 @@ def fix_ocr_words(text, keep=()):
                 return word.replace(core, hits.pop())
             if hits:
                 return word  # more than one word fits: leave it to the translator
+        # One digit inside a capital word ("ADMIRA4", "7AMMIT") no pair above covers: any letter may
+        # have been read as it.  Ordinals and units ("4TH", "10PM") have too few letters or two digits,
+        # and a number after a word ("SECTOR7") is not read as a plural "S".
+        digits = re.findall(r"\d", core)
+        if len(digits) == 1 and len(letters) >= DIGIT_WORD_LETTERS:
+            at = core.index(digits[0])
+            hits = {c for c in (core[:at] + ch + core[at + 1:] for ch in string.ascii_uppercase
+                                if not (ch == "S" and at == len(core) - 1))
+                    if c.lower() in common or c.lower() in SLANG}
+            if len(hits) == 1:
+                changed += 1
+                return word.replace(core, hits.pop())
         return word
 
     fixed = re.sub(r"[A-Za-z0-9/|']*[A-Za-z][A-Za-z0-9/|']*", repl, text)
