@@ -245,7 +245,7 @@ async def translate_byok(self, from_lang, to_lang, queries):
     translations = []
     # Avoid the upstream loop which restarts still-running paid requests.
     self.client.max_retries = 0
-    from providers import AI_TIMEOUT
+    from providers import timeout_for
     pool = provider_pool()
     offset = 0
     for prompt, count in self._assemble_prompts(from_lang, to_lang, queries):
@@ -255,7 +255,7 @@ async def translate_byok(self, from_lang, to_lang, queries):
             async def ask(provider, prompt):
                 content = await asyncio.wait_for(
                     self._request_translation(to_lang, prompt, provider_client(pool, provider), provider["model"]),
-                    timeout=AI_TIMEOUT)
+                    timeout=timeout_for(provider))
                 answer, terms = strip_terms(content)
                 extracted = (self.extract_capture_groups(answer, rf"{self.rgx_capture}") or "").strip()
                 return content, extracted, terms

@@ -190,6 +190,26 @@ class TranslateWithPoolTest(unittest.TestCase):
         finally:
             engine_compat.provider_client = original_client
 
+    def test_model_on_this_computer_gets_more_time_than_a_remote_one(self):
+        # A local model loading into memory, or partly on the CPU, took 51 s on its first page and
+        # every page hit the 45 s limit: Ollama rested again and again and no page was translated.
+        import providers
+        local = {"name": "ollama", "base": PRESETS["ollama"]["base"], "model": "gpt-oss:20b", "key": "ollama"}
+
+        async def request(to_lang, prompt, client=None, model=None):
+            await asyncio.sleep(0.05)
+            return "<|1|>Olá!"
+        limits = providers.AI_TIMEOUT, providers.LOCAL_TIMEOUT
+        providers.AI_TIMEOUT, providers.LOCAL_TIMEOUT = 0.01, 5
+        try:
+            engine_compat._POOL = pool(local)[0]
+            self.assertEqual(self.run_page(request, ["Hello!"]), ["Olá!"])
+            engine_compat._POOL = pool(GROQ)[0]
+            with self.assertRaises(AllProvidersResting):
+                self.run_page(request, ["Hello!"])
+        finally:
+            providers.AI_TIMEOUT, providers.LOCAL_TIMEOUT = limits
+
     def test_main_provider_fixes_its_markers_before_the_page_goes_elsewhere(self):
         # op1153-6a: Gemini merged two bubbles on three pages and the weaker reserve took them,
         # writing Spanish and misspelled Portuguese.  Told which marker is missing, it answers right.
@@ -275,8 +295,23 @@ class InstallerTest(unittest.TestCase):
         providers = choose_providers(ask=lambda prompt: next(answers), secret=lambda prompt: next(keys))
         self.assertEqual(providers, [GROQ, GEMINI])
 
+    def test_ollama_is_the_third_choice_after_groq_and_gemini(self):
+        self.assertEqual(list(PRESETS)[:3], ["groq", "gemini", "ollama"])
+
+    def test_installer_says_when_ollama_is_closed_or_the_model_is_missing(self):
+        from setup import ollama_problem
+        tags = {"models": [{"name": "gpt-oss:20b"}, {"name": "gemma3:latest"}]}
+        self.assertIsNone(ollama_problem("gpt-oss:20b", fetch=lambda: tags))
+        self.assertIsNone(ollama_problem("gemma3", fetch=lambda: tags))
+        self.assertIn("ollama pull qwen3:8b", ollama_problem("qwen3:8b", fetch=lambda: tags))
+
+        def closed():
+            raise OSError("connection refused")
+        self.assertIn("não respondeu", ollama_problem("gpt-oss:20b", fetch=closed))
+
     def test_ollama_needs_no_key_and_custom_provider_is_manual(self):
-        answers = iter([f"4,{len(PRESETS) + 1}", "qwen3:8b", "https://api.example.com/v1", "my-model", "n"])
+        ollama = list(PRESETS).index("ollama") + 1
+        answers = iter([f"{ollama},{len(PRESETS) + 1}", "qwen3:8b", "https://api.example.com/v1", "my-model", "n"])
         keys = iter(["custom-provider-key-123456"])
         providers = choose_providers(ask=lambda prompt: next(answers), secret=lambda prompt: next(keys))
         self.assertEqual(providers[0], {"name": "ollama", "base": PRESETS["ollama"]["base"],

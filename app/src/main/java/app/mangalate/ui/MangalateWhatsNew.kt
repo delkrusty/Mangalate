@@ -27,6 +27,7 @@ internal object MangalateWhatsNew {
                 "Sinais e símbolos como \"⁈\", \"♡\" e \"★\" não aparecem mais como quadradinho, e marcas como \"<I>\" que a IA escrevia somem do balão.",
                 "Menos erros de leitura: número no lugar de letra e palavra partida no fim da linha saem certos.",
                 "Em balões estreitos, palavras longas podem ser partidas com hífen no fim da linha, e a letra fica maior.",
+                "No servidor, a tradução pelo Ollama, com a IA rodando no próprio computador, agora funciona. Como erra mais, ele fica de reserva para quando Groq e Gemini chegam ao limite.",
             ),
         ),
         WhatsNewRelease(
