@@ -307,27 +307,40 @@ def half_widths(mask, cx):
     return half
 
 
-def wrap(words, widths, measure, strict=True, sentences=False):
+def wrap(words, widths, measure, strict=True, sentences=False, syllables=False):
     """Greedy wrap into lines of the given widths; None when a word does not fit or lines run out.
 
     ``strict`` also refuses a layout with a dangling word alone on a line (see dangling);
-    ``sentences`` starts a new line after each sentence of two words or more.
+    ``sentences`` starts a new line after each sentence of two words or more; ``syllables``
+    cuts a word wider than its whole line at a syllable ("...transfor-" / "mando").
     """
     lines, current, sentence = [], "", 0
-    for word in words:
-        trial = f"{current} {word}" if current else word
+    # A word with its own hyphen may end a line there ("fogo-" / "Blitz!!"), as a letterer does.
+    pieces = [(part, k > 0, True) for word in words for k, part in enumerate(hyphen_pieces(word))]
+    while pieces:
+        word, glued, cuttable = pieces.pop(0)
+        trial = (f"{current}{word}" if glued else f"{current} {word}") if current else word
         if sentences and current and sentence >= 2 and SENTENCE_END.search(current):
             trial = None  # "...levarem ela?" ends its line; a one-word "Sim." may share one
         sentence = 1 if SENTENCE_END.search(current or ".") else sentence + 1
         if trial and measure(trial) <= widths[len(lines)]:
             current = trial
             continue
-        if not current:
+        if current:
+            lines.append(current)
+            current = ""
+            if len(lines) >= len(widths):
+                return None
+        if measure(word) <= widths[len(lines)]:
+            current = word
+            continue
+        cut = syllable_cut(word, widths[len(lines)], measure) if syllables and cuttable else None
+        if cut is None:
             return None  # the word alone is wider than its line
-        lines.append(current)
-        if len(lines) >= len(widths) or measure(word) > widths[len(lines)]:
+        lines.append(word[:cut] + "-")
+        if len(lines) >= len(widths):
             return None
-        current = word
+        pieces.insert(0, (word[cut:], False, False))  # one cut a word: "ines-" / "capá-" / "vel" reads as noise
     if current:
         lines.append(current)
     if strict and len(lines) > 1 and any(dangling(line) for line in lines):
@@ -336,6 +349,98 @@ def wrap(words, widths, measure, strict=True, sentences=False):
 
 
 SENTENCE_END = re.compile(r"[.!?…]$")
+# After the hyphen of "bem-vindo", never in "--" nor before a pronoun ("salvá-la", "dar-lhes").
+HYPHEN_BREAK = re.compile(r"(?<=[^\W\d_]{2}-)(?=[^\W\d_]{4})(?!lhes(?![^\W\d_]))", re.I)
+
+
+def hyphen_pieces(word):
+    """``word`` split after its own hyphens, keeping a stutter whole: "V-você", "Nã-não"."""
+    pieces = []
+    for part in HYPHEN_BREAK.split(word):
+        head = re.sub(r"[\W\d_]", "", pieces[-1]).lower() if pieces else ""
+        if head and re.sub(r"[\W\d_]", "", part).lower().startswith(head):
+            pieces[-1] += part
+        else:
+            pieces.append(part)
+    return pieces
+
+
+HYPHEN_SIDE = 3     # letters kept on each side of a syllable cut ("inesca-" / "pável"), as typesetters do
+HYPHEN_WORD = 8     # only words this long are cut: "cer-" / "teza" and "ver-" / "dade" read choppy
+HYPHEN_GAIN = 1.15  # syllable cuts are used only when they let the letters grow at least this much...
+HYPHEN_BELOW = 0.85  # ...from below this share of the original size, and never past the original
+_PATTERNS = None
+
+
+def _patterns():
+    """The pt-BR hyphenation patterns (DivSilab, server/words/hyph_pt_BR) as a trie; empty when missing."""
+    global _PATTERNS
+    if _PATTERNS is None:
+        from pathlib import Path
+        root = {}
+        try:
+            text = (Path(__file__).resolve().parent / "words" / "hyph_pt_BR" / "hyph_pt_BR.dic").read_text(encoding="utf-8")
+        except OSError:
+            text = ""
+        for raw in text.splitlines():
+            pattern = raw.strip()
+            if not pattern or pattern == "UTF-8" or pattern.startswith("%"):
+                continue
+            letters, weights = "", [0]
+            for c in pattern:
+                if c.isdigit():
+                    weights[-1] = int(c)
+                else:
+                    letters += c
+                    weights.append(0)
+            node = root
+            for c in letters:
+                node = node.setdefault(c, {})
+            node[None] = weights
+        _PATTERNS = root
+    return _PATTERNS
+
+
+def syllable_breaks(word):
+    """Where a Portuguese word may be cut at the end of a line (Liang's patterns), as letter counts.
+
+    Only lower-case words of letters alone: a capital may start a name ("Shakuyaku"), which
+    is never cut.
+    """
+    if len(word) < HYPHEN_WORD or not word.isalpha() or not word.islower():
+        return []
+    padded = f".{word}."
+    weights = [0] * (len(padded) + 1)
+    trie = _patterns()
+    for start in range(len(padded)):
+        node = trie
+        for end in range(start, len(padded)):
+            node = node.get(padded[end])
+            if node is None:
+                break
+            for i, weight in enumerate(node.get(None, ())):
+                weights[start + i] = max(weights[start + i], weight)
+    return [k for k in range(HYPHEN_SIDE, len(word) - HYPHEN_SIDE + 1) if weights[k + 1] % 2]
+
+
+def syllable_cut(word, width, measure):
+    """The longest head of ``word`` that, cut at a syllable with its hyphen, fits ``width``; else None."""
+    letters = [i for i, c in enumerate(word) if c.isalpha()]
+    if not letters:
+        return None
+    start, end = letters[0], letters[-1] + 1
+    fits = [k for k in reversed(syllable_breaks(word[start:end])) if measure(word[:start + k] + "-") <= width]
+    core = word[start:end].lower()
+    apart = [k for k in fits if not (core[k - 1] in VOWELS and core[k] in VOWELS)]
+    return start + (apart or fits)[0] if fits else None
+
+
+VOWELS = set("aeiouáéíóúâêôãõàü")
+
+
+def syllable_cuts(lines, words):
+    """How many of ``lines`` end in a syllable cut, not in a word's own hyphen ("fogo-")."""
+    return sum(line.count("-") for line in lines) - sum(word.count("-") for word in words)
 
 
 def dangling(line):
@@ -351,7 +456,7 @@ DANGLING = set("a o as os à ao um uma e é de da do das dos em no na nos nas qu
                "com sem mas ou nem".split())
 
 
-def shaped(half, centre_x, rows, text, font, spacing=LINE_SPACING, strict=True, sentences=False):
+def shaped(half, centre_x, rows, text, font, spacing=LINE_SPACING, strict=True, sentences=False, syllables=False):
     """Fewest balanced lines of ``text`` that follow the interior; (lines, top, slot, advance) or None.
 
     ``half`` comes from half_widths, ``rows`` = (top, bottom) of the interior
@@ -374,21 +479,47 @@ def shaped(half, centre_x, rows, text, font, spacing=LINE_SPACING, strict=True, 
             y1 = int(round(top + i * advance + slot))
             span = half[max(0, y0):max(0, y1)]
             widths.append(2 * int(span.min()) if len(span) and span.min() > 0 else 0)
-        if min(widths) <= 0 or wrap(words, widths, font, strict, sentences) is None:
+        full = wrap(words, widths, font, strict, sentences, syllables) if min(widths) > 0 else None
+        if full is None:
             continue
-        # Balance: the narrowest widths that still hold the text in n lines.
+        # Balance: the narrowest widths that still hold the text in n lines (with no more words cut).
+        cuts = syllable_cuts(full, words)
         lo, hi = 0.3, 1.0
         for _ in range(BALANCE_STEPS):
             mid = (lo + hi) / 2
-            if wrap(words, [w * mid for w in widths], font, strict, sentences) is not None:
+            trial = wrap(words, [w * mid for w in widths], font, strict, sentences, syllables)
+            if trial is not None and syllable_cuts(trial, words) <= cuts:
                 hi = mid
             else:
                 lo = mid
-        lines = wrap(words, [w * hi for w in widths], font, strict, sentences) or wrap(words, widths, font, strict, sentences)
+        lines = wrap(words, [w * hi for w in widths], font, strict, sentences, syllables) if hi < 1.0 else None
+        if lines is None or syllable_cuts(lines, words) > cuts:
+            lines = full
         if len(lines) < n:
             continue  # fewer lines would sit elsewhere; the smaller n already failed there
         return lines, top, slot, advance
     return None
+
+
+# Symbols the comic font lacks ("♡", "★", "♪": One Piece 1161 p5 drew a box for "♡") are
+# drawn in the first of these the image has (DejaVu comes with fonts-dejavu-core).
+SYMBOL_FONT = next((p for p in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", FONTS["simples"])
+                    if os.path.exists(p)), None)
+_GLYPHS = {}
+
+
+def _has_glyph(font, ch, cache=_GLYPHS):
+    """True when ``font`` draws ``ch``, not the box (or blank) it draws for a character it lacks."""
+    key = (font.path, ch)
+    if key not in cache:
+        from PIL import Image, ImageDraw
+
+        def ink(c):
+            im = Image.new("L", (2 * font.size, 2 * font.size), 0)
+            ImageDraw.Draw(im).text((0, 0), c, font=font, fill=255)
+            return np.asarray(im)
+        cache[key] = ch.isspace() or not np.array_equal(ink(ch), ink("\uffff"))
+    return cache[key]
 
 
 class Measure:
@@ -397,22 +528,46 @@ class Measure:
     _cache = {}
 
     def __init__(self, path, size):
-        from PIL import ImageFont
-        key = (path, size)
-        if key not in Measure._cache:
-            Measure._cache[key] = ImageFont.truetype(path, size)
-        self.font = Measure._cache[key]
+        self.font = Measure._load(path, size)
         self.size = size
         x0, y0, x1, y1 = self.font.getbbox(REFERENCE)
         self.offset = y0
         self.slot = y1 - y0
 
+    @staticmethod
+    def _load(path, size):
+        from PIL import ImageFont
+        key = (path, size)
+        if key not in Measure._cache:
+            Measure._cache[key] = ImageFont.truetype(path, size)
+        return Measure._cache[key]
+
+    def runs(self, text):
+        """``text`` as (piece, font) runs: a symbol the font lacks goes to SYMBOL_FONT when that one has it."""
+        out = []
+        for ch in text:
+            font = self.font
+            if ord(ch) > 127 and SYMBOL_FONT and not _has_glyph(font, ch):
+                symbols = Measure._load(SYMBOL_FONT, self.size)
+                if _has_glyph(symbols, ch):
+                    font = symbols
+            if out and out[-1][1] is font:
+                out[-1][0] += ch
+            else:
+                out.append([ch, font])
+        return [(piece, font) for piece, font in out]
+
     def __call__(self, text):
-        return self.font.getlength(text)
+        return sum(font.getlength(piece) for piece, font in self.runs(text))
 
 
-def plan_shaped(image, region_box, others, text, font_path, original_size, minimum, offset=0):
-    """Font size and lines that follow the bubble; None to use the rectangle plan."""
+def plan_shaped(image, region_box, others, text, font_path, original_size, minimum, offset=0, syllables=True):
+    """Font size and lines that follow the bubble; None to use the rectangle plan.
+
+    With ``syllables`` a long word may be cut at a syllable when that lets the letters grow
+    by HYPHEN_GAIN (One Piece 1161 p4: "...transformando" whole in a narrow caption column
+    left the letters at half the original size).
+    """
     found = bubble_mask(image, region_box, others)
     if found is None or not font_path:
         return None
@@ -440,9 +595,10 @@ def plan_shaped(image, region_box, others, text, font_path, original_size, minim
     floor = max(1, int(minimum))
     cap = max(floor, int(round(original_size * SHAPED_MAX_SCALE)) + int(offset))
 
-    def largest(strict, sentences=False):
+    def largest(strict, sentences=False, cut=False, cap=cap):
         def attempt(size):
-            return shaped(half, cx, (top, bottom), text, Measure(font_path, size), strict=strict, sentences=sentences)
+            return shaped(half, cx, (top, bottom), text, Measure(font_path, size), strict=strict, sentences=sentences,
+                          syllables=cut)
         if attempt(floor) is None:
             return None
         lo, hi = floor, cap
@@ -458,15 +614,26 @@ def plan_shaped(image, region_box, others, text, font_path, original_size, minim
     # the original: a new line for each
     # sentence (TBATE 236 p13: "levarem ela? Por / favor, vem."), then no dangling
     # word (236 p15: "Ela tava / bem, mas..." would otherwise shrink to one tiny line).
-    loose = largest(False)
-    if loose is None:
+    def preferred(cut=False, cap=cap):
+        loose = largest(False, cut=cut, cap=cap)
+        if loose is None:
+            return None
+        for (strict, sentences), cost in (((True, True), SENTENCE_COST), ((True, False), DANGLING_COST)):
+            found = largest(strict, sentences, cut, cap)
+            if found is not None and found[0] >= min(cost * loose[0], original_size):
+                return found
+        return loose
+
+    best = preferred()
+    # Worth a try only with a word that can be cut and room for the letters to grow.
+    can_cut = syllables and any(syllable_breaks(re.sub(r"[^\w]", "", word)) for word in text.split())
+    limit = max(floor, min(cap, int(round(original_size))))
+    small = best is None or best[0] < HYPHEN_BELOW * original_size
+    cut = preferred(True, limit) if can_cut and small and (best is None or HYPHEN_GAIN * best[0] <= limit) else None
+    if cut is not None and syllable_cuts(cut[1][0], text.split()) and (best is None or cut[0] >= HYPHEN_GAIN * best[0]):
+        best = cut
+    if best is None:
         return None
-    best = loose
-    for (strict, sentences), cost in (((True, True), SENTENCE_COST), ((True, False), DANGLING_COST)):
-        found = largest(strict, sentences)
-        if found is not None and found[0] >= min(cost * loose[0], original_size):
-            best = found
-            break
     lo, (lines, block_top, slot, advance) = best
     width = max(Measure(font_path, lo)(line) for line in lines)
     x, top = cx + wx0, block_top + wy0
@@ -530,8 +697,11 @@ def draw_shaped(img, plan, fg, bg):
     for i, (line, lw) in enumerate(zip(plan["lines"], widths)):
         x = plan["x"] - lw / 2 - left
         y = plan["top"] + i * plan["advance"] - plan.get("offset", measure.offset) - top
-        draw.text((x, y), line, font=measure.font, fill=tuple(int(c) for c in fg) + (255,),
-                  stroke_width=stroke, stroke_fill=tuple(int(c) for c in bg) + (255,) if stroke else None)
+        base = y + measure.font.getmetrics()[0]
+        for piece, font in measure.runs(line):  # on one baseline when a symbol comes from SYMBOL_FONT
+            draw.text((x, base), piece, font=font, anchor="ls", fill=tuple(int(c) for c in fg) + (255,),
+                      stroke_width=stroke, stroke_fill=tuple(int(c) for c in bg) + (255,) if stroke else None)
+            x += font.getlength(piece)
     box = np.asarray(layer)
     cx0, cy0, cx1, cy1 = max(0, left), max(0, top), min(w, left + width), min(h, top + height)
     if cx1 <= cx0 or cy1 <= cy0:

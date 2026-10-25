@@ -24,8 +24,9 @@ internal object MangalateWhatsNew {
                 "Gritos esticados como \"NOOOO\" e \"YEAAAH\" são traduzidos; gritos que se leem igual em português, como \"AAAAH\", ficam como desenhados.",
                 "Falas curtas que a IA devolvia em inglês, como \"AH..\", risadas e sons, agora aparecem no balão.",
                 "Português mais cuidadoso: a IA tenta de novo quando escreve em espanhol, erra o gênero, repete palavra ou erra o formato, e nomes de lugares ficam iguais no capítulo todo.",
-                "Sinais como \"⁈\" não aparecem mais como quadradinho.",
+                "Sinais e símbolos como \"⁈\", \"♡\" e \"★\" não aparecem mais como quadradinho, e marcas como \"<I>\" que a IA escrevia somem do balão.",
                 "Menos erros de leitura: número no lugar de letra e palavra partida no fim da linha saem certos.",
+                "Em balões estreitos, palavras longas podem ser partidas com hífen no fim da linha, e a letra fica maior.",
             ),
         ),
         WhatsNewRelease(

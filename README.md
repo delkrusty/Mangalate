@@ -57,6 +57,6 @@ Os testes do servidor estão em `server/tests` (`python -m unittest discover ser
 - Base: [Mihon](https://github.com/mihonapp/mihon) (Apache 2.0).
 - Tradução no celular: Google ML Kit. Fonte Comic Neue (SIL OFL 1.1). Ícones Material Symbols (Apache 2.0).
 - Servidor: [manga-image-translator](https://github.com/zyddnys/manga-image-translator) (GPL-3.0), rodando como serviço separado.
-- Divisão silábica: [DivSilab/LibreOffice](https://github.com/LibreOffice/dictionaries/tree/master/pt_BR), de Raimundo Santos Moura (MPL), sem modificações, em `app/src/main/assets/lettering/`.
+- Divisão silábica: [DivSilab/LibreOffice](https://github.com/LibreOffice/dictionaries/tree/master/pt_BR), de Raimundo Santos Moura (MPL), sem modificações, em `app/src/main/assets/lettering/` e `server/words/hyph_pt_BR/`.
 
 O aplicativo usa a licença Apache 2.0 ([LICENSE](LICENSE)). A adaptação `server/engine_compat.py` é GPL-3.0, como o motor que ela adapta; a licença do motor fica em [server/LICENSE.engine](server/LICENSE.engine) e dentro das imagens Docker. Os modelos baixados têm licenças próprias.
