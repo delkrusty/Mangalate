@@ -201,6 +201,27 @@ class BackgroundTest(unittest.TestCase):
         far = ~cv2.dilate(lines.astype(np.uint8), np.ones((21, 21), np.uint8)).astype(bool)
         self.assertFalse(allowed[far].any())                      # the page around stays
 
+    def logo(self):
+        """Lettering five times taller than a speech, crossed by the lines of its ornaments."""
+        image, letters = page(size=(800, 600)), page(size=(800, 600))
+        for canvas in (image, letters):
+            cv2.putText(canvas, "LOGO", (150, 420), cv2.FONT_HERSHEY_SIMPLEX, 5.0, (0, 0, 0), 28, cv2.LINE_AA)
+        for x in (170, 260, 350, 440, 530):
+            cv2.line(image, (x + 20, 150), (x - 20, 600), (0, 0, 0), 3, cv2.LINE_AA)
+        return image, text_mask(letters, (255, 255, 255)), [quad(140, 271, 560, 434)]
+
+    def test_logo_crossed_by_its_ornaments_is_a_drawn_title(self):
+        # One Piece 1161 p2: the series logo on a blank page read as lettering crossed by
+        # strokes; it was cleaned and written over as "One Piece".
+        image, mask, quads = self.logo()
+        self.assertEqual(classify_region(image, mask, quads)["kind"], "tracos")
+        self.assertTrue(quality.drawn_title(image.shape, quads))
+        # Speech over the drawing, and letters stacked one per row in a tall bubble, are not.
+        speech = self.strands(page(size=(420, 260)))
+        _, lines = self.paragraph(speech)
+        self.assertFalse(quality.drawn_title(speech.shape, lines))
+        self.assertFalse(quality.drawn_title((1145, 784), [quad(112, 370, 149, 572)]))  # Grand Blue 102 p20 "GUYS!"
+
     def test_tight_bubble_and_one_crossing_line_stay_interior(self):
         # The outline runs along the margin, and a panel border (Grand Blue 102 p3) or a
         # tail crosses it only on two sides: still a bubble.
@@ -449,6 +470,79 @@ class PipelineHookTest(unittest.TestCase):
         self.assertEqual([r.name for r in kept], ["tracos"])
         self.assertEqual(region.mangalate_background["kind"], "tracos")
 
+    def test_lines_kept_as_drawn_are_never_cleaned(self):
+        # Grand Blue 102 p4: the box of a translated title ran onto the small print of a form
+        # kept as drawn, and its mask erased words of that print.
+        from types import SimpleNamespace
+        title = SimpleNamespace(lines=np.array([[[100, 20], [300, 20], [300, 66], [100, 66]]]))
+        form = SimpleNamespace(lines=np.array([[[40, 60], [360, 60], [360, 74], [40, 74]],
+                                               [[40, 78], [360, 78], [360, 92], [40, 92]]]))
+        keep = quality.kept_lines((200, 400), [form], [title])
+        self.assertTrue(keep[82, 50] and keep[66, 350])            # the small print stays...
+        self.assertTrue(keep[63, 200])                             # ...also where the title box ran onto it
+        self.assertFalse(keep[35, 200])                            # the title is cleaned
+        self.assertTrue(keep[56, 350])                             # with a ring around the print...
+        self.assertFalse(keep[56, 200])                            # ...that never reaches into the title
+        # A kept box lying inside the translated lines is a duplicate of that speech, and a kept box
+        # around the whole speech (read as a sound effect) is the same text: both cleaned with it.
+        duplicate = SimpleNamespace(lines=np.array([[[120, 30], [280, 30], [280, 50], [120, 50]]]))
+        self.assertFalse(quality.kept_lines((200, 400), [duplicate], [title]).any())
+        around = SimpleNamespace(lines=np.array([[[90, 10], [310, 10], [310, 76], [90, 76]]]))
+        self.assertFalse(quality.kept_lines((200, 400), [around], [title]).any())
+        self.assertFalse(quality.kept_lines((200, 400), [], [title]).any())
+
+    def test_tall_kept_column_does_not_unmask_the_speech_beside_it(self):
+        # Grand Blue 106 p38: a tall vertical sound effect kept as drawn next to a bubble.  A ring
+        # as wide as its "line height" (the whole column) took the overhanging tips, comma and
+        # "!" of the speech out of the mask, and they stayed in English.
+        from types import SimpleNamespace
+        column = SimpleNamespace(lines=np.array([[[300, 20], [340, 20], [340, 420], [300, 420]]]))
+        speech = SimpleNamespace(lines=np.array([[[120, 200], [280, 200], [280, 222], [120, 222]]]))
+        keep = quality.kept_lines((450, 400), [column], [speech])
+        self.assertTrue(keep[200, 320])                            # the column stays
+        self.assertFalse(keep[226, 200])                           # a tail just under the speech box is still cleaned
+        self.assertFalse(keep[210, 285])                           # and a "!" just past its end
+        self.assertLessEqual(int(keep[200, 340:].sum()), quality.KEEP_RING_MAX + 1)  # the ring is a few px
+
+    def test_stroke_crossing_both_boxes_goes_with_the_block_holding_most_of_it(self):
+        # Grand Blue 102 p6: the box of a vertical sound effect kept as drawn ran over the bottom
+        # of "SMILE" (translated): those letters stayed half masked.  Grand Blue 102 p4: the "y"
+        # of the small print ran into the title's box and lost its tip.
+        from types import SimpleNamespace
+        gray = np.full((200, 300), 255, np.uint8)
+        gray[60:80, 100:110] = 0                                   # a letter of the speech, its foot in the column box
+        gray[110:150, 200:204] = 0                                 # a stroke of the kept print, its tip in the speech box
+        speech = SimpleNamespace(lines=np.array([[[90, 58], [210, 58], [210, 76], [90, 76]]]))
+        column = SimpleNamespace(lines=np.array([[[95, 74], [130, 74], [130, 190], [95, 190]]]))
+        print_ = SimpleNamespace(lines=np.array([[[150, 116], [260, 116], [260, 150], [150, 150]]]))
+        keep = quality.kept_lines(gray.shape, [column, print_], [speech], gray)
+        self.assertFalse(keep[60:80, 100:110].any())               # the letter of the speech is cleaned whole
+        self.assertTrue(keep[110:150, 200:204].all())              # the stroke of the print is kept whole
+        self.assertTrue(keep[150, 112])                            # the rest of the column stays
+
+    def test_drawn_title_stays_as_drawn(self):
+        import asyncio
+        from types import SimpleNamespace
+        from engine_compat import classify_regions
+        image, mask, quads = BackgroundTest.logo(None)
+        region = SimpleNamespace(name="logo", lines=np.array(quads), text="LOGO")
+        async def merge(self, config, ctx):
+            return [region]
+        ctx = SimpleNamespace(img_rgb=image, mask_raw=mask)
+        config = SimpleNamespace(ocr=SimpleNamespace(ignore_bubble=8))
+        kept = asyncio.run(classify_regions(merge)(None, config, ctx))
+        self.assertEqual(kept, [])
+        self.assertEqual(region.mangalate_background["kind"], "logo")
+        self.assertEqual(ctx.mangalate_preserved, [region])
+        # The same lettering read as a line of English is a big shout over speed lines: translated.
+        shout = SimpleNamespace(name="grito", lines=np.array(quads), text="GET OUT!!")
+        async def merge_shout(self, config, ctx):
+            return [shout]
+        ctx = SimpleNamespace(img_rgb=image, mask_raw=mask)
+        kept = asyncio.run(classify_regions(merge_shout)(None, config, ctx))
+        self.assertEqual([r.name for r in kept], ["grito"])
+        self.assertEqual(shout.mangalate_background["kind"], "tracos")
+
 
 class DetectionFallbackTest(unittest.TestCase):
     class Detector(str):
@@ -537,6 +631,26 @@ class LineRepairTest(unittest.TestCase):
         lines = [(20, 20, 160, 40), (20, 250, 160, 270)]
         repaired, changes = repair_lines(mask, lines + [(85, 15, 125, 215)])
         self.assertEqual([c for c in changes if c[0] == "split"], [])
+
+    def test_square_box_of_wide_lines_is_split(self):
+        # One Piece 1153 p6 "YES, / MAJESTY / !!", Grand Blue 106 p22 "CON- / DOMS / ?!": one box as
+        # tall as wide held three short lines; it was taken for vertical lettering, not split, and
+        # the OCR dropped it.  Lines of one letter ("I" over "KNEW IT.") stay horizontal.
+        mask = np.zeros((320, 300), np.uint8)
+        lines = [(20, 20, 280, 40), (20, 280, 280, 300)]          # the page's usual lines
+        rows = []
+        for i, text in enumerate(["I", "KNEW", "IT."]):
+            (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
+            x, y = 150 - w // 2, 120 + i * 34
+            cv2.putText(mask, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.9, 255, 2)
+            rows.append((x, y - h, x + w, y))
+        box = (min(r[0] for r in rows) - 4, rows[0][1] - 4, max(r[2] for r in rows) + 4, rows[-1][3] + 4)
+        self.assertLessEqual(box[2] - box[0], box[3] - box[1])    # as tall as wide
+        repaired, changes = repair_lines(mask, lines + [box])
+        self.assertEqual([kind for kind, _, _ in changes if kind == "split"], ["split"])
+        parts = sorted((b for b, source in repaired if source == 2), key=lambda b: b[1])
+        self.assertEqual(len(parts), 3)
+        self.assertTrue(all(b[2] - b[0] >= b[3] - b[1] for b in parts), parts)  # all horizontal
 
     def test_far_away_blob_is_not_a_line(self):
         mask, boxes = self.bubble_mask()
@@ -737,6 +851,203 @@ class LineRepairTest(unittest.TestCase):
         self.assertEqual(len(ctx.mangalate_line_repairs), 1)
         self.assertIs(result[1], mask)
 
+    def run_hook(self, mask, lines):
+        import asyncio
+        import types
+        from types import SimpleNamespace
+        from engine_compat import repair_textlines
+        fake = types.ModuleType("manga_translator.utils")
+        fake.Quadrilateral = self.Quad
+        package = types.ModuleType("manga_translator")
+        package.utils = fake
+        async def detect(self, config, ctx):
+            return lines, mask, mask
+        ctx = SimpleNamespace(img_rgb=np.zeros(mask.shape + (3,), np.uint8))
+        saved = {k: sys.modules.get(k) for k in ("manga_translator", "manga_translator.utils")}
+        sys.modules.update({"manga_translator": package, "manga_translator.utils": fake})
+        try:
+            return asyncio.run(repair_textlines(detect)(None, None, ctx))[0]
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    sys.modules.pop(key, None)
+                else:
+                    sys.modules[key] = value
+
+    class Quad:
+        def __init__(self, pts, text, prob, direction="h"):
+            self.pts, self.text, self.prob, self.direction = np.asarray(pts), text, prob, direction
+
+    def test_square_vertical_box_of_short_lines_is_split(self):
+        # Grand Blue 106 p22: "CON- / DOMS / ?!" in a narrow bubble came as one box a little
+        # taller than wide, called vertical; it never reached the line repair and was misread.
+        mask = np.zeros((320, 300), np.uint8)
+        lines = [self.Quad(quad(20, 20, 280, 40), "", 0.9), self.Quad(quad(20, 280, 280, 300), "", 0.9)]
+        rows = []
+        for i, text in enumerate(["CON-", "DOMS", "?!"]):
+            (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
+            x, y = 150 - w // 2, 120 + i * 34
+            cv2.putText(mask, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.9, 255, 2)
+            rows.append((x, y - h, x + w, y))
+        x0, x1 = min(r[0] for r in rows) - 2, max(r[2] for r in rows) + 2
+        box = self.Quad(quad(x0, rows[0][1] - 4, x1, rows[-1][3] + 4), "", 0.9, "v")
+        result = self.run_hook(mask, lines + [box])
+        self.assertNotIn(box, result)
+        self.assertEqual(len(result), 5)
+        # A column of single letters (a vertical sound effect) comes back as it was.
+        column = np.zeros((320, 300), np.uint8)
+        for i, letter in enumerate("BOOM"):
+            cv2.putText(column, letter, (140, 90 + i * 40), cv2.FONT_HERSHEY_SIMPLEX, 1.2, 255, 3)
+        sound = self.Quad(quad(130, 55, 185, 255), "", 0.9, "v")
+        result = self.run_hook(column, lines + [sound])
+        self.assertIn(sound, result)
+
+    def test_square_vertical_box_never_takes_the_lines_of_its_neighbour(self):
+        # One Piece 1161 p4: a "vertical" box over "...TO / FIND" beside a box over "FIND / US A /
+        # BOAT!".  Checked together, it hid "FIND" from its neighbour's split and the speech came
+        # out as "US A BOAT!".  When it does not split, the lines around it are the same as without it.
+        mask = np.zeros((360, 300), np.uint8)
+        lines = [self.Quad(quad(20, 20, 280, 40), "", 0.9), self.Quad(quad(20, 320, 280, 340), "", 0.9)]
+        rows = []
+        for i, text in enumerate(["...TO", "FIND", "US A", "BOAT!"]):
+            (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
+            x, y = 150 - w // 2, 120 + i * 30
+            cv2.putText(mask, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, 255, 2)
+            rows.append((x, y - h, x + w, y))
+        x0, x1 = min(r[0] for r in rows) - 6, max(r[2] for r in rows) + 6
+        below = self.Quad(quad(x0, rows[1][1] + 5, x1, rows[3][3] + 4), "", 0.9)
+        above = self.Quad(quad(x0 + 4, rows[0][1] - 6, x1 - 4, rows[1][3] + 6), "", 0.9, "v")
+        def boxes(result):
+            return sorted(tuple(int(v) for v in np.asarray(q.pts).min(axis=0)) + tuple(int(v) for v in np.asarray(q.pts).max(axis=0))
+                          for q in result if q is not above)
+        without = boxes(self.run_hook(mask, lines + [below]))
+        self.assertEqual(boxes(self.run_hook(mask, lines + [below, above])), without)
+
+
+class LostLineTest(unittest.TestCase):
+    """Lines of a speech that fell out of its region (triagem op1161, group 2)."""
+
+    def test_dropped_box_over_the_line_above_is_trimmed_and_read_again(self):
+        # One Piece 1161 p8: the box of "HIM?!" also covered the bottom of "TO FIGHT" and a vein.
+        kept = [(77, 576, 135, 596), (66, 598, 147, 617), (67, 615, 145, 643)]
+        lost = (47, 632, 135, 669)
+        self.assertEqual(quality.near_lines([lost], kept), [])                    # too tall as it was
+        trimmed = quality.trim_lost(lost, kept)
+        self.assertEqual(trimmed, (47, 643, 135, 669))
+        self.assertEqual(quality.near_lines([trimmed], kept), [0])
+        # A line beside the paragraph, not under it, keeps its box.
+        self.assertEqual(quality.trim_lost((300, 600, 380, 640), kept), (300, 600, 380, 640))
+
+    def test_two_boxes_of_the_same_line_become_one(self):
+        # One Piece 1161 p4: a small box inside a large one both fit "PIRATES": read twice.
+        mask = np.zeros((300, 400), np.uint8)
+        cv2.putText(mask, "PIRATES", (120, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.9, 255, 2)
+        (w, h), _ = cv2.getTextSize("PIRATES", cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
+        lines = [(20, 20, 380, 44), (20, 240, 380, 264)]
+        full, inner = (118, 120 - h - 3, 122 + w, 124), (180, 120 - h, 230, 122)
+        repaired, _ = repair_lines(mask, lines + [full, inner])
+        boxes = [b for b, _ in repaired if b[1] > 60 and b[3] < 200]
+        self.assertEqual(len(boxes), 1, repaired)
+        # Two different lines close together stay two.
+        cv2.putText(mask, "AHOY", (150, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.9, 255, 2)
+        (w2, h2), _ = cv2.getTextSize("AHOY", cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
+        repaired, _ = repair_lines(mask, lines + [full, (148, 160 - h2 - 3, 152 + w2, 164)])
+        self.assertEqual(len([b for b, _ in repaired if b[1] > 60 and b[3] < 200]), 2)
+
+    def test_two_boxes_of_the_same_line_keep_the_whole_line(self):
+        # Grand Blue 102 p4: the box kept was the shorter one, and the title came out as "Mayuts".
+        mask = np.zeros((300, 400), np.uint8)
+        cv2.putText(mask, "CHURCH", (100, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.9, 255, 2)
+        (w, h), _ = cv2.getTextSize("CHURCH", cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
+        lines = [(20, 20, 380, 44), (20, 240, 380, 264)]
+        short, full = (100, 120 - h - 2, 100 + w - 12, 123), (98, 120 - h - 3, 102 + w, 124)
+        for order in ([short, full], [full, short]):
+            repaired, changes = repair_lines(mask, lines + order)
+            # Every change lists its boxes after the repair (the diagnostics draw each one).
+            self.assertTrue(all(len(b) == 4 for _, _, after in changes for b in after), changes)
+            boxes = [b for b, _ in repaired if 60 < b[1] < 200]
+            self.assertEqual(len(boxes), 1, repaired)
+            self.assertGreaterEqual(boxes[0][2], 100 + w - 2, boxes)      # the end of the word is in
+
+    def test_punctuation_beside_the_word_on_its_row_is_its_end(self):
+        # "WHAT" and "?!" in two boxes on one row: the engine used to join them.
+        self.assertEqual(quality.punctuation_owners([(100, 50, 160, 70), (164, 50, 180, 70)], ["WHAT", "?!"]), {1: 0})
+        # Far along the row it is not.
+        self.assertEqual(quality.punctuation_owners([(100, 50, 160, 70), (260, 50, 276, 70)], ["WHAT", "?!"]), {})
+        # Right before a word on its row, it is not that word's end.
+        self.assertEqual(quality.punctuation_owners([(100, 50, 160, 70), (82, 50, 96, 70)], ["WHAT", "!!"]), {})
+
+    def test_one_glyph_marks_are_plain_punctuation_before_translation(self):
+        from types import SimpleNamespace
+        from engine_compat import fix_ocr
+        regions = [SimpleNamespace(text="DAD ⁈"), SimpleNamespace(text="WAIT‼ WHAT⁉ HUH⁇")]
+        fix_ocr(regions)
+        self.assertEqual([r.text for r in regions], ["DAD ?!", "WAIT!! WHAT!? HUH??"])
+
+    def test_punctuation_line_ends_the_speech_above_it(self):
+        # One Piece 1161 p5: "URGH" over a taller "...!!": dropped as text with no letters.
+        boxes = [(322, 464, 385, 492), (323, 484, 384, 527), (500, 100, 600, 130)]
+        texts = ["URGH", "...!", "HELLO"]
+        self.assertEqual(quality.punctuation_owners(boxes, texts), {1: 0})
+        # Punctuation far from any speech, or a line with letters, joins nothing.
+        self.assertEqual(quality.punctuation_owners([(10, 10, 60, 40), (300, 600, 350, 640)], ["HEY", "!!"]), {})
+        self.assertEqual(quality.punctuation_owners(boxes[:1] + [(323, 494, 384, 520)], ["URGH", "OH!"]), {})
+        # "WHAT" over a lone "⁈" (One Piece 1161 p7) is punctuation too.
+        self.assertEqual(quality.punctuation_owners([(612, 31, 662, 50), (628, 55, 646, 73)], ["WHAT", "⁈"]), {1: 0})
+
+
+    def test_punctuation_joins_only_a_kept_speech_after_the_art_decision(self):
+        from functools import cached_property
+        from types import SimpleNamespace
+        from engine_compat import end_punctuation, set_aside_punctuation
+
+        class Block:
+            def __init__(self, box, text):
+                x0, y0, x1, y1 = box
+                self.lines = np.array([[[x0, y0], [x1, y0], [x1, y1], [x0, y1]]], np.int32)
+                self.text, self.texts = text, [text]
+
+            @cached_property
+            def xyxy(self):
+                return np.array([self.lines[..., 0].min(), self.lines[..., 1].min(),
+                                 self.lines[..., 0].max(), self.lines[..., 1].max()])
+
+        def line(box, text):
+            x0, y0, x1, y1 = box
+            return SimpleNamespace(pts=np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]), text=text, direction="h")
+        word, dots = line((322, 464, 385, 492), "URGH"), line((323, 484, 384, 527), "...!")
+        ctx = SimpleNamespace(textlines=[word, dots])
+        set_aside_punctuation(ctx)
+        self.assertEqual(ctx.textlines, [word])                    # the engine never sees the dots
+        speech = Block((322, 464, 385, 492), "URGH")
+        speech.xyxy
+        end_punctuation(ctx, [speech])
+        self.assertEqual(speech.text, "URGH ...!")
+        self.assertEqual(len(speech.lines), 2)                     # one box per line
+        self.assertEqual(int(speech.xyxy[3]), 527)                 # the cached box was refreshed
+        # With no kept speech near it (the word went to the art), nothing is joined.
+        ctx = SimpleNamespace(textlines=[word, dots])
+        set_aside_punctuation(ctx)
+        far = Block((600, 100, 700, 130), "HELLO")
+        end_punctuation(ctx, [far])
+        self.assertEqual(far.text, "HELLO")
+        # Its owner went to the art (a sound effect): the line is not given to the next speech.
+        ctx = SimpleNamespace(textlines=[word, dots])
+        set_aside_punctuation(ctx)
+        sound, other = Block((322, 464, 385, 492), "URGH"), Block((320, 532, 390, 552), "HEY THERE")
+        ctx.mangalate_preserved = [sound]
+        end_punctuation(ctx, [other])
+        self.assertEqual(other.text, "HEY THERE")
+        # A "!!!" well below the last line of a long speech (One Piece 1161 p16, the end of a sound
+        # effect) is measured from that line, not from the whole block: nothing is joined.
+        long = Block((80, 740, 230, 760), "NOW TAKE")
+        long.lines = np.concatenate([long.lines] + [long.lines + [0, 24 * k] for k in range(1, 4)])
+        long.__dict__.pop("xyxy", None)
+        ctx = SimpleNamespace(textlines=[line((83, 912, 135, 949), "!!!")])
+        set_aside_punctuation(ctx)
+        end_punctuation(ctx, [long])
+        self.assertEqual(long.text, "NOW TAKE")
+
 
 class OcrRescueTest(unittest.TestCase):
     """A line dropped by the OCR threshold inside a paragraph is read again (TBATE 236 p6)."""
@@ -905,6 +1216,68 @@ class BubbleGlyphTest(unittest.TestCase):
         clean = glyphs_to_clean(image, (148, 146, 322, 172), 26)
         self.assertFalse(clean[186:202, 150:330].any())
 
+    def small_dots(self, colour=(10, 10, 10)):
+        # One Piece 1161 p4: dots of "..." only 2 px wide, before the first word and on the rows
+        # over and under the line ("... / FIELD / ..."), as thin as a hairline.
+        image = self.page()
+        image[100:300, 120:400] = 250
+        cv2.putText(image, "THE WORD", (180, 170), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (10, 10, 10), 3)
+        dots = [(156, 166), (164, 166), (172, 166), (230, 132), (238, 132), (246, 132),
+                (230, 182), (238, 182), (246, 182)]
+        for x, y in dots:
+            image[y - 1:y + 1, x - 1:x + 1] = colour
+        return image, (178, 146, 330, 172), dots
+
+    def test_thin_dots_around_the_line_are_cleaned(self):
+        image, box, dots = self.small_dots()
+        clean = glyphs_to_clean(image, box, 26)
+        for x, y in dots:
+            self.assertTrue(clean[y - 1:y + 1, x - 1:x + 1].all(), (x, y))
+        # The line repair does not see them: it stretched a line box to dots and onto the next
+        # bubble (Grand Blue 102 p31).
+        self.assertFalse(bubble_glyphs(image, box, 26, near=1.6)[130:134, 228:248].any())
+
+    def test_fragments_of_hatching_are_not_dots(self):
+        # Grand Blue 102 p33: short diagonal strokes of hatching beside the bubble text have a
+        # square box, dark ink and a size of a few px, like a dot, but are not punctuation.
+        image, box, _ = self.small_dots()
+        for x in (300, 306):                       # a lone diagonal stroke and its neighbour
+            for i in range(5):
+                image[188 + i, x + i] = (10, 10, 10)
+        cv2.rectangle(image, (318, 188), (319, 189), (10, 10, 10), -1)   # a blob with a stroke beside it
+        for i in range(4):
+            image[188 + i, 322 + i] = (10, 10, 10)
+        clean = glyphs_to_clean(image, box, 26)
+        self.assertFalse(clean[187:194, 299:327].any())
+
+    def test_dashed_line_and_lone_speck_are_not_dots(self):
+        # Grand Blue 102 p3: the dashes of a dotted line of the drawing run down past the text,
+        # one under the other, and a lone speck of dust sits by it.  Neither is a row of "...".
+        image, box, _ = self.small_dots()
+        for y in (180, 186, 192):
+            image[y - 1:y + 1, 299:301] = (10, 10, 10)
+        image[187:189, 320:322] = (10, 10, 10)
+        clean = glyphs_to_clean(image, box, 26)
+        self.assertFalse(clean[178:194, 297:303].any())
+        self.assertFalse(clean[185:191, 318:324].any())
+
+    def test_light_specks_are_not_dots(self):
+        # Light screentone specks around the text (cap146 p178) are not punctuation.
+        image, box, dots = self.small_dots(colour=(170, 170, 170))
+        clean = glyphs_to_clean(image, box, 26)
+        self.assertFalse(clean[130:134, 228:248].any())
+
+    def test_small_print_is_not_dots(self):
+        # The small print under a big title (a form, Grand Blue 102 p4): thin strokes of tiny
+        # letters are not punctuation, whatever the title's line height.
+        image = self.page()
+        image[100:300, 120:400] = 250
+        cv2.putText(image, "TITLE", (160, 170), cv2.FONT_HERSHEY_SIMPLEX, 1.6, (10, 10, 10), 4)
+        for x in range(170, 300, 14):  # letters "c" of hairline small print
+            cv2.ellipse(image, (x, 194), (4, 4), 0, 45, 315, (60, 60, 60), 1)
+        found = bubble_glyphs(image, (155, 130, 340, 204), 42, dots=True)
+        self.assertFalse(found[186:204, 160:340].any())
+
     def test_cleaning_stays_off_the_outline(self):
         image, _, _ = self.dotted()
         cv2.putText(image, "EDGE", (60, 210), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (10, 10, 10), 3)  # touches the outline
@@ -1004,6 +1377,18 @@ class OuroThreeTest(unittest.TestCase):
         for sfx in ("VLOOSH", "SPLOOSH!", "GRRR", "KONK", "R", "K."):
             self.assertTrue(quality.english_sound_effect(sfx), sfx)
         for word in ("BOB", "NO!", "HELLO", "TOKITA", "I JUST CANT GET IT!", "I...", "A", "O!", "H?"):
+            self.assertFalse(quality.english_sound_effect(word), word)
+
+    def test_stretched_words_are_speech_and_cries_stay_drawn(self):
+        # One Piece 1161 p16: a shouted "YEAAAH" stayed in English as a drawn effect.
+        for word in ("YEAAAH!!", "NOOOO!", "WHAAAT?!", "GOOOOD"):
+            self.assertFalse(quality.english_sound_effect(word), word)
+        # A cry that reads the same in Portuguese, an effect word stretched, and a cry broken
+        # over two lines (p7 "GYAA- / AAA!!") stay as drawn.
+        for sfx in ("AAAAH", "UHHH", "AAAAAGH", "KYAAA", "BOOOM", "GYAA- AAA!!", "SPLOO- OOSH"):
+            self.assertTrue(quality.english_sound_effect(sfx), sfx)
+        # A stutter broken over two lines is speech, as before.
+        for word in ("SOME- THING", "NO- NOOOO!", "WHA- WHAAAT?!", "WAIT- WAAAIT!"):
             self.assertFalse(quality.english_sound_effect(word), word)
 
 
@@ -1329,6 +1714,63 @@ class TextBlockTest(unittest.TestCase):
         cv2.putText(mask, "OH", (60, 104), cv2.FONT_HERSHEY_SIMPLEX, 0.7, 255, 2)
         boxes[1] = (58, boxes[1][1], boxes[1][2], boxes[1][3])
         self.assertEqual(quality.block_cuts(mask, boxes), {})
+
+
+class GapCutTest(unittest.TestCase):
+    """One Piece 1161 p7: "?!" in one bubble and "KOFF..." in the bubble grown out of it, one
+    detector box over both; the region was taken for art and the speech stayed in English."""
+
+    @staticmethod
+    def page(left, right, gap, seam):
+        gray = np.full((200, 400), 255, np.uint8)
+        mask = np.zeros_like(gray)
+        x = 60
+        # Big letters in one bubble, smaller ones in the next, on one row.
+        for text, scale, out in ((left, 1.2, None), (right, 0.6, None)):
+            (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, 2)
+            for img, value in ((gray, 0), (mask, 255)):
+                cv2.putText(img, text, (x, 112), cv2.FONT_HERSHEY_SIMPLEX, scale, value, 2)
+            x += w + gap
+        mid = 60 + cv2.getTextSize(left, cv2.FONT_HERSHEY_SIMPLEX, 1.2, 2)[0][0] + gap // 2
+        if seam:
+            # The two outlines meet in notches that poke into the line from above and below.
+            cv2.polylines(gray, [np.array([(mid - 12, 60), (mid, 84), (mid + 12, 60)])], False, 0, 2)
+            cv2.polylines(gray, [np.array([(mid - 12, 140), (mid, 118), (mid + 12, 140)])], False, 0, 2)
+        ys, xs = np.nonzero(mask)
+        return mask, gray, [(int(xs.min()) - 2, 80, int(xs.max()) + 3, 120)]
+
+    def test_line_across_the_seam_of_two_bubbles_is_cut(self):
+        mask, gray, boxes = self.page("?!", "KOFF...", 40, seam=True)
+        cuts = quality.gap_cuts(mask, gray, boxes)
+        self.assertEqual(list(cuts), [0], cuts)
+        self.assertEqual(len(cuts[0]), 2, cuts)
+        (a0, ay0, a1, ay1), (b0, by0, b1, by1) = cuts[0]
+        self.assertTrue(a1 < b0 and b1 >= boxes[0][2] - 4, cuts)
+        # Each part as tall as its letters, not the whole box: small letters alone in a tall box read as noise.
+        self.assertLess(by1 - by0, 0.6 * (boxes[0][3] - boxes[0][1]), cuts)
+
+    def test_spaced_out_words_in_one_bubble_are_not_cut(self):
+        # The same blank with only paper in it: one speech.
+        mask, gray, boxes = self.page("?!", "KOFF...", 40, seam=False)
+        self.assertEqual(quality.gap_cuts(mask, gray, boxes), {})
+
+    def test_word_gap_by_the_seam_is_not_cut(self):
+        # Words at their usual spacing never split, even with an outline near.
+        mask, gray, boxes = self.page("?!", "KOFF...", 0, seam=True)
+        self.assertEqual(quality.gap_cuts(mask, gray, boxes), {})
+
+    def test_letters_the_mask_missed_are_not_a_seam(self):
+        # One Piece 1161 p4: the mask missed the "TT" of "BATTLE-"; their ink in the blank of the
+        # mask, touching the top and bottom of the tight box, is no bubble outline.
+        gray = np.full((120, 300), 255, np.uint8)
+        cv2.putText(gray, "BATTLE-", (40, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, 0, 2)
+        ys, xs = np.nonzero(gray < 128)
+        box = (int(xs.min()) - 1, int(ys.min()), int(xs.max()) + 2, int(ys.max()) + 1)
+        mask = np.where(gray < 128, 255, 0).astype(np.uint8)
+        (w, _), _ = cv2.getTextSize("BA", cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
+        (w2, _), _ = cv2.getTextSize("BATT", cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
+        mask[:, 40 + w:40 + w2] = 0
+        self.assertEqual(quality.gap_cuts(mask, gray, [box]), {})
 
 
 class TextBlockRegionTest(unittest.TestCase):

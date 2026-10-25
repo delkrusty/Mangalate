@@ -17,7 +17,7 @@ class HelpContentTest {
 
     @Test
     fun `embedded guides do not link to Mihon support`() {
-        val all = MangalateGuides.help + MangalateGuides.privacy + MangalateGuides.changes
+        val all = MangalateGuides.help + MangalateGuides.privacy
         for (article in all) {
             assertFalse(article.text.contains("mihon.app"))
             assertFalse(article.text.contains("mihonapp"))

@@ -198,11 +198,95 @@ class FlatFillTest(unittest.TestCase):
         asyncio.run(engine._run_inpainting(None, SimpleNamespace(img_rgb=image, mask=mask)))
         self.assertEqual(len(seen), 1)                        # without it, the model was used
 
+    def vein(self, size, under=None):
+        """Plain bubble whose mask cut into a drawing ``size`` px wide beside the text, ``under`` px of it."""
+        import numpy as np
+        under = size // 2 if under is None else under
+        image = np.full((300, 400, 3), 255, np.uint8)
+        mask = np.zeros((300, 400), np.uint8)
+        image[120:140, 120:200] = 0                           # letters (one short line)
+        mask[116:144, 96:204] = 255
+        for top in range(116, 144, 4):                        # strokes of the drawing, 1 px apart
+            image[top:top + 3, 96 + under - size:96 + under] = 0
+        return image, mask
+
+    def test_drawing_cut_by_the_mask_does_not_send_the_bubble_to_the_model(self):
+        # One Piece 1161 p8: the mask took half an anger vein beside "HIM?!"; the rest spoiled
+        # the ring, and the model painted a ghost of the letters over the bubble.  The bubble is
+        # filled, and the rest of the small drawing goes with the letters.
+        engine, seen = self.engine()
+        image, mask = self.vein(36)
+        out = asyncio.run(engine._run_inpainting(None, SimpleNamespace(img_rgb=image, mask=mask)))
+        self.assertEqual(seen, [])
+        self.assertTrue((out[100:160, 60:220] == 255).all())  # no letter, no half drawing
+
+    def test_drawing_the_mask_only_grazes_stays(self):
+        # Grand Blue 102 p34: the tip of a sound effect beside the bubble touched the mask by a
+        # pixel or two; it is art, not a drawing cut by the mask.
+        engine, seen = self.engine()
+        image, mask = self.vein(36, under=2)
+        out = asyncio.run(engine._run_inpainting(None, SimpleNamespace(img_rgb=image, mask=mask)))
+        self.assertTrue((out[mask == 0] == image[mask == 0]).all())
+
+    def test_speck_of_mask_does_not_take_a_letter_of_the_art(self):
+        # Seen on an old mask of a form kept as art: loose specks of mask touched its letters,
+        # and a whole letter would go with a speck smaller than itself.
+        import numpy as np
+        image = np.full((120, 120, 3), 255, np.uint8)
+        image[50:66, 50:60] = 0                               # a letter of the art, 160 px
+        speck = np.zeros((120, 120), bool)
+        speck[50:58, 54:60] = True                            # a speck of mask over 48 px of it
+        self.assertFalse(speed.cut_marks(image, speck, speck, np.array([255, 255, 255])).any())
+        bigger = np.zeros((120, 120), bool)
+        bigger[44:66, 54:70] = True                           # text being cleaned that cut the letter
+        self.assertTrue(speed.cut_marks(image, bigger, bigger, np.array([255, 255, 255]))[50:66, 50:54].all())
+
+    def test_letter_of_a_word_kept_as_drawn_is_not_taken(self):
+        # Grand Blue 102 p4: the mask of a title ran onto words of the small print under it;
+        # the letters it cut have neighbours of their word right beside them: nothing is taken.
+        import numpy as np
+        image = np.full((120, 160, 3), 255, np.uint8)
+        for x in (40, 52, 64, 76):                            # a word of small print, letters 2 px apart
+            image[50:62, x:x + 10] = 0
+        cleaned = np.zeros((120, 160), bool)
+        cleaned[40:66, 56:100] = True                         # the title's mask, over the last letters
+        self.assertFalse(speed.cut_marks(image, cleaned, cleaned, np.array([255, 255, 255])).any())
+
+    def test_large_drawing_touching_the_mask_stays(self):
+        engine, seen = self.engine()
+        image, mask = self.vein(2 * speed.MARK_SIZE + 20)
+        out = asyncio.run(engine._run_inpainting(None, SimpleNamespace(img_rgb=image, mask=mask)))
+        self.assertTrue((out[mask == 0] == image[mask == 0]).all())  # the drawing outside the mask stays
+
     def test_outline_running_under_the_mask_still_goes_to_the_model(self):
         engine, seen = self.engine()
         image, mask, _ = self.outlined_bubble(gap=0)
         image[116:144, 60:62] = 0                             # outline side crossing into the mask
         mask[116:144, 60:96] = 255
+        asyncio.run(engine._run_inpainting(None, SimpleNamespace(img_rgb=image, mask=mask)))
+        self.assertEqual(len(seen), 1)
+
+    def test_specks_of_dust_beside_the_text_do_not_send_the_bubble_to_the_model(self):
+        # Grand Blue 106 p22: a few specks of the scan's dust next to the letters spoiled the band
+        # beside them; the model painted a grey ghost of the whole speech over the bubble.
+        import numpy as np
+        engine, seen = self.engine()
+        image, mask, outline = self.outlined_bubble(gap=3)
+        for x in range(100, 300, 14):                         # isolated specks, 1 px from the mask
+            image[145, x] = image[114, x + 7] = 90
+        image[144:146, 120:132] = image[114:116, 200:210] = 244  # and the scan's faint noise beside the letters
+        out = asyncio.run(engine._run_inpainting(None, SimpleNamespace(img_rgb=image, mask=mask)))
+        self.assertEqual(seen, [])
+        self.assertTrue((out[116:144, 96:304] == 255).all())
+        self.assertTrue((out[145, 100] == 90).all())          # the dust outside the mask is left as it is
+
+    def test_light_screentone_still_goes_to_the_model(self):
+        import numpy as np
+        engine, seen = self.engine()
+        image, mask, _ = self.outlined_bubble(gap=3)
+        tone = np.full((60, 240), 255, np.uint8)
+        tone[::4, ::4] = 0                                    # a light tone, 1 dot in 16 px
+        image[100:160, 80:320] = np.where(mask[100:160, 80:320, None] > 0, image[100:160, 80:320], tone[..., None])
         asyncio.run(engine._run_inpainting(None, SimpleNamespace(img_rgb=image, mask=mask)))
         self.assertEqual(len(seen), 1)
 

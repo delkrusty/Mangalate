@@ -174,6 +174,132 @@ def crossing_strokes(ys, xs, text, near, pad, line_height):
     return crossing
 
 
+# A logo or a title drawn as a graphic (One Piece 1161 p2: the series logo on a blank page)
+# also reads as lettering on paper crossed by strokes, its own outlines and ornaments.  Its
+# letters are several times as tall as any speech written over the drawing: those measured at
+# most 0.039 of the shorter side of the page (0.033 for 95% of them), the logo 0.14.  Such a
+# block stays as drawn unless its text reads as a line of English (engine_compat).
+LOGO_LINE = 0.12  # line height, in shares of the shorter side of the page, of lettering drawn as a logo
+
+
+def drawn_title(shape, quads):
+    """True when the lines of a block are as tall as a logo's, not a speech's."""
+    quads = [np.asarray(q, np.float32).reshape(4, 2) for q in quads]
+    if not quads:
+        return False
+    if stacked(quads):  # letters one per row: the letters are as tall as the column is wide
+        line = float(np.median([max(np.ptp(q[:, 0]), 1.0) for q in quads]))
+    else:
+        line = _quads_height(quads)
+    return line >= LOGO_LINE * min(shape[:2])
+
+
+KEEP_DUPLICATE = 0.5  # share of overlap that makes a kept line and a translated block two boxes of the same text
+KEEP_RING = 0.5       # around a kept line, in the shorter side of its box, the mask of a translated block leaves too...
+KEEP_RING_MAX = 8     # ...at most this many px (a tall column of a sound effect is not a line height)
+KEEP_REACH = 0.4      # and never within this many line heights of a translated line (overhanging letters)
+KEEP_REACH_MAX = 12   # px: the reach of a huge title line (108 px) is not 43 px of overhang
+KEEP_RIM = 3          # px around such a stroke that go with it (its anti-aliased rim)
+KEEP_INK = 128        # strokes darker than this (0-255 grey) are split between crossing kept and translated boxes
+
+
+def kept_lines(shape, preserved, kept, gray=None):
+    """Pixels the mask of a translated block must leave: the lines of blocks kept as drawn, with a ring.
+
+    ``preserved`` and ``kept`` are regions with ``lines`` (quadrilaterals).  The mask of a
+    translated title whose box ran onto the small print of a form under it erased words of
+    that print, kept as drawn (Grand Blue 102 p4); a ring of KEEP_RING line heights around the
+    print is left too (at most KEEP_RING_MAX px), or the cleaning model draws letters there from
+    the print beside it.  The ring stays KEEP_REACH line heights away from translated lines, whose
+    letters often overhang their boxes (a tall sound effect beside a bubble, Grand Blue 106 p38).  A kept
+    line and a translated block that mostly overlap, either way (a duplicate box of the same
+    speech, or a box read as a sound effect around a whole speech), are the same text: the
+    translated block is cleaned as usual.  The ring never reaches into translated lines.
+    """
+    h, w = shape[:2]
+    blocks = []
+    for region in kept or []:
+        lines = getattr(region, "lines", None)
+        own = np.zeros((h, w), np.uint8)
+        for line in lines if lines is not None else []:
+            cv2.fillPoly(own, [np.asarray(line, np.int32).reshape(-1, 1, 2)], 1)
+        if own.any():
+            blocks.append(own > 0)
+    translated = np.zeros((h, w), bool)
+    boxed = np.zeros((h, w), bool)  # the translated lines themselves, without the reach around them
+    boxed_size = np.zeros((h, w), np.float32)  # and the height of their letters
+    for region in kept or []:
+        lines = getattr(region, "lines", None)
+        for line in lines if lines is not None else []:
+            quad = np.asarray(line, np.float32).reshape(4, 2)
+            own = np.zeros((h, w), np.uint8)
+            cv2.fillPoly(own, [quad.astype(np.int32).reshape(-1, 1, 2)], 1)
+            boxed |= own > 0
+            boxed_size[own > 0] = _letter_size(quad)
+            reach = 2 * int(min(KEEP_REACH_MAX, round(KEEP_REACH * _quads_height([quad])))) + 1
+            translated |= cv2.dilate(own, np.ones((reach, reach), np.uint8)) > 0
+    keep = np.zeros((h, w), bool)
+    lines_kept = np.zeros((h, w), bool)
+    ring = np.zeros((h, w), bool)
+    ring_size = np.zeros((h, w), np.float32)
+    for region in preserved or []:
+        lines = getattr(region, "lines", None)
+        for line in lines if lines is not None else []:
+            quad = np.asarray(line, np.float32).reshape(4, 2)
+            own = np.zeros((h, w), np.uint8)
+            cv2.fillPoly(own, [quad.astype(np.int32).reshape(-1, 1, 2)], 1)
+            inside = own > 0
+            if not inside.any():
+                continue
+            if any((inside & block).sum() >= KEEP_DUPLICATE * min(inside.sum(), block.sum()) for block in blocks):
+                continue
+            keep |= inside
+            lines_kept |= inside
+            # The box often ends before the last letter: the ring follows the size of the letters.
+            short = min(_quads_height([quad]), float(np.ptp(quad[:, 0])))
+            size = 2 * int(min(KEEP_RING_MAX, round(KEEP_RING * short))) + 1
+            around = cv2.dilate(own, np.ones((size, size), np.uint8)) > 0
+            ring |= around
+            ring_size[around] = _letter_size(quad)
+    keep |= ring & ~translated
+    if gray is not None and (keep & boxed).any():
+        # Where the boxes cross, each stroke touching a translated line goes with the block whose
+        # letters are its size: the foot of "SMILE" (15 px) with its line, not with the column of
+        # a sound effect beside it, so no English is left; the "y" of small print (18 px) with the
+        # print, not with the 108 px title box over it.
+        dark = (np.asarray(gray) < KEEP_INK).astype(np.uint8)
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(dark, connectivity=8)
+        touched = np.unique(labels[boxed & (dark > 0)])
+        for k in touched[touched > 0]:
+            x, y, cw, ch = stats[k, :4]
+            part = labels[y:y + ch, x:x + cw] == k
+            if not keep[y:y + ch, x:x + cw][part].any() and not ring[y:y + ch, x:x + cw][part].any():
+                continue
+            mine, theirs = boxed_size[y:y + ch, x:x + cw][part], ring_size[y:y + ch, x:x + cw][part]
+            height = float(max(ch, 1))
+            closer = not (theirs > 0).any() or (
+                abs(np.log(height / np.median(mine[mine > 0]))) <= abs(np.log(height / np.median(theirs[theirs > 0]))))
+            # The stroke with its anti-aliased rim: a lighter rim left out of the mask is a ghost.
+            x0, y0, x1, y1 = max(0, x - KEEP_RIM), max(0, y - KEEP_RIM), min(w, x + cw + KEEP_RIM), min(h, y + ch + KEEP_RIM)
+            whole = labels[y0:y1, x0:x1] == k
+            grown = cv2.dilate(whole.astype(np.uint8), np.ones((2 * KEEP_RIM + 1, 2 * KEEP_RIM + 1), np.uint8)) > 0
+            if closer:
+                keep[y0:y1, x0:x1][grown] = False
+                continue
+            # A stroke of the kept text past its box gets the ring too, or the model draws from it.
+            size = int(min(KEEP_RING_MAX, round(KEEP_RING * float(np.median(theirs[theirs > 0])))))
+            x0, y0, x1, y1 = max(0, x - size), max(0, y - size), min(w, x + cw + size), min(h, y + ch + size)
+            whole = labels[y0:y1, x0:x1] == k
+            around = cv2.dilate(whole.astype(np.uint8), np.ones((2 * size + 1, 2 * size + 1), np.uint8)) > 0
+            keep[y0:y1, x0:x1] |= around & ~(boxed[y0:y1, x0:x1] & ~whole & (labels[y0:y1, x0:x1] > 0))
+    return keep
+
+
+def _letter_size(quad):
+    """Height of the letters a line box holds: the shorter side (a column of stacked letters is as wide as one)."""
+    return max(1.0, min(_quads_height([quad]), float(np.linalg.norm(quad[1] - quad[0]))))
+
+
 def _quads_height(quads):
     """Median line height measured along the sides of the quads: a tilted box is taller than its letters."""
     return float(np.median([max(1.0, (np.linalg.norm(q[3] - q[0]) + np.linalg.norm(q[2] - q[1])) / 2) for q in quads]))
@@ -682,16 +808,24 @@ GLYPH_TOLERANCE = 40     # antialiased letter edges still differ this much from 
 GLYPH_REACH = 1.5        # search window around the text, in line heights
 GLYPH_NEAR = 0.8         # letters kept only this close to the text box, in line heights
 CLEAN_MARK = 0.4         # a punctuation dot is smaller than this, in line heights (a lower-case letter is not)
+DOT_ASPECT = 2           # and at most this much longer than wide (a hairline is longer)
+DOT_SIZE = 5             # a dot thinner than a stroke is at most this big (px): small print is not punctuation
+DOT_INK = 128            # and has ink darker than this (0-255): light screentone specks are not
+DOT_FILL = 0.5           # and fills this share of its box: a short diagonal stroke of hatching does not
+DOT_CLEAR = 2            # and has no other dark ink this close (px), unlike a fragment of hatching
+DOT_ROW = 0.6            # and another dot on its row this close, in line heights (the dots of "...")
+DOT_CROWD = 4            # but at most this many dots that close: more is a field of screentone specks
 
 
-def bubble_glyphs(image, box, line_height, near=GLYPH_NEAR):
+def bubble_glyphs(image, box, line_height, near=GLYPH_NEAR, dots=False):
     """Pixels of letters around ``box``: holes in the flat interior that surrounds the text.
 
     The detector mask misses parts of bold italic lettering (TBATE new episode
     p12: the T of "THIS", the end of "HARD", the whole line "OF US.").  Inside a
     bubble, every letter is a hole in the flat interior, whatever the detector
     saw.  Returns a boolean mask of the image size, empty when the text does not
-    sit on a flat background.
+    sit on a flat background.  With ``dots``, small dots of punctuation are kept too
+    (for the cleaning only: the line repair would stretch a line box to them).
     """
     h, w = image.shape[:2]
     out = np.zeros((h, w), bool)
@@ -737,10 +871,44 @@ def bubble_glyphs(image, box, line_height, near=GLYPH_NEAR):
     count, labels, stats, _ = cv2.connectedComponentsWithStats(holes.astype(np.uint8), connectivity=8)
     depth = cv2.distanceTransform(holes.astype(np.uint8), cv2.DIST_L2, 3)
     thin = max(1.6, 0.05 * lh)
+    shape_ok = np.zeros(count, bool)  # small, compact, filled and dark: shaped like a dot
+    if dots:
+        for label in range(1, count):
+            bw, bh, area = stats[label, 2], stats[label, 3], stats[label, 4]
+            shape_ok[label] = (max(bw, bh) < min(CLEAN_MARK * lh, DOT_SIZE + 1) and max(bw, bh) <= DOT_ASPECT * min(bw, bh)
+                               and area >= DOT_FILL * bw * bh)
+        # Ink that does not count against a dot: the letters (thick holes) and the other dots.
+        thick = np.zeros(count, bool)
+        thick[np.unique(labels[depth >= thin])] = True
+        stray = (window.min(axis=2) < DOT_INK) & ~(thick | shape_ok)[labels]
+        inked = np.zeros(count, bool)
+        inked[np.unique(labels[window.min(axis=2) < DOT_INK])] = True
+        marks = [k for k in range(1, count) if shape_ok[k] and inked[k]]
+        centres = {k: (stats[k, 0] + stats[k, 2] / 2, stats[k, 1] + stats[k, 3] / 2) for k in marks}
+        reach = DOT_ROW * lh
+
+    def in_a_row(label):
+        # The dots of "..." sit side by side on one row; a lone speck, a dot of a dashed line of
+        # the drawing (in a column) or a field of screentone specks around the text is not one.
+        cx, cy = centres[label]
+        near = [k for k in marks if k != label and abs(centres[k][0] - cx) <= reach and abs(centres[k][1] - cy) <= reach]
+        row = [k for k in near if abs(centres[k][1] - cy) <= DOT_SIZE / 2]
+        column = [k for k in near if abs(centres[k][0] - cx) <= DOT_SIZE / 2 and k not in row]
+        return bool(row) and not column and len(near) <= DOT_CROWD
+
+    def alone(label):
+        # A dot sits alone on the flat interior, beside letters or other dots; a fragment of
+        # hatching or the end of a speed line has more ink of the drawing right next to it.
+        x, y, bw, bh = (int(v) for v in stats[label, :4])
+        ya, yb, xa, xb = max(0, y - DOT_CLEAR), y + bh + DOT_CLEAR + 1, max(0, x - DOT_CLEAR), x + bw + DOT_CLEAR + 1
+        return not stray[ya:yb, xa:xb].any()
+
     for label in range(1, count):
         bw, bh, area = stats[label, 2], stats[label, 3], stats[label, 4]
         part = labels == label
-        if depth[part].max() < thin or (max(bw, bh) > 1.5 * lh and area < 0.12 * bw * bh):
+        # A dot of punctuation is as thin, but compact: the dots of "..." stayed on the page (One Piece 1161 p4).
+        dot = shape_ok[label] and window[part].min() < DOT_INK and alone(label) and in_a_row(label)
+        if (depth[part].max() < thin and not dot) or (max(bw, bh) > 1.5 * lh and area < 0.12 * bw * bh):
             holes[part] = False
     near = int(lh * near)
     keep = np.zeros_like(holes)
@@ -762,7 +930,7 @@ def glyphs_to_clean(image, box, line_height):
     """
     h, w = image.shape[:2]
     lh = max(4.0, float(line_height))
-    glyphs = bubble_glyphs(image, box, lh, near=NEAR_LINES)
+    glyphs = bubble_glyphs(image, box, lh, near=NEAR_LINES, dots=True)
     if not glyphs.any():
         return glyphs
     size = max(5, int(round(lh * 0.25)) | 1)
@@ -775,18 +943,19 @@ def glyphs_to_clean(image, box, line_height):
         mark = gh < CLEAN_MARK * lh and gw < CLEAN_MARK * lh
         if near_taken and y0 <= gy + gh / 2 <= y1 and (mark or (not grow and x0 <= gx + gw / 2 <= x1)):
             return True  # a letter of the box the margin cuts, or a dot of punctuation within a letter gap
-        # A dot of punctuation on the row just under the line ("SORRY / ...").
-        return mark and 0 <= gy - y1 <= lh and x0 <= gx and gx + gw <= x1
+        # A dot of punctuation on the row just under or over the text ("SORRY / ...", "... / FIELD / ...").
+        return mark and (0 <= gy - y1 <= lh or 0 <= y0 - gy - gh <= lh) and x0 <= gx and gx + gw <= x1
     box_limit = limit.copy()
     queue = [k for k in set(np.unique(labels[limit & glyphs]).tolist()) - {0} if belongs(k, True)]
-    below = [k for k in range(1, count) if k not in queue and belongs(k, False)]
-    if below:
+    rows = [k for k in range(1, count) if k not in queue and belongs(k, False)]
+    for side in ([k for k in rows if stats[k, 1] >= y1], [k for k in rows if stats[k, 1] < y1]):
+        if not side:
+            continue
         # Only a row of dots alone: a letter on the same row makes it a line of text that was not read.
-        r0, r1 = min(stats[k, 1] for k in below), max(stats[k, 1] + stats[k, 3] for k in below)
-        if any(stats[k, 1] < r1 and stats[k, 1] + stats[k, 3] > r0 and k not in below and k not in queue
-               for k in range(1, count)):
-            below = []
-    queue += below
+        r0, r1 = min(stats[k, 1] for k in side), max(stats[k, 1] + stats[k, 3] for k in side)
+        if not any(stats[k, 1] < r1 and stats[k, 1] + stats[k, 3] > r0 and k not in side and k not in queue
+                   for k in range(1, count)):
+            queue += side
     taken = set(queue)
     while queue:
         k = queue.pop()
@@ -938,6 +1107,7 @@ SPLIT_CHECK = 1.3     # boxes from this height up are checked for a second line 
 SPLIT_REACH = 0.6     # rows read past the box edge, in line heights
 SPLIT_INSIDE = 0.25   # a row run must reach this far into the box to be one of its lines
 MIN_PART = 0.45       # a split part shorter than this share of a line is noise
+STACK_WIDE = 2.0      # in a box as tall as wide, rows this many times wider than tall are lines, not stacked letters
 ORPHAN_COVERED = 0.2  # mask pixels already under a box above this share are not orphans
 NEAR_LINES = 1.6      # an orphan line must sit this many line heights from a known one
 ORPHAN_MIN = 0.5      # an orphan line is at least this many line heights tall
@@ -995,6 +1165,82 @@ def _near(box, others, height):
                and max(b[1] - box[3], box[1] - b[3]) <= NEAR_LINES * height for b in others)
 
 
+SAME_BOX = 0.8  # two line boxes overlapping this much (intersection over union) hold the same line
+
+
+def _same_box(a, b):
+    ix = min(a[2], b[2]) - max(a[0], b[0])
+    iy = min(a[3], b[3]) - max(a[1], b[1])
+    if ix <= 0 or iy <= 0:
+        return False
+    inter = ix * iy
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter >= SAME_BOX * union
+
+
+TRIM_EDGE = 0.5  # a dropped box is trimmed only over at most this share of the kept line it runs onto
+
+
+def trim_lost(box, kept):
+    """A dropped line box without the rows a kept line box above or below already holds.
+
+    One Piece 1161 p8: the box of "HIM?!" also covered the bottom of "TO FIGHT" above it and a
+    drawn vein beside it; too tall for a line, it was never read again and stayed out of the
+    speech.  Only rows at the top or bottom edge are cut, never the middle.
+    """
+    x0, y0, x1, y1 = box
+    for kx0, ky0, kx1, ky1 in kept:
+        if min(x1, kx1) - max(x0, kx0) <= OVERLAP_SIDE * min(x1 - x0, kx1 - kx0):
+            continue
+        # Only a box that runs onto the edge of the kept line (its last rows), not half of it:
+        # two lines of a logo or a shout overlapping by half are one block, not a lost line.
+        if ky0 <= y0 < ky1 < y1 and ky1 - y0 <= TRIM_EDGE * (ky1 - ky0):
+            y0 = ky1
+        elif y0 < ky0 < y1 <= ky1 and y1 - ky0 <= TRIM_EDGE * (ky1 - ky0):
+            y1 = ky0
+    return x0, y0, x1, y1
+
+
+PUNCT_REACH = 1.0  # a line of only punctuation joins a speech line this many line heights above it (or beside it)
+PUNCT_SIDE = 0.5   # share of their heights two boxes share to be on the same row
+OVERLAP_SIDE = 0.3  # share of the narrower box two boxes share sideways to be in the same column
+
+
+def punctuation_owners(boxes, texts):
+    """{index of a line of only punctuation: index of the speech line it ends}.
+
+    One Piece 1161 p5: "URGH" over "...!!" in one bubble.  The punctuation line, taller than the
+    word, was not joined to it and was then dropped as text with no letters: the dots and "!!"
+    stayed in English under "Urgh".  It joins the nearest line above it (or below, for a
+    leading "...") that overlaps it sideways and is close.
+    """
+    owners = {}
+    for i, (box, text) in enumerate(zip(boxes, texts)):
+        if not text or any(ch.isalnum() for ch in str(text)) or not re.search(r"[.!?…‼⁇⁈⁉]", str(text)):
+            continue
+        x0, y0, x1, y1 = box
+        best = None
+        for j, (other, words) in enumerate(zip(boxes, texts)):
+            if j == i or not any(ch.isalnum() for ch in str(words or "")):
+                continue
+            ox0, oy0, ox1, oy1 = other
+            if min(y1, oy1) - max(y0, oy0) >= PUNCT_SIDE * min(y1 - y0, oy1 - oy0):
+                if x0 < ox0:
+                    continue  # punctuation on the same row ends the word on its left, not the one after it
+                gap = x0 - ox1  # on the same row, right after the word ("WHAT ?!")
+            elif min(x1, ox1) - max(x0, ox0) <= OVERLAP_SIDE * min(x1 - x0, ox1 - ox0):
+                continue
+            else:
+                gap = y0 - oy1 if oy1 <= y0 + 0.5 * (y1 - y0) else oy0 - y1
+            if gap > PUNCT_REACH * (oy1 - oy0):
+                continue
+            if best is None or gap < best[0]:
+                best = (gap, j)
+        if best is not None:
+            owners[i] = best[1]
+    return owners
+
+
 def near_lines(lost, kept):
     """Indexes of dropped horizontal lines lying next to a kept line of similar height."""
     height = _line_height(kept) or _line_height(lost)
@@ -1028,10 +1274,10 @@ def repair_lines(mask, boxes, gray=None):
     for index, (x0, y0, x1, y1) in enumerate(boxes):
         x0, x1, y0, y1 = max(0, x0), min(w, x1), max(0, y0), min(h, y1)
         others = [b for j, b in enumerate(boxes) if j != index]
-        # Vertical lettering (Japanese SFX, stacked letters) is never split into rows.
-        if y1 - y0 < SPLIT_CHECK * height or x1 - x0 <= y1 - y0:
+        if y1 - y0 < SPLIT_CHECK * height:
             result.append(((x0, y0, x1, y1), index))
             continue
+        tall = x1 - x0 <= y1 - y0
         parts = []
         # A line the box cuts in half still counts (Grand Blue p25: one box over
         # "DON'T" and the top of "TELL ME"), so the rows are read a little past the box.
@@ -1044,6 +1290,15 @@ def repair_lines(mask, boxes, gray=None):
             part = (x0 + int(cols[0]), wy0 + r0, x0 + int(cols[-1]) + 1, wy0 + r1)
             if _covered(part, others) < 0.5:
                 parts.append(part)
+        rows = float(np.median([p[3] - p[1] for p in parts])) if parts else 0.0
+        if tall and (len(parts) < 2 or max(p[2] - p[0] for p in parts) < STACK_WIDE * rows
+                     or rows > SPLIT_FACTOR * height):
+            # Vertical lettering (Japanese SFX, letters stacked one per row, a giant "DOOM") is never
+            # split into rows.  A short block of wide lines of the page's size in a box as tall as it
+            # is wide is (One Piece 1153 p6 "YES, / MAJESTY / !!", Grand Blue 106 p22 "CON- / DOMS /
+            # ?!": the OCR dropped it).
+            result.append(((x0, y0, x1, y1), index))
+            continue
         if len(parts) < 2 and y1 - y0 < SPLIT_FACTOR * height:
             result.append(((x0, y0, x1, y1), index))
             continue
@@ -1058,11 +1313,30 @@ def repair_lines(mask, boxes, gray=None):
                     max(0, ox0 - side - x0):max(0, ox1 + side - x0)] = False
             parts = stair_lines(own, x0, y0, height)
         if len(parts) >= 2:
+            # A row of one letter ("I" over "KNEW IT.", Grand Blue 106 p40) is taller than wide and
+            # was read as vertical text, then lost: it stays a horizontal line, a little wider.
+            parts = [(max(x0, a - (d - b - (c - a)) // 2 - 1), b, min(x1, c + (d - b - (c - a)) // 2 + 1), d)
+                     if c - a < d - b <= SPLIT_FACTOR * height else (a, b, c, d) for a, b, c, d in parts]
             result.extend((part, index) for part in parts)
             changes.append(("split", (x0, y0, x1, y1), parts))
         else:
             result.append(((x0, y0, x1, y1), index))
     result = fit_lines(ink, result, height, changes, gray)
+    # Two detector boxes over the same line (a small one inside a large one) fit to the same
+    # letters: one is enough, or the line is read twice ("PIRATES PIRATES", One Piece 1161 p4).
+    unique = []
+    for box, source in result:
+        for k, (other, kept_source) in enumerate(unique):
+            if _same_box(box, other):
+                # Both boxes together: the fitted one may have lost the end of the line (a
+                # title read as "Mayuts", Grand Blue 102 p4).
+                unique[k] = ((min(box[0], other[0]), min(box[1], other[1]), max(box[2], other[2]),
+                              max(box[3], other[3])), kept_source)
+                changes.append(("same", box, [other]))
+                break
+        else:
+            unique.append((box, source))
+    result = unique
     # Lines of the mask that no box covers.
     known = np.zeros_like(ink)
     for (x0, y0, x1, y1), _ in result:
@@ -1448,6 +1722,92 @@ def block_cuts(mask, boxes):
         spans.sort()
         if all(a[1] < b[0] for a, b in zip(spans, spans[1:])):  # side by side, never interleaved
             cuts[i] = spans
+    return cuts
+
+
+# One line across two bubbles joined side by side ----------------------------------
+
+GAP_SPLIT = 1.0  # blank between two words of a line, in letter heights of the smaller one
+GAP_SPECK = 2    # px of blank tolerated inside one word
+GAP_PAD = 2      # px kept above and below the letters of each part
+
+
+def gap_cuts(mask, gray, boxes):
+    """{line index: [(x0, y0, x1, y1), ...]} for line boxes across two bubbles that touch.
+
+    One Piece 1161 p7: "?!" in one bubble and "KOFF..." in the bubble grown out of
+    it, with no outline between them on the line; the detector drew one box over
+    both and the region was taken for art.  A blank as wide as the letters beside it,
+    with the outline of the bubbles poking into it, is the seam of the two bubbles.
+    Spaced-out words in one bubble have only paper between them and are never cut.
+    Dots and specks ride along with the word they follow.
+    """
+    mask = np.asarray(mask) > 127
+    gray = np.asarray(gray)
+    cuts = {}
+    for i, (x0, y0, x1, y1) in enumerate(boxes):
+        x0, y0 = max(0, int(x0)), max(0, int(y0))
+        x1, y1 = int(x1), int(y1)
+        ink = mask[y0:y1, x0:x1]
+        if not ink.size or x1 - x0 <= y1 - y0:
+            continue
+        words = _runs(ink.any(axis=0), GAP_SPECK)
+        if len(words) < 2:
+            continue
+        # The mask often covers only part of each letter: their height is read on the page's ink
+        # the mask touches; the outline poking in is ink the mask never touches.
+        page_ink = gray[y0:y1, x0:x1] < INK_LEVEL
+        _, labels = cv2.connectedComponents(page_ink.astype(np.uint8), connectivity=8)
+        touched = np.unique(labels[page_ink & ink])
+        letters_ink = np.isin(labels, touched[touched > 0]) | ink
+        spans_y = []
+        for a, b in words:
+            rows = np.flatnonzero(letters_ink[:, a:b].any(axis=1))
+            spans_y.append((int(rows[0]), int(rows[-1]) + 1))
+        heights = [r1 - r0 for r0, r1 in spans_y]
+        letters = [h >= MIN_PART * max(heights) for h in heights]
+
+        def word_from(k, step):
+            while 0 <= k < len(words) and not letters[k]:
+                k += step
+            return k if 0 <= k < len(words) else None
+
+        near = cv2.dilate(letters_ink.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+        dark = page_ink & ~near
+        parts = [[words[0][0], words[0][1], letters[0]]]
+        for k in range(1, len(words)):
+            a, b = words[k]
+            left, right = word_from(k - 1, -1), word_from(k, 1)
+            seam = False
+            if left is not None and right is not None:
+                small = min((left, right), key=lambda j: heights[j])
+                r0, r1 = spans_y[small]
+                stripe = dark[:, parts[-1][1]:a]
+                # Paper all along the smaller letters (a letter the mask missed is dark there),
+                # and the outline coming in from the top or the bottom of the box.
+                seam = a - parts[-1][1] >= GAP_SPLIT * heights[small] and not stripe[r0:r1].any() \
+                    and (stripe[0].any() or stripe[-1].any())
+            if seam:
+                parts.append([a, b, letters[k]])
+            else:
+                parts[-1][1] = b
+                parts[-1][2] = parts[-1][2] or letters[k]
+        spans = []
+        for a, b, has_letters in parts:
+            if spans and not has_letters:
+                spans[-1][1] = b
+            elif spans and not spans[-1][2]:
+                spans[-1][1:] = [b, True]
+            else:
+                spans.append([a, b, has_letters])
+        if len(spans) >= 2:
+            # Each part as tall as its own letters: small letters in the full height of the box are
+            # read as noise ("KOFF..." read "46").
+            cuts[i] = []
+            for a, b, _ in spans:
+                rows = np.flatnonzero(letters_ink[:, a:b].any(axis=1))
+                cuts[i].append((x0 + a, max(y0, y0 + int(rows[0]) - GAP_PAD), x0 + b,
+                                min(y1, y0 + int(rows[-1]) + 1 + GAP_PAD)))
     return cuts
 
 
@@ -2149,15 +2509,30 @@ SUFFIXES = {"ing", "ed", "ly", "er", "ers", "est", "tion", "tions", "ness", "men
 HONORIFICS = {"san", "kun", "chan", "sama", "senpai", "sensei", "dono", "nim", "ssi", "hyung", "noona", "oppa", "unnie", "sunbae"}
 
 SFX_SHAPE = re.compile(r"(.)\1\1|(?:OOSH|OOM|OOF|ASH|USH|ANG|ONK|ACK|UNK|RRK|SSH|HH|ZZ|WHAM|THUD|THUMP|SPLA\w*|KR\w+)$")
+# Cries a Brazilian reader reads the same as they are drawn: stretched out ("AAAAH") they stay drawn.
+SAME_CRY = {"ah", "oh", "uh", "eh", "ha", "hah", "ugh"}
 
 
 def english_sound_effect(text):
     """One lettered word that is no English word and looks like an onomatopoeia ("VLOOSH", "SPLOOSH").
 
     Grand Blue p53: "SPLOOSH", drawn across the art and read "VLOOSH", was erased
-    and written as "Vluuuf".  Real words ("BOB", "NO!") are left to the translator.
+    and written as "Vluuuf".  Real words ("BOB", "NO!") are left to the translator,
+    also when a shout stretches them ("YEAAAH", One Piece 1161 p16, stayed in English).
     """
-    words = re.findall(r"[A-Za-z]+", text or "")
+    common, names = english_words()
+
+    def join(match):
+        # A cry broken over two lines ("GYAA- / AAA!!", One Piece 1161 p7) is one word; a stutter
+        # ("NO- NOOOO!") or a real word on either side ("SOME- THING") stays apart.
+        left, right = match.group(1), match.group(2)
+        plain = re.sub(r"(.)\1+", r"\1", right.lower())
+        if plain.startswith(re.sub(r"(.)\1+", r"\1", left.lower())) or left.lower() in common \
+                or (len(plain) > 1 and plain in common) or right.lower() in common:
+            return match.group(0)
+        return left + right
+    text = re.sub(r"([A-Za-z]+)-\s+([A-Za-z]+)", join, text or "")
+    words = re.findall(r"[A-Za-z]+", text)
     # A lone letter that is no word ("R", a piece of the vertical "KRRK" on Grand Blue
     # p19, was written over as "É.") is a piece of a drawn sound.
     if len(words) == 1 and len(words[0]) == 1 and words[0].upper() not in "IAO" \
@@ -2165,8 +2540,11 @@ def english_sound_effect(text):
         return True
     if len(words) != 1 or len(words[0]) < 4 or words[0] != words[0].upper():
         return False
-    common, names = english_words()
     word = words[0].lower()
     if not common or word in common or word in names:
         return False
+    for short in {re.sub(r"(.)\1{2,}", r"\1", word), re.sub(r"(.)\1{2,}", r"\1\1", word)}:
+        if short != word and short in common and re.search("[aeiouy]", short) and short not in SAME_CRY \
+                and not SFX_SHAPE.search(short.upper()):
+            return False
     return bool(SFX_SHAPE.search(words[0]))

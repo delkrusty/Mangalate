@@ -309,6 +309,7 @@ class MainActivity : BaseActivity() {
                 if (!isBenchmarkBuildType) {
                     if (isLaunch) CheckForUpdates()
                     ShowOnboarding()
+                    app.mangalate.ui.MangalateWhatsNewOnUpdate()
                     ShowDonationCampaign()
                 }
             }

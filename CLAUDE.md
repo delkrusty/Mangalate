@@ -7,7 +7,7 @@ Leitor de mangá para Android baseado no Mihon que traduz as páginas e escreve 
 **App Android** (Kotlin, fork do Mihon). O código do Mangalate fica em `app/src/main/java/app/mangalate/`; o resto do repositório é Mihon e deve mudar o mínimo possível, para facilitar atualizações.
 - `local/`: modo No celular, offline. OCR e tradução do ML Kit (`OnDeviceOcr`, `OnDeviceTranslate`), balões (`BubbleSegmenter`, `BubbleGeometry`), quebra de texto e hifenização em português (`BubbleTextWrapper`, `PortugueseHyphenator`, dicionário em `app/src/main/assets/lettering/`) e desenho da página (`PageRenderer`).
 - `translate/`: cliente do servidor, pré-tradução, tradução ao baixar e ajustes.
-- `ui/`: telas de ajuda, configuração rápida e estado no leitor.
+- `ui/`: telas de ajuda, novidades (`MangalateWhatsNew.kt`), configuração rápida e estado no leitor.
 - Testes: `app/src/test/java/app/mangalate/local/`.
 
 **Servidor** (`server/`, Python e Docker), que roda no PC do Lucas:
@@ -76,7 +76,7 @@ CI: `.github/workflows/server.yml` roda em push para `melhoria/**`, `candidate/*
 - **Nada específico de uma obra.** O motor tem que servir para qualquer mangá, manhwa ou webtoon. Não crie regra, constante, exceção ou exemplo de instrução da IA que dependa de nome de obra, personagem, capítulo, página ou de uma fala conhecida. Os exemplos da IA usam nomes neutros. Um teste pode citar de onde veio o caso num comentário, mas reproduz o mecanismo com imagem sintética e geometria genérica.
 - **Segredos.** Nunca leia, imprima, copie nem faça commit de `server/secrets/` (Chave Mangalate e chaves das IAs), keystore ou `local.properties`. Logs e diagnósticos mostram no máximo o nome do provedor e o tipo do erro, nunca a chave nem o corpo da resposta.
 - **Páginas protegidas.** Capítulos e páginas de teste não entram no repositório, nem em testes, commits ou prints públicos. `server/teste/` e `server/teste-curto/` estão no `server/.gitignore`, mas mesmo assim adicione arquivos ao git pelo nome, nunca com `git add -A` ou `git add .`.
-- **Git.** Trabalhe numa branch `melhoria/<assunto>` criada a partir da `main` ou na branch indicada pelo Lucas, nunca direto na `main`. Commit, push, PR e merge só quando ele pedir. Nunca use force push nem reescreva histórico publicado. Um assunto por commit, com a entrada correspondente no CHANGELOG em "Em teste".
+- **Git.** Trabalhe numa branch `melhoria/<assunto>` criada a partir da `main` ou na branch indicada pelo Lucas, nunca direto na `main`. Commit, push, PR e merge só quando ele pedir. Nunca use force push nem reescreva histórico publicado. Um assunto por commit, com a entrada correspondente no CHANGELOG em "Em teste". Toda mudança que quem lê percebe também ganha uma frase curta, sem termos técnicos, na primeira entrada (a sem versão) de `app/src/main/java/app/mangalate/ui/MangalateWhatsNew.kt`, que o app mostra depois de cada atualização; ao subir a versão do app, essa entrada recebe o número.
 - **Mudanças pequenas e reversíveis.** Um problema por vez, medido antes e depois. Para mexer no motor (detecção, OCR, balão ou arte, limpeza, tradução, letreiramento), siga a skill `evoluir-motor`. Antes de propor o commit, peça a revisão do subagente `revisor-motor`.
 - **Licenças.** `engine_compat.py` é GPL-3.0, como o motor. O app é Apache 2.0: não copie código do motor para o app.
 - **Cota das IAs.** As rodadas gastam a cota grátis diária (Groq, Gemini e outras). Prefira trechos curtos com `--pages`. Rodar um capítulo inteiro só com motivo, e nunca para "ver se passa".
