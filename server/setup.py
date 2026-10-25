@@ -166,6 +166,24 @@ def clean_model(text):
     return text
 
 
+def ollama_tags():
+    import json
+    import urllib.request
+    with urllib.request.urlopen("http://127.0.0.1:11434/api/tags", timeout=3) as response:
+        return json.load(response)
+
+
+def ollama_problem(model, fetch=ollama_tags):
+    """Why the server would not reach this Ollama model, or None.  A wrong name rests it an hour."""
+    try:
+        names = {item.get("name", "") for item in fetch().get("models", [])}
+    except (OSError, ValueError):
+        return "o Ollama não respondeu neste PC. Abra o Ollama antes de traduzir."
+    if model in names or f"{model}:latest" in names:
+        return None
+    return f"o modelo {model} não está baixado. Rode em outro terminal: ollama pull {model}"
+
+
 def configure_one(index, names, providers, ask, secret):
     if index == len(names):
         name = f"outro{len(providers) + 1}"
@@ -195,7 +213,10 @@ def configure_one(index, names, providers, ask, secret):
             print("  Digite só o nome exato do modelo, sem espaços (ex.: gpt-oss:20b).")
         if not model:
             raise ValueError(f"Modelo de {name} não informado.")
-    same = next((p["key"] for p in providers if p["name"] == "groq"), "") if name == "groq-2" else ""
+        problem = ollama_problem(model) if name == "ollama" else None
+        if problem:
+            print("  Atenção: " + problem)
+    same =next((p["key"] for p in providers if p["name"] == "groq"), "") if name == "groq-2" else ""
     if same:
         print("  Usando a mesma chave do Groq já configurada.")
     key = "" if name == "ollama" else same or ask_key(name, secret, ask)

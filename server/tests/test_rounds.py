@@ -338,6 +338,25 @@ class ReserveTest(unittest.TestCase):
         self.assertEqual(asyncio.run(pool.run(attempt)), "groq-2")
         self.assertGreater(pool.resting["groq"], 1000)  # not a chat API: long pause
 
+    def test_model_on_this_computer_is_a_reserve(self):
+        # gpt-oss:20b on Ollama: in 35 lines, 2 with the meaning reversed and 3 with the wrong
+        # gender, against Groq on the same pages.  It takes over only when the others rest.
+        import asyncio
+        from providers import PRESETS, ProviderPool, NotAnAnswer
+        local = {"name": "ollama", "base": PRESETS["ollama"]["base"], "model": "gpt-oss:20b", "key": "ollama"}
+        remote = [p for p in self.providers() if p["name"] != "groq-2"]
+        pool = ProviderPool([remote[0], local, remote[1]], clock=lambda: 0.0, log=lambda m: None, take_turns=True)
+        used = [asyncio.run(pool.run(lambda p: asyncio.sleep(0, p["name"]))) for _ in range(4)]
+        self.assertEqual(used, ["groq", "gemini", "groq", "gemini"])
+
+        async def attempt(p):
+            if p["name"] != "ollama":
+                raise NotAnAnswer("x")
+            return p["name"]
+        self.assertEqual(asyncio.run(pool.run(attempt)), "ollama")
+        alone = ProviderPool([local], clock=lambda: 0.0, log=lambda m: None, take_turns=True)
+        self.assertEqual(asyncio.run(alone.run(lambda p: asyncio.sleep(0, p["name"]))), "ollama")
+
 
 class ReserveWaitTest(unittest.TestCase):
     """ouro-8: gpt-oss-20b got 7 of 11 pages while Gemini and Groq were at a per-minute limit."""

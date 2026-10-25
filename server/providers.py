@@ -34,17 +34,17 @@ PRESETS = {
         "model": "gemini-flash-lite-latest",
         "keys_url": "https://aistudio.google.com/apikey",
     },
+    "ollama": {
+        "label": "Ollama no seu computador (grátis, sem internet, exige PC forte; erra mais, fica de reserva)",
+        "base": "http://host.docker.internal:11434/v1",
+        "model": "",
+        "keys_url": "",
+    },
     "openrouter": {
         "label": "OpenRouter (modelos :free, 50 páginas por dia sem créditos)",
         "base": "https://openrouter.ai/api/v1",
         "model": "",
         "keys_url": "https://openrouter.ai/keys",
-    },
-    "ollama": {
-        "label": "Ollama no seu computador (grátis, sem internet, exige PC forte)",
-        "base": "http://host.docker.internal:11434/v1",
-        "model": "",
-        "keys_url": "",
     },
     "groq-2": {
         "label": "Groq, segundo modelo (GPT-OSS 20B, mesma chave do Groq, cota separada)",
@@ -61,8 +61,9 @@ RENAMED = {"groq-llama": "groq-2"}
 # answers 429 with a limit of 0 requests for mistral-small and mistral-medium, and GitHub Models
 # answered a plain "OK" instead of a chat reply.  Keys saved for them are skipped.
 REMOVED = {"mistral", "github"}
-# Weaker: used only while the others are at their limit, never in the turns.
-RESERVES = {"groq-2"}
+# Weaker: used only while the others are at their limit, never in the turns.  Ollama's
+# gpt-oss:20b reversed 2 of 35 lines and got 3 genders wrong on pages Groq got right.
+RESERVES = {"groq-2", "ollama"}
 LOCAL_HOSTS = {"host.docker.internal", "localhost", "127.0.0.1"}
 SHORT_REST = 60
 LONG_REST = 3600

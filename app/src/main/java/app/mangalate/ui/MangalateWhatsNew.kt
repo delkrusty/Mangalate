@@ -25,7 +25,7 @@ internal object MangalateWhatsNew {
                 "Falas curtas que a IA devolvia em inglês, como \"AH..\", risadas e sons, agora aparecem no balão.",
                 "Português mais cuidadoso: a IA tenta de novo quando escreve em espanhol, erra o gênero, repete palavra ou erra o formato, e nomes de lugares ficam iguais no capítulo todo.",
                 "Sinais como \"⁈\" não aparecem mais como quadradinho.",
-                "No servidor, a tradução pelo Ollama, com a IA rodando no próprio computador, agora funciona.",
+                "No servidor, a tradução pelo Ollama, com a IA rodando no próprio computador, agora funciona. Como erra mais, ele fica de reserva para quando Groq e Gemini chegam ao limite.",
             ),
         ),
         WhatsNewRelease(

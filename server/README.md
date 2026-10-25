@@ -20,10 +20,10 @@ Se `py` não funcionar, use `python`. O instalador pergunta, nesta ordem:
 
 | Pergunta | O que responder |
 |---|---|
-| Hardware | `1` (CPU) se não souber; `2` se tiver placa NVIDIA |
+| Hardware | `1` (CPU) se não souber, ou com placa AMD RX 6000 ou mais antiga, ou Intel; `2` se tiver placa NVIDIA. Radeon RX 7000 ou mais nova: veja [AMD no Windows](#amd-no-windows-radeon-rx-7000-ou-mais-nova-experimental) |
 | Celular na mesma rede Wi-Fi | `s` |
 | Velocidade | Enter. O padrão é Rápido em CPU e Qualidade com placa NVIDIA |
-| Qual IA | Groq e depois Gemini como reserva. Passo a passo no [guia de IAs](BYOK.md) |
+| Qual IA | Groq e depois Gemini como reserva. Com o Ollama instalado, ele pode entrar como 3ª opção. Passo a passo no [guia de IAs](BYOK.md) |
 | Iniciar agora | `s` |
 
 No fim, o instalador mostra a **Chave Mangalate**, que vai no app. Ela fica salva em `server/secrets/mangalate_key.txt`.
@@ -88,7 +88,7 @@ Para ler o CBZ no app, coloque-o na pasta de armazenamento do Mangalate, em `man
 ## Outros sistemas e placas
 
 - **Linux/macOS:** use os mesmos comandos, trocando `py` por `python3`. A aceleração por placa de vídeo é só NVIDIA; Mac usa CPU.
-- **AMD:** Radeon RX 7000 ou mais nova acelera no Windows pelo WSL2 (veja abaixo). Placas mais antigas (RX 6000 para trás) usam CPU. No Linux com ROCm, no `python3 setup.py` escolha `3`. As duas opções AMD são experimentais, ainda não testadas em placa real. Rode `python hardware.py` para ver o que foi detectado.
+- **AMD:** Radeon RX 7000 ou mais nova acelera no Windows pelo WSL2 (veja abaixo). Placas mais antigas (RX 6000 para trás) usam CPU no motor, mas o Ollama, se você usar, roda nelas (veja o [guia de IAs](BYOK.md#ollama-experimental)). No Linux com ROCm, no `python3 setup.py` escolha `3`. As duas opções AMD são experimentais, ainda não testadas em placa real. Rode `python hardware.py` para ver o que foi detectado.
 - **Intel, DirectML e OpenVINO:** não implementados; use CPU.
 
 ### AMD no Windows (Radeon RX 7000 ou mais nova, experimental)

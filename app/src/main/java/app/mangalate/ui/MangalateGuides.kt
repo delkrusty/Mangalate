@@ -28,7 +28,8 @@ internal object MangalateGuides {
             "Servidor + IA",
             "O servidor no seu computador lê o texto, apaga o original e escreve a tradução. Só o texto das falas " +
                 "vai para a IA escolhida no instalador, com a sua própria chave (BYOK). Groq e Gemini têm cota grátis e, se você configurar os dois, " +
-                "um assume sozinho quando o outro atinge o limite. O Ollama roda a IA no próprio computador, sem internet. " +
+                "um assume sozinho quando o outro atinge o limite. O Ollama roda a IA no próprio computador, sem internet; como erra mais, ele fica de reserva " +
+                "e só traduz quando as outras estão no limite ou quando é a única. " +
                 "Mangalate não cobra nem recebe comissão. A chave da IA fica só em server/secrets/provider_key.txt; " +
                 "nunca cole essa chave no celular.",
         ),

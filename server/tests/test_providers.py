@@ -295,8 +295,23 @@ class InstallerTest(unittest.TestCase):
         providers = choose_providers(ask=lambda prompt: next(answers), secret=lambda prompt: next(keys))
         self.assertEqual(providers, [GROQ, GEMINI])
 
+    def test_ollama_is_the_third_choice_after_groq_and_gemini(self):
+        self.assertEqual(list(PRESETS)[:3], ["groq", "gemini", "ollama"])
+
+    def test_installer_says_when_ollama_is_closed_or_the_model_is_missing(self):
+        from setup import ollama_problem
+        tags = {"models": [{"name": "gpt-oss:20b"}, {"name": "gemma3:latest"}]}
+        self.assertIsNone(ollama_problem("gpt-oss:20b", fetch=lambda: tags))
+        self.assertIsNone(ollama_problem("gemma3", fetch=lambda: tags))
+        self.assertIn("ollama pull qwen3:8b", ollama_problem("qwen3:8b", fetch=lambda: tags))
+
+        def closed():
+            raise OSError("connection refused")
+        self.assertIn("não respondeu", ollama_problem("gpt-oss:20b", fetch=closed))
+
     def test_ollama_needs_no_key_and_custom_provider_is_manual(self):
-        answers = iter([f"4,{len(PRESETS) + 1}", "qwen3:8b", "https://api.example.com/v1", "my-model", "n"])
+        ollama = list(PRESETS).index("ollama") + 1
+        answers = iter([f"{ollama},{len(PRESETS) + 1}", "qwen3:8b", "https://api.example.com/v1", "my-model", "n"])
         keys = iter(["custom-provider-key-123456"])
         providers = choose_providers(ask=lambda prompt: next(answers), secret=lambda prompt: next(keys))
         self.assertEqual(providers[0], {"name": "ollama", "base": PRESETS["ollama"]["base"],
