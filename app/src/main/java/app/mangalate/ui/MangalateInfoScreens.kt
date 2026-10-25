@@ -1,5 +1,6 @@
 package app.mangalate.ui
 
+import android.content.Context
 import android.os.Build
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
@@ -15,14 +16,19 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -69,7 +75,99 @@ class MangalateHelpScreen : Screen() {
 
 class MangalateArticleScreen(private val page: MangalateInfoPage) : Screen() {
     @Composable
-    override fun Content() = MangalateGuideContent(page)
+    override fun Content() = if (page == MangalateInfoPage.CHANGES) MangalateWhatsNewContent() else MangalateGuideContent(page)
+}
+
+private const val WHATS_NEW_PREFS = "mangalate_whats_new"
+private const val WHATS_NEW_SEEN = "seen"
+
+/** Mostra uma vez, depois de cada atualização, as novidades que ainda não foram vistas. */
+@Composable
+fun MangalateWhatsNewOnUpdate() {
+    val context = LocalContext.current
+    val navigator = LocalNavigator.currentOrThrow
+    val prefs = remember { context.getSharedPreferences(WHATS_NEW_PREFS, Context.MODE_PRIVATE) }
+    var items by remember { mutableStateOf(emptyList<String>()) }
+    val markSeen = { prefs.edit().putStringSet(WHATS_NEW_SEEN, MangalateWhatsNew.allKeys()).apply() }
+    LaunchedEffect(Unit) {
+        val freshInstall = runCatching {
+            @Suppress("DEPRECATION")
+            val info = context.packageManager.getPackageInfo(context.packageName, 0)
+            info.firstInstallTime == info.lastUpdateTime
+        }.getOrDefault(true)
+        items = MangalateWhatsNew.unseen(prefs.getStringSet(WHATS_NEW_SEEN, null), freshInstall)
+        if (items.isEmpty()) markSeen()
+    }
+    if (items.isEmpty()) return
+    val close = {
+        markSeen()
+        items = emptyList()
+    }
+    AlertDialog(
+        onDismissRequest = close,
+        title = { Text("O que há de novo") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items.forEach { Text("• $it", style = MaterialTheme.typography.bodyMedium) }
+            }
+        },
+        confirmButton = { TextButton(onClick = close) { Text("Entendi") } },
+        dismissButton = {
+            TextButton(
+                onClick = {
+                    close()
+                    navigator.push(MangalateArticleScreen(MangalateInfoPage.CHANGES))
+                },
+            ) { Text("Ver todas") }
+        },
+    )
+}
+
+@Composable
+private fun MangalateWhatsNewContent() {
+    val navigator = LocalNavigator.currentOrThrow
+    val handleBack = LocalBackPress.current
+    Scaffold(
+        topBar = { scrollBehavior ->
+            AppBar(
+                title = MangalateInfoPage.CHANGES.title,
+                navigateUp = { if (handleBack != null) handleBack() else navigator.pop() },
+                scrollBehavior = scrollBehavior,
+            )
+        },
+    ) { contentPadding ->
+        LazyColumn(
+            contentPadding = contentPadding,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item {
+                Text(
+                    "Você está no Mangalate ${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE}). " +
+                        "O que mudou em cada atualização, da mais nova para a mais antiga.",
+                    modifier = Modifier.padding(horizontal = 16.dp).padding(top = 16.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            items(MangalateWhatsNew.releases, key = { it.version ?: "recentes" }) { release ->
+                Card(
+                    modifier = Modifier.padding(horizontal = 16.dp).fillMaxWidth(),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+                ) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            release.version?.let { "Versão $it" } ?: "Novidades recentes",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        release.items.forEach { Text("• $it", style = MaterialTheme.typography.bodyMedium) }
+                    }
+                }
+            }
+            item { Spacer(Modifier.height(24.dp)) }
+        }
+    }
 }
 
 @Composable
@@ -211,11 +309,7 @@ private fun MangalateGuideContent(page: MangalateInfoPage) {
     val navigator = LocalNavigator.currentOrThrow
     val handleBack = LocalBackPress.current
     var search by rememberSaveable { mutableStateOf("") }
-    val articles = when (page) {
-        MangalateInfoPage.HELP -> MangalateGuides.help
-        MangalateInfoPage.PRIVACY -> MangalateGuides.privacy
-        MangalateInfoPage.CHANGES -> MangalateGuides.changes
-    }
+    val articles = if (page == MangalateInfoPage.PRIVACY) MangalateGuides.privacy else MangalateGuides.help
     val matches = remember(search, articles) {
         articles.filter { search.isBlank() || it.title.contains(search, true) || it.text.contains(search, true) }
     }
@@ -234,10 +328,10 @@ private fun MangalateGuideContent(page: MangalateInfoPage) {
         ) {
             item {
                 Text(
-                    when (page) {
-                        MangalateInfoPage.HELP -> "Guias rápidos e soluções para o Mangalate. Todo este conteúdo funciona offline."
-                        MangalateInfoPage.PRIVACY -> "Como funciona o tratamento das páginas, das chaves e das traduções."
-                        MangalateInfoPage.CHANGES -> "Mangalate ${BuildConfig.VERSION_NAME}: melhorias desta versão."
+                    if (page == MangalateInfoPage.PRIVACY) {
+                        "Como funciona o tratamento das páginas, das chaves e das traduções."
+                    } else {
+                        "Guias rápidos e soluções para o Mangalate. Todo este conteúdo funciona offline."
                     },
                     modifier = Modifier.padding(horizontal = 16.dp).padding(top = 16.dp),
                     style = MaterialTheme.typography.bodyMedium,
@@ -265,7 +359,7 @@ private fun MangalateGuideContent(page: MangalateInfoPage) {
                 }
             }
             items(matches, key = { it.title }) { article ->
-                GuideCard(article, initiallyExpanded = page != MangalateInfoPage.HELP || search.isNotBlank())
+                GuideCard(article, initiallyExpanded = page == MangalateInfoPage.PRIVACY || search.isNotBlank())
             }
             if (matches.isEmpty()) {
                 item { Text("Nenhum tópico encontrado. Tente outra palavra.", modifier = Modifier.padding(16.dp)) }

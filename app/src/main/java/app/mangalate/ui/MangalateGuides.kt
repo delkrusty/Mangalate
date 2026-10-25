@@ -2,7 +2,7 @@ package app.mangalate.ui
 
 internal data class GuideArticle(val title: String, val text: String)
 
-/** Manuais básicos, privacidade e novidades disponíveis sem internet. */
+/** Manuais básicos e privacidade disponíveis sem internet; as novidades ficam em [MangalateWhatsNew]. */
 internal object MangalateGuides {
     val help = listOf(
         GuideArticle(
@@ -89,12 +89,5 @@ internal object MangalateGuides {
         GuideArticle("Servidor + IA", "As páginas vão só ao servidor configurado por você; leitura do texto e limpeza rodam nele. Use HTTPS fora da rede local. Apenas o texto das falas, o contexto e o glossário vão para a IA escolhida, ou ficam no computador com o Ollama. Retenção e uso dos dados seguem os termos do provedor; no plano grátis do Gemini, o Google pode usar o conteúdo enviado."),
         GuideArticle("Duas chaves diferentes", "A chave Mangalate autentica o aplicativo e fica nas configurações privadas do Android. A chave de IA fica no arquivo privado do seu servidor, fora do APK e do repositório. Não há chave compartilhada do Mangalate. Nunca publique senhas."),
         GuideArticle("Arquivos e serviços externos", "Traduções e revisões ficam no aparelho, computador ou runtime que você utiliza. Downloads acessam fontes configuradas por você. A Ajuda funciona offline; links de instalação abrem serviços externos com termos próprios."),
-    )
-    val changes = listOf(
-        GuideArticle("0.5.3: servidor + IA", "O perfil Básico (NLLB) saiu: o servidor agora traduz com Groq, Gemini, OpenRouter ou Ollama, escolhidos num menu, com alternância automática quando um atinge o limite grátis. O inglês não fica mais por baixo do português, palavras não são cortadas no meio e o espaço depois da vírgula foi corrigido."),
-        GuideArticle("0.5.2: offline e servidor", "Dois modos principais: No celular e Servidor. Gemini e DeepL diretos saíram da seleção. Limpeza local da 0.5.0 preservada. Docker com assistente e caminhos explícitos das chaves. Perfis Básico e BYOK, sem cobrança Mangalate. Colab interativo por capítulo, sem túnel."),
-        GuideArticle("Acabamento com revisão", "Servidor com limites de máscara, enquadramento preservado e texto sobre arte filtrado por padrão. BYOK em lote usa contexto das páginas anteriores e glossário opcional. Exporta original, resultado e relatório para revisar, sem prometer perfeição humana automática."),
-        GuideArticle("0.5.1: ML Kit corrigido", "Preservação dos componentes ML Kit no APK minificado, acesso serializado aos clientes e remoção de falhas locais ocultadas como texto original. Não adicionar inicialização duplicada do SDK."),
-        GuideArticle("Limpeza da 0.5.0", "Balões uniformes e fechados podem ser limpos por inteiro, preservando o contorno. Regiões incertas seguem tratamento conservador. Mantidos o agrupamento por balão, margens e hifenização em português no celular."),
     )
 }

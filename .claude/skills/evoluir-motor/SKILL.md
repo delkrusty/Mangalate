@@ -75,7 +75,7 @@ A IA varia entre execuções e entre provedores. Uma diferença só na traduçã
 - a suíte está verde e o teste novo falhava antes;
 - o `revisor-motor` não deixou nada bloqueante.
 
-Nesse caso, prepare o commit (um assunto, mensagem em português como as do histórico, CHANGELOG em "Em teste") e só faça commit e push quando o Lucas pedir.
+Nesse caso, prepare o commit (um assunto, mensagem em português como as do histórico, CHANGELOG em "Em teste" e, se quem lê percebe a mudança, uma frase simples nas novidades do app em `MangalateWhatsNew.kt`) e só faça commit e push quando o Lucas pedir.
 
 **Reverter** quando o critério não foi atingido, quando apareceu uma regressão que você não consegue explicar e corrigir dentro do mesmo problema, ou quando a mudança precisou ficar grande. Use `git restore` nos arquivos da iteração e anote o que se aprendeu na ficha.
 

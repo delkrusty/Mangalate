@@ -4,6 +4,9 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 
 ## Em teste
 
+### App
+- Nova tela "O que há de novo" (Mais › Sobre o Mangalate) com as novidades de cada versão em frases curtas, escritas para quem usa o app e não nos termos técnicos deste arquivo. Depois de cada atualização, o app mostra uma vez só o que ainda não foi visto; numa instalação nova não aparece nada. A lista antiga, parada na 0.5.3, foi trocada por uma que vai da 0.1.0 até as novidades em teste.
+
 ### Balões e arte
 - Fala que ficava em inglês dentro do balão:
   - duas palavras numa linha só, cada uma num de dois balões colados ("?!" num, "KOFF..." no outro), agora são separadas. O detector fazia uma caixa só sobre as duas, e a região era tomada por desenho e ficava em inglês. A linha é cortada num vão de pelo menos uma altura de letra quando o vão é papel na altura das letras e o contorno dos balões entra nele por cima ou por baixo; cada parte é lida com a altura das próprias letras (antes, "KOFF..." lido numa caixa alta virava "46"). Palavras espaçadas de uma fala só (vão só de papel) e letras que o detector não marcou (a tinta delas fica no vão) não são cortadas. Nas rodadas de teste antigas, só essa linha mudou, em 167 páginas;
