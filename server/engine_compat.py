@@ -1221,6 +1221,24 @@ async def refine_mask_consistently(self, config, ctx):
                 mask[keep] = 0
         except Exception as exc:  # never lose a page over this
             print(f"Drawn marks skipped: {type(exc).__name__}", flush=True)
+    # In a bubble, a symbol at the end of a line (an anger vein) and the large strokes of a
+    # drawing the mask reached (a face over a label, the outline) stay as drawn.
+    try:
+        from quality import drawing_around, line_symbols
+        kept = 0
+        for region in ctx.text_regions or []:
+            if (getattr(region, "mangalate_background", None) or {}).get("kind") != "interior":
+                continue
+            keep = line_symbols(ctx.img_rgb, region.lines) | drawing_around(ctx.img_rgb, region.lines, _line_size(region))
+            hit = keep & (mask > 0)
+            if hit.any():
+                mask = mask.copy()
+                mask[hit] = 0
+                kept += 1
+        if kept:
+            print(f"Drawing kept: {kept} region(s)", flush=True)
+    except Exception as exc:  # never lose a page over this
+        print(f"Drawing kept skipped: {type(exc).__name__}", flush=True)
     # The lines of a block kept as drawn (art, a logo, a sound effect, the small print of a form)
     # are never cleaned by the mask of a translated block whose box runs onto them.
     preserved = getattr(ctx, "mangalate_preserved", None)

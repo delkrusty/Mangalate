@@ -87,6 +87,18 @@ class Round2Test(unittest.TestCase):
                               lines=np.array([[[700, 542], [800, 542], [800, 584], [700, 584]]]))
         self.assertFalse(same_block(top, far))
 
+    def test_column_beside_the_last_line_stays_apart(self):
+        # One Piece 1161 p4: a caption box with columns side by side, the right one starting higher.
+        # Joined as "a word after the last line", the OCR read the columns row by row, mixed.
+        left = SimpleNamespace(xyxy=np.array([715, 144, 776, 199]), texts=["...OF THE LONG NIGHT."],
+                               lines=np.array([[[727, 144], [764, 144], [764, 158], [727, 158]],
+                                               [[718, 159], [776, 159], [776, 181], [718, 181]],
+                                               [[715, 178], [772, 178], [772, 199], [715, 199]]]))
+        right = SimpleNamespace(xyxy=np.array([791, 153, 854, 190]), texts=["...AND THE SEA..."],
+                                lines=np.array([[[791, 153], [854, 153], [854, 170], [791, 170]],
+                                                [[798, 170], [841, 170], [841, 190], [798, 190]]]))
+        self.assertFalse(same_block(left, right))
+
     def test_caps_answer_keeps_the_names_it_kept(self):
         from quality import sentence_case, source_names
         names = source_names("QUEEN MERIAL!", "RAINHA MERIAL!")

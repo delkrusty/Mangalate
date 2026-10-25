@@ -1237,6 +1237,35 @@ class BubbleGlyphTest(unittest.TestCase):
         # bubble (Grand Blue 102 p31).
         self.assertFalse(bubble_glyphs(image, box, 26, near=1.6)[130:134, 228:248].any())
 
+    def test_dots_over_a_column_beside_another_are_cleaned(self):
+        # One Piece 1161 p4: a caption of columns side by side; the row of dots over the middle
+        # column has a letter of the next column at its height, just past the box.  It is another
+        # block, far from the dots, not a word on their row: the dots stayed over the translation.
+        image, box, dots = self.small_dots()
+        cv2.putText(image, "G", (340, 142), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (10, 10, 10), 3)
+        clean = glyphs_to_clean(image, box, 26)
+        for x, y in dots:
+            self.assertTrue(clean[y - 1:y + 1, x - 1:x + 1].all(), (x, y))
+        self.assertFalse(clean[118:140, 345:365].any())   # the other column stays
+
+    def test_drops_beside_another_column_are_not_dots(self):
+        # Specks of a drawing (drops of unlike size) over the line, with a letter at their height
+        # far away: not a row of "...", so the letter still stops them.
+        image, box, _ = self.small_dots()
+        image[128:136, 225:250] = 250                     # no dots over the line
+        cv2.circle(image, (232, 130), 4, (10, 10, 10), -1)
+        image[132:134, 246:248] = (10, 10, 10)
+        cv2.putText(image, "G", (340, 142), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (10, 10, 10), 3)
+        clean = glyphs_to_clean(image, box, 26)
+        self.assertFalse(clean[125:136, 226:250].any())
+
+    def test_word_beside_the_dots_still_stops_them(self):
+        # A word right beside the row of dots makes it a line that was not read: it stays.
+        image, box, dots = self.small_dots()
+        cv2.putText(image, "NO", (256, 140), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (10, 10, 10), 2)
+        clean = glyphs_to_clean(image, box, 26)
+        self.assertFalse(clean[131:133, 229:247].any())
+
     def test_fragments_of_hatching_are_not_dots(self):
         # Grand Blue 102 p33: short diagonal strokes of hatching beside the bubble text have a
         # square box, dark ink and a size of a few px, like a dot, but are not punctuation.
@@ -1714,6 +1743,88 @@ class TextBlockTest(unittest.TestCase):
         cv2.putText(mask, "OH", (60, 104), cv2.FONT_HERSHEY_SIMPLEX, 0.7, 255, 2)
         boxes[1] = (58, boxes[1][1], boxes[1][2], boxes[1][3])
         self.assertEqual(quality.block_cuts(mask, boxes), {})
+
+
+class DrawnSymbolTest(unittest.TestCase):
+    """One Piece 1161 p8: an anger vein beside "HIM?!" was in the detector's line box and cleaned
+    with the letters; p11: the bottom of a face drawn over a label was cleaned with it."""
+
+    @staticmethod
+    def line(text, vein_gap=None, x=80):
+        gray = np.full((140, 320), 255, np.uint8)
+        (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
+        cv2.putText(gray, text, (x, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, 0, 2)
+        left = x
+        if vein_gap is not None:
+            # Curved strokes, not on the row of the letters: one rises above it, one sits low.
+            v = x - vein_gap - 22
+            cv2.ellipse(gray, (v + 14, 66), (8, 11), 0, 100, 260, 0, 2)
+            cv2.ellipse(gray, (v + 19, 70), (9, 7), 0, 200, 340, 0, 2)
+            cv2.ellipse(gray, (v + 12, 86), (9, 5), 0, 180, 300, 0, 2)
+            left = v
+        quad = [[left - 2, 56], [x + w + 3, 56], [x + w + 3, 88], [left - 2, 88]]
+        return gray, quad, (x, x + w)
+
+    def test_symbol_at_the_end_of_a_line_is_kept(self):
+        gray, quad, (lx0, lx1) = self.line("HIM?!", vein_gap=24)
+        keep = quality.line_symbols(gray, np.array([quad]))  # region.lines as the engine gives them
+        ink = gray < 110
+        self.assertGreater((keep & ink)[:, :lx0 - 4].sum(), 40)
+        self.assertEqual((keep & ink)[:, lx0:].sum(), 0)
+
+    def test_symbol_is_kept_with_its_soft_rim(self):
+        # One Piece 1161 p8: on a scanned page the strokes fade out over a couple of pixels; with
+        # a 1 px margin the cleaner smeared that rim grey around the vein.
+        gray, quad, (lx0, _) = self.line("HIM?!", vein_gap=24)
+        gray = cv2.GaussianBlur(gray, (5, 5), 1.2)
+        keep = quality.line_symbols(gray, np.array([quad]))
+        rim = (gray < 230)[:, :lx0 - 4]
+        self.assertGreater(rim.sum(), 40)
+        self.assertTrue(keep[:, :lx0 - 4][rim].all())
+
+    def test_stroke_of_the_symbol_past_the_line_box_is_kept_too(self):
+        # One Piece 1161 p8: one stroke of the vein rose above the line box (its centre outside
+        # it); it was cleaned, and the rest of the vein stayed broken and smeared.
+        gray, quad, (lx0, _) = self.line("HIM?!", vein_gap=24)
+        v = lx0 - 24 - 22
+        cv2.ellipse(gray, (v + 22, 52), (7, 6), 0, 180, 300, 0, 2)   # the stroke above the box
+        # A letter of the line above, right over the vein: read, in its own line box, it is cleaned.
+        cv2.putText(gray, "T", (v + 30, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, 0, 2)
+        above = [[v + 26, 18], [v + 50, 18], [v + 50, 42], [v + 26, 42]]
+        keep = quality.line_symbols(gray, np.array([above, quad]))
+        ink = gray < 110
+        self.assertGreater((keep & ink)[44:56, v + 12:v + 32].sum(), 10)
+        self.assertEqual((keep & ink)[18:42, v + 28:v + 50].sum(), 0)
+
+    def test_letters_and_punctuation_are_not_symbols(self):
+        for text in ("AH...", "...TO FIND", "WE   GO", "...?"):
+            gray, quad, _ = self.line(text)
+            self.assertFalse(quality.line_symbols(gray, [quad]).any(), text)
+
+    def test_short_word_beside_a_drawing_is_left_as_before(self):
+        # Two letters against three strokes: either end could be the drawing, so nothing changes.
+        gray, quad, _ = self.line("GO", vein_gap=24, x=120)
+        self.assertFalse(quality.line_symbols(gray, [quad]).any())
+
+    @staticmethod
+    def label(dark=False):
+        paper, ink = (0, 255) if dark else (255, 0)
+        gray = np.full((160, 240), paper, np.uint8)
+        cv2.putText(gray, "Label", (80, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.6, ink, 2)
+        # A face drawn right above the label: one big piece of ink reaching down to the text.
+        cv2.circle(gray, (115, 55), 32, ink, 3)
+        cv2.line(gray, (100, 85), (130, 92), ink, 3)
+        return gray, [[78, 94], [146, 94], [146, 114], [78, 114]]
+
+    def test_drawing_over_a_label_is_kept_and_the_letters_are_not(self):
+        gray, quad = self.label()
+        keep = quality.drawing_around(gray, np.array([quad]))
+        self.assertTrue(keep[85:92, 100:131].any())
+        self.assertEqual(keep[96:113, 80:145].sum(), 0)
+
+    def test_dark_bubble_is_left_as_before(self):
+        gray, quad = self.label(dark=True)
+        self.assertFalse(quality.drawing_around(gray, [quad]).any())
 
 
 class GapCutTest(unittest.TestCase):
