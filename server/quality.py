@@ -808,16 +808,24 @@ GLYPH_TOLERANCE = 40     # antialiased letter edges still differ this much from 
 GLYPH_REACH = 1.5        # search window around the text, in line heights
 GLYPH_NEAR = 0.8         # letters kept only this close to the text box, in line heights
 CLEAN_MARK = 0.4         # a punctuation dot is smaller than this, in line heights (a lower-case letter is not)
+DOT_ASPECT = 2           # and at most this much longer than wide (a hairline is longer)
+DOT_SIZE = 5             # a dot thinner than a stroke is at most this big (px): small print is not punctuation
+DOT_INK = 128            # and has ink darker than this (0-255): light screentone specks are not
+DOT_FILL = 0.5           # and fills this share of its box: a short diagonal stroke of hatching does not
+DOT_CLEAR = 2            # and has no other dark ink this close (px), unlike a fragment of hatching
+DOT_ROW = 0.6            # and another dot on its row this close, in line heights (the dots of "...")
+DOT_CROWD = 4            # but at most this many dots that close: more is a field of screentone specks
 
 
-def bubble_glyphs(image, box, line_height, near=GLYPH_NEAR):
+def bubble_glyphs(image, box, line_height, near=GLYPH_NEAR, dots=False):
     """Pixels of letters around ``box``: holes in the flat interior that surrounds the text.
 
     The detector mask misses parts of bold italic lettering (TBATE new episode
     p12: the T of "THIS", the end of "HARD", the whole line "OF US.").  Inside a
     bubble, every letter is a hole in the flat interior, whatever the detector
     saw.  Returns a boolean mask of the image size, empty when the text does not
-    sit on a flat background.
+    sit on a flat background.  With ``dots``, small dots of punctuation are kept too
+    (for the cleaning only: the line repair would stretch a line box to them).
     """
     h, w = image.shape[:2]
     out = np.zeros((h, w), bool)
@@ -863,10 +871,44 @@ def bubble_glyphs(image, box, line_height, near=GLYPH_NEAR):
     count, labels, stats, _ = cv2.connectedComponentsWithStats(holes.astype(np.uint8), connectivity=8)
     depth = cv2.distanceTransform(holes.astype(np.uint8), cv2.DIST_L2, 3)
     thin = max(1.6, 0.05 * lh)
+    shape_ok = np.zeros(count, bool)  # small, compact, filled and dark: shaped like a dot
+    if dots:
+        for label in range(1, count):
+            bw, bh, area = stats[label, 2], stats[label, 3], stats[label, 4]
+            shape_ok[label] = (max(bw, bh) < min(CLEAN_MARK * lh, DOT_SIZE + 1) and max(bw, bh) <= DOT_ASPECT * min(bw, bh)
+                               and area >= DOT_FILL * bw * bh)
+        # Ink that does not count against a dot: the letters (thick holes) and the other dots.
+        thick = np.zeros(count, bool)
+        thick[np.unique(labels[depth >= thin])] = True
+        stray = (window.min(axis=2) < DOT_INK) & ~(thick | shape_ok)[labels]
+        inked = np.zeros(count, bool)
+        inked[np.unique(labels[window.min(axis=2) < DOT_INK])] = True
+        marks = [k for k in range(1, count) if shape_ok[k] and inked[k]]
+        centres = {k: (stats[k, 0] + stats[k, 2] / 2, stats[k, 1] + stats[k, 3] / 2) for k in marks}
+        reach = DOT_ROW * lh
+
+    def in_a_row(label):
+        # The dots of "..." sit side by side on one row; a lone speck, a dot of a dashed line of
+        # the drawing (in a column) or a field of screentone specks around the text is not one.
+        cx, cy = centres[label]
+        near = [k for k in marks if k != label and abs(centres[k][0] - cx) <= reach and abs(centres[k][1] - cy) <= reach]
+        row = [k for k in near if abs(centres[k][1] - cy) <= DOT_SIZE / 2]
+        column = [k for k in near if abs(centres[k][0] - cx) <= DOT_SIZE / 2 and k not in row]
+        return bool(row) and not column and len(near) <= DOT_CROWD
+
+    def alone(label):
+        # A dot sits alone on the flat interior, beside letters or other dots; a fragment of
+        # hatching or the end of a speed line has more ink of the drawing right next to it.
+        x, y, bw, bh = (int(v) for v in stats[label, :4])
+        ya, yb, xa, xb = max(0, y - DOT_CLEAR), y + bh + DOT_CLEAR + 1, max(0, x - DOT_CLEAR), x + bw + DOT_CLEAR + 1
+        return not stray[ya:yb, xa:xb].any()
+
     for label in range(1, count):
         bw, bh, area = stats[label, 2], stats[label, 3], stats[label, 4]
         part = labels == label
-        if depth[part].max() < thin or (max(bw, bh) > 1.5 * lh and area < 0.12 * bw * bh):
+        # A dot of punctuation is as thin, but compact: the dots of "..." stayed on the page (One Piece 1161 p4).
+        dot = shape_ok[label] and window[part].min() < DOT_INK and alone(label) and in_a_row(label)
+        if (depth[part].max() < thin and not dot) or (max(bw, bh) > 1.5 * lh and area < 0.12 * bw * bh):
             holes[part] = False
     near = int(lh * near)
     keep = np.zeros_like(holes)
@@ -888,7 +930,7 @@ def glyphs_to_clean(image, box, line_height):
     """
     h, w = image.shape[:2]
     lh = max(4.0, float(line_height))
-    glyphs = bubble_glyphs(image, box, lh, near=NEAR_LINES)
+    glyphs = bubble_glyphs(image, box, lh, near=NEAR_LINES, dots=True)
     if not glyphs.any():
         return glyphs
     size = max(5, int(round(lh * 0.25)) | 1)
@@ -901,18 +943,19 @@ def glyphs_to_clean(image, box, line_height):
         mark = gh < CLEAN_MARK * lh and gw < CLEAN_MARK * lh
         if near_taken and y0 <= gy + gh / 2 <= y1 and (mark or (not grow and x0 <= gx + gw / 2 <= x1)):
             return True  # a letter of the box the margin cuts, or a dot of punctuation within a letter gap
-        # A dot of punctuation on the row just under the line ("SORRY / ...").
-        return mark and 0 <= gy - y1 <= lh and x0 <= gx and gx + gw <= x1
+        # A dot of punctuation on the row just under or over the text ("SORRY / ...", "... / FIELD / ...").
+        return mark and (0 <= gy - y1 <= lh or 0 <= y0 - gy - gh <= lh) and x0 <= gx and gx + gw <= x1
     box_limit = limit.copy()
     queue = [k for k in set(np.unique(labels[limit & glyphs]).tolist()) - {0} if belongs(k, True)]
-    below = [k for k in range(1, count) if k not in queue and belongs(k, False)]
-    if below:
+    rows = [k for k in range(1, count) if k not in queue and belongs(k, False)]
+    for side in ([k for k in rows if stats[k, 1] >= y1], [k for k in rows if stats[k, 1] < y1]):
+        if not side:
+            continue
         # Only a row of dots alone: a letter on the same row makes it a line of text that was not read.
-        r0, r1 = min(stats[k, 1] for k in below), max(stats[k, 1] + stats[k, 3] for k in below)
-        if any(stats[k, 1] < r1 and stats[k, 1] + stats[k, 3] > r0 and k not in below and k not in queue
-               for k in range(1, count)):
-            below = []
-    queue += below
+        r0, r1 = min(stats[k, 1] for k in side), max(stats[k, 1] + stats[k, 3] for k in side)
+        if not any(stats[k, 1] < r1 and stats[k, 1] + stats[k, 3] > r0 and k not in side and k not in queue
+                   for k in range(1, count)):
+            queue += side
     taken = set(queue)
     while queue:
         k = queue.pop()

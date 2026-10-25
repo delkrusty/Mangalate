@@ -1216,6 +1216,68 @@ class BubbleGlyphTest(unittest.TestCase):
         clean = glyphs_to_clean(image, (148, 146, 322, 172), 26)
         self.assertFalse(clean[186:202, 150:330].any())
 
+    def small_dots(self, colour=(10, 10, 10)):
+        # One Piece 1161 p4: dots of "..." only 2 px wide, before the first word and on the rows
+        # over and under the line ("... / FIELD / ..."), as thin as a hairline.
+        image = self.page()
+        image[100:300, 120:400] = 250
+        cv2.putText(image, "THE WORD", (180, 170), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (10, 10, 10), 3)
+        dots = [(156, 166), (164, 166), (172, 166), (230, 132), (238, 132), (246, 132),
+                (230, 182), (238, 182), (246, 182)]
+        for x, y in dots:
+            image[y - 1:y + 1, x - 1:x + 1] = colour
+        return image, (178, 146, 330, 172), dots
+
+    def test_thin_dots_around_the_line_are_cleaned(self):
+        image, box, dots = self.small_dots()
+        clean = glyphs_to_clean(image, box, 26)
+        for x, y in dots:
+            self.assertTrue(clean[y - 1:y + 1, x - 1:x + 1].all(), (x, y))
+        # The line repair does not see them: it stretched a line box to dots and onto the next
+        # bubble (Grand Blue 102 p31).
+        self.assertFalse(bubble_glyphs(image, box, 26, near=1.6)[130:134, 228:248].any())
+
+    def test_fragments_of_hatching_are_not_dots(self):
+        # Grand Blue 102 p33: short diagonal strokes of hatching beside the bubble text have a
+        # square box, dark ink and a size of a few px, like a dot, but are not punctuation.
+        image, box, _ = self.small_dots()
+        for x in (300, 306):                       # a lone diagonal stroke and its neighbour
+            for i in range(5):
+                image[188 + i, x + i] = (10, 10, 10)
+        cv2.rectangle(image, (318, 188), (319, 189), (10, 10, 10), -1)   # a blob with a stroke beside it
+        for i in range(4):
+            image[188 + i, 322 + i] = (10, 10, 10)
+        clean = glyphs_to_clean(image, box, 26)
+        self.assertFalse(clean[187:194, 299:327].any())
+
+    def test_dashed_line_and_lone_speck_are_not_dots(self):
+        # Grand Blue 102 p3: the dashes of a dotted line of the drawing run down past the text,
+        # one under the other, and a lone speck of dust sits by it.  Neither is a row of "...".
+        image, box, _ = self.small_dots()
+        for y in (180, 186, 192):
+            image[y - 1:y + 1, 299:301] = (10, 10, 10)
+        image[187:189, 320:322] = (10, 10, 10)
+        clean = glyphs_to_clean(image, box, 26)
+        self.assertFalse(clean[178:194, 297:303].any())
+        self.assertFalse(clean[185:191, 318:324].any())
+
+    def test_light_specks_are_not_dots(self):
+        # Light screentone specks around the text (cap146 p178) are not punctuation.
+        image, box, dots = self.small_dots(colour=(170, 170, 170))
+        clean = glyphs_to_clean(image, box, 26)
+        self.assertFalse(clean[130:134, 228:248].any())
+
+    def test_small_print_is_not_dots(self):
+        # The small print under a big title (a form, Grand Blue 102 p4): thin strokes of tiny
+        # letters are not punctuation, whatever the title's line height.
+        image = self.page()
+        image[100:300, 120:400] = 250
+        cv2.putText(image, "TITLE", (160, 170), cv2.FONT_HERSHEY_SIMPLEX, 1.6, (10, 10, 10), 4)
+        for x in range(170, 300, 14):  # letters "c" of hairline small print
+            cv2.ellipse(image, (x, 194), (4, 4), 0, 45, 315, (60, 60, 60), 1)
+        found = bubble_glyphs(image, (155, 130, 340, 204), 42, dots=True)
+        self.assertFalse(found[186:204, 160:340].any())
+
     def test_cleaning_stays_off_the_outline(self):
         image, _, _ = self.dotted()
         cv2.putText(image, "EDGE", (60, 210), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (10, 10, 10), 3)  # touches the outline
