@@ -301,7 +301,10 @@ class RetiredModelTest(unittest.TestCase):
                                      _MAX_TOKENS=100, temperature=.2, top_p=1, token_count=0)
         for base, model, short in (("https://api.groq.com/openai/v1", "openai/gpt-oss-120b", True),
                                    ("https://api.groq.com/openai/v1", "other", False),
-                                   ("https://openrouter.ai/api/v1", "openai/gpt-oss-120b", False)):
+                                   ("https://openrouter.ai/api/v1", "openai/gpt-oss-120b", False),
+                                   # Ollama: full thinking took 21 s a page with gpt-oss:20b, 9.5 s with low.
+                                   ("http://host.docker.internal:11434/v1/", "gpt-oss:20b", True),
+                                   ("http://host.docker.internal:11434/v1/", "gemma3:4b", False)):
             client = SimpleNamespace(base_url=base, chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
             asyncio.run(request_byok_translation(translator, "PTB", "<|1|>Hi", client, model))
             self.assertEqual(sent[-1].get("extra_body"), {"reasoning_effort": "low"} if short else None)
@@ -334,6 +337,25 @@ class ReserveTest(unittest.TestCase):
             return p["name"]
         self.assertEqual(asyncio.run(pool.run(attempt)), "groq-2")
         self.assertGreater(pool.resting["groq"], 1000)  # not a chat API: long pause
+
+    def test_model_on_this_computer_is_a_reserve(self):
+        # gpt-oss:20b on Ollama: in 35 lines, 2 with the meaning reversed and 3 with the wrong
+        # gender, against Groq on the same pages.  It takes over only when the others rest.
+        import asyncio
+        from providers import PRESETS, ProviderPool, NotAnAnswer
+        local = {"name": "ollama", "base": PRESETS["ollama"]["base"], "model": "gpt-oss:20b", "key": "ollama"}
+        remote = [p for p in self.providers() if p["name"] != "groq-2"]
+        pool = ProviderPool([remote[0], local, remote[1]], clock=lambda: 0.0, log=lambda m: None, take_turns=True)
+        used = [asyncio.run(pool.run(lambda p: asyncio.sleep(0, p["name"]))) for _ in range(4)]
+        self.assertEqual(used, ["groq", "gemini", "groq", "gemini"])
+
+        async def attempt(p):
+            if p["name"] != "ollama":
+                raise NotAnAnswer("x")
+            return p["name"]
+        self.assertEqual(asyncio.run(pool.run(attempt)), "ollama")
+        alone = ProviderPool([local], clock=lambda: 0.0, log=lambda m: None, take_turns=True)
+        self.assertEqual(asyncio.run(alone.run(lambda p: asyncio.sleep(0, p["name"]))), "ollama")
 
 
 class ReserveWaitTest(unittest.TestCase):
