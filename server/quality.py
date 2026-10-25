@@ -1725,6 +1725,92 @@ def block_cuts(mask, boxes):
     return cuts
 
 
+# One line across two bubbles joined side by side ----------------------------------
+
+GAP_SPLIT = 1.0  # blank between two words of a line, in letter heights of the smaller one
+GAP_SPECK = 2    # px of blank tolerated inside one word
+GAP_PAD = 2      # px kept above and below the letters of each part
+
+
+def gap_cuts(mask, gray, boxes):
+    """{line index: [(x0, y0, x1, y1), ...]} for line boxes across two bubbles that touch.
+
+    One Piece 1161 p7: "?!" in one bubble and "KOFF..." in the bubble grown out of
+    it, with no outline between them on the line; the detector drew one box over
+    both and the region was taken for art.  A blank as wide as the letters beside it,
+    with the outline of the bubbles poking into it, is the seam of the two bubbles.
+    Spaced-out words in one bubble have only paper between them and are never cut.
+    Dots and specks ride along with the word they follow.
+    """
+    mask = np.asarray(mask) > 127
+    gray = np.asarray(gray)
+    cuts = {}
+    for i, (x0, y0, x1, y1) in enumerate(boxes):
+        x0, y0 = max(0, int(x0)), max(0, int(y0))
+        x1, y1 = int(x1), int(y1)
+        ink = mask[y0:y1, x0:x1]
+        if not ink.size or x1 - x0 <= y1 - y0:
+            continue
+        words = _runs(ink.any(axis=0), GAP_SPECK)
+        if len(words) < 2:
+            continue
+        # The mask often covers only part of each letter: their height is read on the page's ink
+        # the mask touches; the outline poking in is ink the mask never touches.
+        page_ink = gray[y0:y1, x0:x1] < INK_LEVEL
+        _, labels = cv2.connectedComponents(page_ink.astype(np.uint8), connectivity=8)
+        touched = np.unique(labels[page_ink & ink])
+        letters_ink = np.isin(labels, touched[touched > 0]) | ink
+        spans_y = []
+        for a, b in words:
+            rows = np.flatnonzero(letters_ink[:, a:b].any(axis=1))
+            spans_y.append((int(rows[0]), int(rows[-1]) + 1))
+        heights = [r1 - r0 for r0, r1 in spans_y]
+        letters = [h >= MIN_PART * max(heights) for h in heights]
+
+        def word_from(k, step):
+            while 0 <= k < len(words) and not letters[k]:
+                k += step
+            return k if 0 <= k < len(words) else None
+
+        near = cv2.dilate(letters_ink.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+        dark = page_ink & ~near
+        parts = [[words[0][0], words[0][1], letters[0]]]
+        for k in range(1, len(words)):
+            a, b = words[k]
+            left, right = word_from(k - 1, -1), word_from(k, 1)
+            seam = False
+            if left is not None and right is not None:
+                small = min((left, right), key=lambda j: heights[j])
+                r0, r1 = spans_y[small]
+                stripe = dark[:, parts[-1][1]:a]
+                # Paper all along the smaller letters (a letter the mask missed is dark there),
+                # and the outline coming in from the top or the bottom of the box.
+                seam = a - parts[-1][1] >= GAP_SPLIT * heights[small] and not stripe[r0:r1].any() \
+                    and (stripe[0].any() or stripe[-1].any())
+            if seam:
+                parts.append([a, b, letters[k]])
+            else:
+                parts[-1][1] = b
+                parts[-1][2] = parts[-1][2] or letters[k]
+        spans = []
+        for a, b, has_letters in parts:
+            if spans and not has_letters:
+                spans[-1][1] = b
+            elif spans and not spans[-1][2]:
+                spans[-1][1:] = [b, True]
+            else:
+                spans.append([a, b, has_letters])
+        if len(spans) >= 2:
+            # Each part as tall as its own letters: small letters in the full height of the box are
+            # read as noise ("KOFF..." read "46").
+            cuts[i] = []
+            for a, b, _ in spans:
+                rows = np.flatnonzero(letters_ink[:, a:b].any(axis=1))
+                cuts[i].append((x0 + a, max(y0, y0 + int(rows[0]) - GAP_PAD), x0 + b,
+                                min(y1, y0 + int(rows[-1]) + 1 + GAP_PAD)))
+    return cuts
+
+
 def paragraph_of(blocks, boxes):
     """The paragraph label (of ``text_blocks``) holding most of the ink of ``boxes``, or None."""
     mask, labels = blocks
@@ -2423,15 +2509,30 @@ SUFFIXES = {"ing", "ed", "ly", "er", "ers", "est", "tion", "tions", "ness", "men
 HONORIFICS = {"san", "kun", "chan", "sama", "senpai", "sensei", "dono", "nim", "ssi", "hyung", "noona", "oppa", "unnie", "sunbae"}
 
 SFX_SHAPE = re.compile(r"(.)\1\1|(?:OOSH|OOM|OOF|ASH|USH|ANG|ONK|ACK|UNK|RRK|SSH|HH|ZZ|WHAM|THUD|THUMP|SPLA\w*|KR\w+)$")
+# Cries a Brazilian reader reads the same as they are drawn: stretched out ("AAAAH") they stay drawn.
+SAME_CRY = {"ah", "oh", "uh", "eh", "ha", "hah", "ugh"}
 
 
 def english_sound_effect(text):
     """One lettered word that is no English word and looks like an onomatopoeia ("VLOOSH", "SPLOOSH").
 
     Grand Blue p53: "SPLOOSH", drawn across the art and read "VLOOSH", was erased
-    and written as "Vluuuf".  Real words ("BOB", "NO!") are left to the translator.
+    and written as "Vluuuf".  Real words ("BOB", "NO!") are left to the translator,
+    also when a shout stretches them ("YEAAAH", One Piece 1161 p16, stayed in English).
     """
-    words = re.findall(r"[A-Za-z]+", text or "")
+    common, names = english_words()
+
+    def join(match):
+        # A cry broken over two lines ("GYAA- / AAA!!", One Piece 1161 p7) is one word; a stutter
+        # ("NO- NOOOO!") or a real word on either side ("SOME- THING") stays apart.
+        left, right = match.group(1), match.group(2)
+        plain = re.sub(r"(.)\1+", r"\1", right.lower())
+        if plain.startswith(re.sub(r"(.)\1+", r"\1", left.lower())) or left.lower() in common \
+                or (len(plain) > 1 and plain in common) or right.lower() in common:
+            return match.group(0)
+        return left + right
+    text = re.sub(r"([A-Za-z]+)-\s+([A-Za-z]+)", join, text or "")
+    words = re.findall(r"[A-Za-z]+", text)
     # A lone letter that is no word ("R", a piece of the vertical "KRRK" on Grand Blue
     # p19, was written over as "É.") is a piece of a drawn sound.
     if len(words) == 1 and len(words[0]) == 1 and words[0].upper() not in "IAO" \
@@ -2439,8 +2540,11 @@ def english_sound_effect(text):
         return True
     if len(words) != 1 or len(words[0]) < 4 or words[0] != words[0].upper():
         return False
-    common, names = english_words()
     word = words[0].lower()
     if not common or word in common or word in names:
         return False
+    for short in {re.sub(r"(.)\1{2,}", r"\1", word), re.sub(r"(.)\1{2,}", r"\1\1", word)}:
+        if short != word and short in common and re.search("[aeiouy]", short) and short not in SAME_CRY \
+                and not SFX_SHAPE.search(short.upper()):
+            return False
     return bool(SFX_SHAPE.search(words[0]))

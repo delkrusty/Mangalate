@@ -890,6 +890,18 @@ def repair_textlines(original_detect):
                 parts = [(a, y0, b, y1) for a, b in cuts[i]]
                 repaired[i:i + 1] = [(part, source) for part in parts]
                 changes.append(("column", (x0, y0, x1, y1), parts))
+            # One box across two bubbles that touch, a word in each.
+            from quality import gap_cuts
+            try:
+                cuts = gap_cuts(np.asarray(mask_raw), gray, [box for box, _ in repaired])
+            except Exception as exc:  # never lose a page over this
+                print(f"Gap check skipped: {type(exc).__name__}", flush=True)
+                cuts = {}
+            for i in sorted(cuts, reverse=True):
+                (x0, y0, x1, y1), source = repaired[i]
+                parts = cuts[i]
+                repaired[i:i + 1] = [(part, source) for part in parts]
+                changes.append(("column", (x0, y0, x1, y1), parts))
         # Small white bubbles the detector did not see at all.
         scanned = []
         if image is not None:

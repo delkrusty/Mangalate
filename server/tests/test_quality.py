@@ -1379,6 +1379,18 @@ class OuroThreeTest(unittest.TestCase):
         for word in ("BOB", "NO!", "HELLO", "TOKITA", "I JUST CANT GET IT!", "I...", "A", "O!", "H?"):
             self.assertFalse(quality.english_sound_effect(word), word)
 
+    def test_stretched_words_are_speech_and_cries_stay_drawn(self):
+        # One Piece 1161 p16: a shouted "YEAAAH" stayed in English as a drawn effect.
+        for word in ("YEAAAH!!", "NOOOO!", "WHAAAT?!", "GOOOOD"):
+            self.assertFalse(quality.english_sound_effect(word), word)
+        # A cry that reads the same in Portuguese, an effect word stretched, and a cry broken
+        # over two lines (p7 "GYAA- / AAA!!") stay as drawn.
+        for sfx in ("AAAAH", "UHHH", "AAAAAGH", "KYAAA", "BOOOM", "GYAA- AAA!!", "SPLOO- OOSH"):
+            self.assertTrue(quality.english_sound_effect(sfx), sfx)
+        # A stutter broken over two lines is speech, as before.
+        for word in ("SOME- THING", "NO- NOOOO!", "WHA- WHAAAT?!", "WAIT- WAAAIT!"):
+            self.assertFalse(quality.english_sound_effect(word), word)
+
 
 class AddedNegationTest(unittest.TestCase):
     def test_added_negation_asks_again(self):
@@ -1702,6 +1714,63 @@ class TextBlockTest(unittest.TestCase):
         cv2.putText(mask, "OH", (60, 104), cv2.FONT_HERSHEY_SIMPLEX, 0.7, 255, 2)
         boxes[1] = (58, boxes[1][1], boxes[1][2], boxes[1][3])
         self.assertEqual(quality.block_cuts(mask, boxes), {})
+
+
+class GapCutTest(unittest.TestCase):
+    """One Piece 1161 p7: "?!" in one bubble and "KOFF..." in the bubble grown out of it, one
+    detector box over both; the region was taken for art and the speech stayed in English."""
+
+    @staticmethod
+    def page(left, right, gap, seam):
+        gray = np.full((200, 400), 255, np.uint8)
+        mask = np.zeros_like(gray)
+        x = 60
+        # Big letters in one bubble, smaller ones in the next, on one row.
+        for text, scale, out in ((left, 1.2, None), (right, 0.6, None)):
+            (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, 2)
+            for img, value in ((gray, 0), (mask, 255)):
+                cv2.putText(img, text, (x, 112), cv2.FONT_HERSHEY_SIMPLEX, scale, value, 2)
+            x += w + gap
+        mid = 60 + cv2.getTextSize(left, cv2.FONT_HERSHEY_SIMPLEX, 1.2, 2)[0][0] + gap // 2
+        if seam:
+            # The two outlines meet in notches that poke into the line from above and below.
+            cv2.polylines(gray, [np.array([(mid - 12, 60), (mid, 84), (mid + 12, 60)])], False, 0, 2)
+            cv2.polylines(gray, [np.array([(mid - 12, 140), (mid, 118), (mid + 12, 140)])], False, 0, 2)
+        ys, xs = np.nonzero(mask)
+        return mask, gray, [(int(xs.min()) - 2, 80, int(xs.max()) + 3, 120)]
+
+    def test_line_across_the_seam_of_two_bubbles_is_cut(self):
+        mask, gray, boxes = self.page("?!", "KOFF...", 40, seam=True)
+        cuts = quality.gap_cuts(mask, gray, boxes)
+        self.assertEqual(list(cuts), [0], cuts)
+        self.assertEqual(len(cuts[0]), 2, cuts)
+        (a0, ay0, a1, ay1), (b0, by0, b1, by1) = cuts[0]
+        self.assertTrue(a1 < b0 and b1 >= boxes[0][2] - 4, cuts)
+        # Each part as tall as its letters, not the whole box: small letters alone in a tall box read as noise.
+        self.assertLess(by1 - by0, 0.6 * (boxes[0][3] - boxes[0][1]), cuts)
+
+    def test_spaced_out_words_in_one_bubble_are_not_cut(self):
+        # The same blank with only paper in it: one speech.
+        mask, gray, boxes = self.page("?!", "KOFF...", 40, seam=False)
+        self.assertEqual(quality.gap_cuts(mask, gray, boxes), {})
+
+    def test_word_gap_by_the_seam_is_not_cut(self):
+        # Words at their usual spacing never split, even with an outline near.
+        mask, gray, boxes = self.page("?!", "KOFF...", 0, seam=True)
+        self.assertEqual(quality.gap_cuts(mask, gray, boxes), {})
+
+    def test_letters_the_mask_missed_are_not_a_seam(self):
+        # One Piece 1161 p4: the mask missed the "TT" of "BATTLE-"; their ink in the blank of the
+        # mask, touching the top and bottom of the tight box, is no bubble outline.
+        gray = np.full((120, 300), 255, np.uint8)
+        cv2.putText(gray, "BATTLE-", (40, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, 0, 2)
+        ys, xs = np.nonzero(gray < 128)
+        box = (int(xs.min()) - 1, int(ys.min()), int(xs.max()) + 2, int(ys.max()) + 1)
+        mask = np.where(gray < 128, 255, 0).astype(np.uint8)
+        (w, _), _ = cv2.getTextSize("BA", cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
+        (w2, _), _ = cv2.getTextSize("BATT", cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
+        mask[:, 40 + w:40 + w2] = 0
+        self.assertEqual(quality.gap_cuts(mask, gray, [box]), {})
 
 
 class TextBlockRegionTest(unittest.TestCase):
