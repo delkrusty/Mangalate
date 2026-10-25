@@ -180,8 +180,8 @@ def configure_one(index, names, providers, ask, secret):
         if name == "ollama":
             print("  1) Instale o Ollama: https://ollama.com")
             print("  2) Em outro terminal, baixe UM modelo e deixe o Ollama aberto:")
-            print("       16 GB de RAM ou mais:  ollama pull gpt-oss:20b   (14 GB)")
-            print("       menos memória:         ollama pull gemma3:4b     (3,4 GB, qualidade menor)")
+            print("       16 GB de RAM ou mais:  ollama pull gpt-oss:20b   (13 GB)")
+            print("       menos memória:         ollama pull gemma3:4b     (3,4 GB, rápido, mas erra o sentido com frequência)")
             print("  3) Digite abaixo o mesmo nome que você baixou.")
         if name == "openrouter":
             print("  Copie o nome de um modelo terminado em :free na lista do site.")

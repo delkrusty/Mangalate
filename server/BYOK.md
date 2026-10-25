@@ -51,10 +51,17 @@ No celular nada muda: o endereço e a Chave Mangalate continuam os mesmos. Para 
 
 ## Ollama (experimental)
 
-1. Instale o [Ollama](https://ollama.com) e baixe um modelo, por exemplo `ollama pull qwen3:8b`.
-2. Com o Ollama aberto, rode `py setup.py`, escolha **Ollama** e digite só o nome do modelo (por exemplo `qwen3:8b`), sem `ollama pull`.
+1. Instale o [Ollama](https://ollama.com) e baixe um modelo, por exemplo `ollama pull gpt-oss:20b`.
+2. Com o Ollama aberto, rode `py setup.py`, escolha **Ollama** e digite só o nome do modelo (por exemplo `gpt-oss:20b`), sem `ollama pull`.
 
-Em CPU, cada página pode levar dezenas de segundos. Ainda não foi validado com um capítulo inteiro.
+O Ollama usa a placa de vídeo sozinho, inclusive AMD. Testado em 25/10/2026 num PC com 16 GB de RAM e Radeon RX 6600 (8 GB), em 6 páginas:
+
+| Modelo | Tradução por página | Qualidade |
+|---|---|---|
+| `gpt-oss:20b` (13 GB) | 6 a 28 s; a primeira, 43 s (carrega o modelo) | Erra mais que o Groq: em 35 falas, 2 com o sentido invertido, 3 com gênero errado e 3 literais demais. Revise antes de publicar |
+| `gemma3:4b` (3,4 GB) | 2 a 6 s | Erra o sentido com frequência: gênero trocado, "calcinha" virou "calça", uma crítica virou elogio |
+
+Prefira o `gpt-oss:20b`. O servidor espera até 2 minutos por uma IA no próprio PC (45 s para as da internet) e pede ao `gpt-oss` um raciocínio curto, que deixa a página umas duas vezes mais rápida. Ainda não foi validado com um capítulo inteiro.
 
 ## Problemas comuns
 

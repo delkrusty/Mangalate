@@ -71,6 +71,15 @@ LONG_REST = 3600
 # "PERSONALLY I THINK" as "Pessoal, acho").  Longer pauses (daily quotas) still use the reserve.
 RESERVE_WAIT = 90
 AI_TIMEOUT = 45     # seconds before a silent provider is left for the next one
+# A model on this computer loads into memory on its first page and may run partly on the CPU:
+# gpt-oss:20b took 51 s cold on a 16 GB PC with an 8 GB card, so every page hit AI_TIMEOUT.
+# A page asks up to three times (answer and second tries), so a stuck model holds it 6 min at most.
+LOCAL_TIMEOUT = 120
+
+
+def timeout_for(provider):
+    local = urlparse(str(provider.get("base", ""))).hostname in LOCAL_HOSTS
+    return LOCAL_TIMEOUT if local else AI_TIMEOUT
 
 
 def validate_base(url):
@@ -111,8 +120,9 @@ def parse_secret(text):
 
 def short_reasoning(base, model):
     """Groq's GPT-OSS thinks before answering and the thinking counts against the free
-    8,000 tokens per minute; a short think keeps several pages per minute."""
-    return "gpt-oss" in model and urlparse(str(base)).hostname == "api.groq.com"
+    8,000 tokens per minute; a short think keeps several pages per minute.  On Ollama the
+    full think took 21 s a page with gpt-oss:20b, the short one 9.5 s."""
+    return "gpt-oss" in model and urlparse(str(base)).hostname in {"api.groq.com"} | LOCAL_HOSTS
 
 
 def dump_secret(providers):

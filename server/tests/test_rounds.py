@@ -301,7 +301,10 @@ class RetiredModelTest(unittest.TestCase):
                                      _MAX_TOKENS=100, temperature=.2, top_p=1, token_count=0)
         for base, model, short in (("https://api.groq.com/openai/v1", "openai/gpt-oss-120b", True),
                                    ("https://api.groq.com/openai/v1", "other", False),
-                                   ("https://openrouter.ai/api/v1", "openai/gpt-oss-120b", False)):
+                                   ("https://openrouter.ai/api/v1", "openai/gpt-oss-120b", False),
+                                   # Ollama: full thinking took 21 s a page with gpt-oss:20b, 9.5 s with low.
+                                   ("http://host.docker.internal:11434/v1/", "gpt-oss:20b", True),
+                                   ("http://host.docker.internal:11434/v1/", "gemma3:4b", False)):
             client = SimpleNamespace(base_url=base, chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
             asyncio.run(request_byok_translation(translator, "PTB", "<|1|>Hi", client, model))
             self.assertEqual(sent[-1].get("extra_body"), {"reasoning_effort": "low"} if short else None)

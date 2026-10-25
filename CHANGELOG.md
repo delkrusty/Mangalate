@@ -4,6 +4,9 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 
 ## Em teste
 
+### Servidor
+- O Ollama agora traduz de verdade. Com o `gpt-oss:20b`, todo pedido passava de 45 s (só carregar o modelo na primeira página levava 51 s, e o modelo pensava longamente antes de responder). O servidor desistia, deixava o Ollama em pausa e tentava de novo, sem traduzir nenhuma página. Agora uma IA no próprio PC tem até 2 minutos por pedido, e o `gpt-oss` no Ollama recebe o mesmo pedido de raciocínio curto que já recebia no Groq (de 21 s para 9,5 s num pedido de teste). Em 6 páginas num PC com Radeon RX 6600, as 6 saíram traduzidas pelo Ollama, com 6 a 28 s de tradução por página (43 s na primeira), mas com mais erros que o Groq: em 35 falas, 2 com o sentido invertido, 3 com gênero errado e 3 literais demais. Com o raciocínio completo, nas mesmas páginas, 2 de 6 ficaram no original (o modelo gastou a resposta pensando e a devolveu vazia) e as outras levaram de 55 a 98 s; uma das inversões sumiu, os outros erros ficaram. As IAs da internet continuam com 45 s. O guia e o instalador avisam que o `gemma3:4b`, mais leve, erra o sentido com frequência.
+
 ### App
 - Nova tela "O que há de novo" (Mais › Sobre o Mangalate) com as novidades de cada versão em frases curtas, escritas para quem usa o app e não nos termos técnicos deste arquivo. Depois de cada atualização, o app mostra uma vez só o que ainda não foi visto; numa instalação nova não aparece nada. A lista antiga, parada na 0.5.3, foi trocada por uma que vai da 0.1.0 até as novidades em teste.
 
