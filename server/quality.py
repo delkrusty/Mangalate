@@ -410,12 +410,13 @@ PAPER_CLEAN = 2     # ...with no darker pixel this close (px): the white between
 PAPER_SHARE = 0.45  # share of the margin around the lines that is clean paper, for a speech over the drawing
 PAPER_CONTRAST = 2 * HALO_DELTA  # and the letters are this much darker than the page
 PAPER_MASKED = 0.85  # share of the ink on the lines inside the detector mask: only the letters it marks are cleaned
+PAPER_LINE_MASKED = 0.75  # and in each line on its own
 PAPER_INK = 60       # ink on the lines is this much darker than the page (0-255 grey)
 PAPER_DOT = 0.2      # specks smaller than this squared (line heights) are screentone, not letters
 PAPER_TILT = 3.0     # degrees: tilted lettering (a sheet of paper drawn askew) is written back level, over half-cleaned lines
 
 
-def speech_on_paper(image, text_mask, quads, line_height=None):
+def speech_on_paper(image, text_mask, quads, line_height=None, paper_share=PAPER_SHARE, masked_share=PAPER_MASKED):
     """True for dark letters on clean paper, crossed by the drawing.
 
     Such a speech (One Piece 1161 p5, "WELL, CONSIDERING...": hair and hatching between the
@@ -428,6 +429,11 @@ def speech_on_paper(image, text_mask, quads, line_height=None):
     p33: their lines interleave and one of them sits on the hair), and tilted lettering (Grand
     Blue 102 p4, a form drawn askew: the boxes missed part of it and English was left), and
     letters stacked one per row in a tall bubble (Grand Blue 102 p20).
+
+    paper_share 0 is the reader's "translate everything" choice: the margin may be all
+    drawing (dark letters with a white halo over the art), the other checks still apply.
+    There, masked_share 0 leaves the letters the detector missed to halo_missed: the ink it
+    left out was mostly the drawing touching the halo, not letters.
     """
     quads = [np.asarray(q, np.float32).reshape(4, 2) for q in quads]
     if text_mask is None or not quads:
@@ -435,6 +441,13 @@ def speech_on_paper(image, text_mask, quads, line_height=None):
     if line_height is None:
         line_height = _quads_height(quads)
     lines, paper = paper_under(image, quads, line_height)
+    if paper_share == 0:
+        # The letters' ground is their halo: a halo a few pixels wide over a black ground left
+        # the margin black once the line boxes fitted the letters (2 px taller), and the dark
+        # letters looked lighter than their "paper".
+        _, halo = halo_paint(image, text_mask, quads, line_height)
+        if halo is not None and np.mean(halo) >= PAPER_LIGHT:
+            paper = np.asarray(halo).round().astype(paper.dtype)
     pad = int(max(4, round(line_height * 0.35)))
     margin = (cv2.dilate(lines.astype(np.uint8), np.ones((2 * pad + 1, 2 * pad + 1), np.uint8)) > 0) & ~lines
     letters = (np.asarray(text_mask) > INK) & lines
@@ -444,7 +457,7 @@ def speech_on_paper(image, text_mask, quads, line_height=None):
     ground = int(cv2.cvtColor(paper.reshape(1, 1, 3).astype(np.uint8), cv2.COLOR_RGB2GRAY)[0, 0])
     size = 2 * PAPER_CLEAN + 1
     clean = cv2.erode(gray.astype(np.uint8), np.ones((size, size), np.uint8)) > PAPER_LIGHT
-    if clean[margin].mean() < PAPER_SHARE or ground - np.median(gray[letters]) <= PAPER_CONTRAST:
+    if clean[margin].mean() < paper_share or ground - np.median(gray[letters]) <= PAPER_CONTRAST:
         return False
     ink = lines & (gray < ground - PAPER_INK)
     # Screentone dots of a wall the line box runs onto (Grand Blue 106 p16) are not missed letters.
@@ -454,8 +467,16 @@ def speech_on_paper(image, text_mask, quads, line_height=None):
     ink &= ~dots[labels]
     marked = whole_letters(image, np.asarray(text_mask) > INK, lines, paper, line_height)
     marked = cv2.dilate(marked.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
-    if ink.any() and marked[ink].mean() < PAPER_MASKED:
+    if ink.any() and marked[ink].mean() < masked_share:
         return False
+    if masked_share > 0:
+        # Each line, too: a last line the mask holds only by a strip along its top ("HAPPEN!"
+        # over the hair, 61% marked) passed with the block at 86%, and half of it stayed in
+        # English under the translation.  The other lines of these speeches: 87% and up.
+        for quad in quads:
+            own = ink & (_line_mask(ink.shape, [quad]) > 0)
+            if own.any() and marked[own].mean() < PAPER_LINE_MASKED:
+                return False
     tilt = np.median([abs(np.degrees(np.arctan2(q[1, 1] - q[0, 1], q[1, 0] - q[0, 0]))) for q in quads])
     if tilt > PAPER_TILT:
         return False
@@ -468,6 +489,192 @@ def speech_on_paper(image, text_mask, quads, line_height=None):
             if rows > 0.5 * min(a[3] - a[1], b[3] - b[1]) and min(a[2], b[2]) <= max(a[0], b[0]):
                 return False  # two lines side by side: two speeches in one block
     return True
+
+
+HALO_EDGE_PX = 3     # px around the halo cleaned with it (its soft rim)
+HALO_SNUG = 15       # a word the detector missed is enclosed by pixels this close (0-255 grey) to the halo
+HALO_ENCLOSED = 0.7  # share of the border of a piece of ink that is halo, for it to be a letter (not a stroke)
+HALO_EVEN = 40       # a pixel this close (0-255 grey) to the halo's colour is halo; light grey drawing is not
+
+
+def halo_paint(image, text_mask, quads, line_height=None):
+    """(pixels, colour) to paint over a speech written over the drawing with a light halo.
+
+    The halo is already the colour of the paper: painting the letters with it cleans them, and
+    the drawing around stays as it is.  Cleaned by the model, the whole block came back smeared
+    (bars, bricks, hair).  A letter is ink the detector marked, or a piece of ink touching its
+    marks and enclosed by the halo (the detector mask cut the top of a line); pieces of the
+    drawing the halo cuts to the size of a letter reach the drawing and stay.  Light pixels right
+    around the letters (the halo) are painted too, so it comes out even.
+    """
+    quads = [np.asarray(q, np.float32).reshape(4, 2) for q in quads]
+    shape = np.asarray(image).shape[:2]
+    if text_mask is None or not quads:
+        return np.zeros(shape, bool), None
+    if line_height is None:
+        line_height = _quads_height(quads)
+    allowed = letters_area(image, text_mask, quads, line_height)
+    marks = (np.asarray(text_mask) > INK) & allowed
+    grow = np.ones((2 * LETTER_GROW + 1, 2 * LETTER_GROW + 1), np.uint8)
+    marked = cv2.dilate(marks.astype(np.uint8), grow) > 0
+    # The halo's colour: the lightest quarter of the ring just outside the letters' rim (around
+    # the lines is the drawing, and on a dark page the ring also catches it).
+    ring = (cv2.dilate(marked.astype(np.uint8), grow) > 0) & ~marked
+    if not ring.any():
+        return np.zeros(shape, bool), None
+    pixels = np.asarray(image)[:, :, :3]
+    gray = cv2.cvtColor(np.ascontiguousarray(pixels), cv2.COLOR_RGB2GRAY).astype(int)
+    light_side = ring & (gray >= np.percentile(gray[ring], 75))
+    halo = np.median(pixels[light_side], axis=0)
+    ground = int(cv2.cvtColor(halo.reshape(1, 1, 3).astype(np.uint8), cv2.COLOR_RGB2GRAY)[0, 0])
+    light = np.abs(gray - ground) <= HALO_EVEN
+    # A word the detector missed whole ("PONG PERIL..." under a marked "PING-") is outside the
+    # allowed area but on the lines, letter-sized and in the halo.
+    reach = 2 * int(max(1, round(LETTER_REACH * line_height))) + 1
+    lines = cv2.dilate(_line_mask(shape, quads), np.ones((reach, reach), np.uint8)) > 0
+    ink = (allowed | lines) & ~light
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(ink.astype(np.uint8), connectivity=8)
+    if count > 1:
+        touched = np.zeros(count, bool)
+        touched[np.unique(labels[ink & marks])] = True
+        border = (cv2.dilate(ink.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0) & ~ink
+        near = cv2.dilate(labels.astype(np.float32), np.ones((3, 3), np.uint8)).astype(int)  # owner of each border pixel
+        halo_border = np.bincount(near[border], weights=light[border].astype(float), minlength=count)
+        all_border = np.bincount(near[border], minlength=count)
+        on_lines = np.bincount(labels[lines], minlength=count) >= 0.5 * stats[:, cv2.CC_STAT_AREA]
+        # Only in a real halo: light, and the very colour of it all around (hatching over a light
+        # tone, or over the grey a missing halo leaves, is not a word).
+        snug = (np.abs(gray - ground) <= HALO_SNUG)[border]
+        snug_border = np.bincount(near[border], weights=snug.astype(float), minlength=count)
+        lettered = (on_lines & (stats[:, cv2.CC_STAT_AREA] >= (PAPER_DOT * line_height) ** 2)
+                    & (snug_border >= HALO_ENCLOSED * np.maximum(all_border, 1)) & (ground >= PAPER_LIGHT))
+        enclosed = halo_border >= HALO_ENCLOSED * np.maximum(all_border, 1)
+        enclosed[0] = False
+        # A piece touching the marks is taken inside the allowed area, as before; a missed word
+        # whole, with its halo.
+        marked |= cv2.dilate(((touched & enclosed)[labels] & allowed).astype(np.uint8), grow) > 0
+        found = cv2.dilate((lettered & enclosed & ~touched)[labels].astype(np.uint8), grow) > 0
+        if found.any():
+            marked |= found
+            halo_reach = 2 * int(max(1, round(HALO_REACH * line_height))) + 1
+            allowed = allowed | (cv2.dilate(found.astype(np.uint8), np.ones((halo_reach, halo_reach), np.uint8)) > 0)
+    # Light pixels count as halo only right around the letters: a light screentone or the grey of
+    # hair inside the line boxes came out as a white rectangle.
+    reach = 2 * int(max(1, round(HALO_REACH * line_height))) + 1
+    around = cv2.dilate(marked.astype(np.uint8), np.ones((reach, reach), np.uint8)) > 0
+    return allowed & (marked | (light & around)), halo
+
+
+HALO_COVER = 0.85  # share of the ink on the lines that halo_paint cleans, for a speech over the drawing
+
+
+def halo_cover(image, text_mask, quads, line_height=None):
+    """Share of the ink on the lines that halo_paint cleans (with HALO_EDGE_PX around it).
+
+    For the reader's "translate everything": the detector mask can miss whole words, but the
+    halo shows the letters.  The ink it still leaves out is a piece of the drawing on the lines
+    (hair, the shorts) or letters that would stay in English under the translation.
+    """
+    quads = [np.asarray(q, np.float32).reshape(4, 2) for q in quads]
+    if line_height is None:
+        line_height = _quads_height(quads)
+    paint, halo = halo_paint(image, text_mask, quads, line_height)
+    if halo is None or np.mean(halo) < PAPER_LIGHT:
+        return 0.0  # no light halo: the letters sink into the drawing
+    lines, _ = paper_under(image, quads, line_height)
+    gray = cv2.cvtColor(np.ascontiguousarray(np.asarray(image)[:, :, :3]), cv2.COLOR_RGB2GRAY).astype(int)
+    # The ink is what is darker than the halo (the margin around the lines can be the drawing).
+    ground = int(cv2.cvtColor(np.asarray(halo).round().astype(np.uint8).reshape(1, 1, 3), cv2.COLOR_RGB2GRAY)[0, 0])
+    ink = lines & (gray < ground - PAPER_INK)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(ink.astype(np.uint8), connectivity=8)
+    dots = stats[:, cv2.CC_STAT_AREA] < (PAPER_DOT * line_height) ** 2
+    dots[0] = False
+    ink &= ~dots[labels]
+    if not ink.any():
+        return 1.0
+    edge = 2 * HALO_EDGE_PX + 1
+    cleaned = cv2.dilate(paint.astype(np.uint8), np.ones((edge, edge), np.uint8)) > 0
+    return float(cleaned[ink].mean())
+
+
+HALO_CLOSE = 0.7   # gaps between the new letters and lines filled by their halo, in font sizes
+HALO_RIM = 0.15    # and its rim around them, in font sizes
+
+
+def halo_cloud(letters, size):
+    """The light halo drawn under a translation written over the drawing.
+
+    ``letters`` is where the new text is drawn and ``size`` its font size.  The halo hugs the
+    new text, like the original's around its letters: over the drawing, the letters alone were
+    hard to read, and the old block painted white was much bigger than the translation.
+    """
+    letters = np.asarray(letters).astype(np.uint8)
+    if not letters.any():
+        return letters.astype(bool)
+    close = 2 * int(max(1, round(HALO_CLOSE * size / 2))) + 1
+    rim = 2 * int(max(1, round(HALO_RIM * size))) + 1
+    cloud = cv2.morphologyEx(letters, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close, close)))
+    cloud = cv2.dilate(cloud, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (rim, rim))) > 0
+    # Holes between lines of small letters showed the drawing as dark specks inside the halo.
+    count, labels, stats, _ = cv2.connectedComponentsWithStats((~cloud).astype(np.uint8), connectivity=4)
+    h, w = cloud.shape
+    inside = ((stats[:, cv2.CC_STAT_LEFT] > 0) & (stats[:, cv2.CC_STAT_TOP] > 0)
+              & (stats[:, cv2.CC_STAT_LEFT] + stats[:, cv2.CC_STAT_WIDTH] < w)
+              & (stats[:, cv2.CC_STAT_TOP] + stats[:, cv2.CC_STAT_HEIGHT] < h))
+    inside[0] = False  # the halo itself
+    return cloud | inside[labels]
+
+
+SPEECH_REACH = 1.5   # line heights above and below a block where the same speech could go on
+SPEECH_LOOSE = 0.05  # share of that band (block width x one line) of detector ink outside every block
+
+
+def speech_goes_on(text_mask, quads, all_quads, line_height=None):
+    """True when detector ink right above or below the block lies outside every block's lines.
+
+    The OCR lost a line of the speech ("IF I WIN," over the rest of it, "SCISSORS" under
+    "ROCK, PAPER-"): translated, the rest came out with the sense inverted or cut, and the lost
+    line was left in English next to it.
+    """
+    quads = [np.asarray(q, np.float32).reshape(4, 2) for q in quads]
+    if text_mask is None or not quads:
+        return False
+    if line_height is None:
+        line_height = _quads_height(quads)
+    ink = np.asarray(text_mask) > INK
+    ink &= _line_mask(ink.shape, [np.asarray(q, np.float32).reshape(4, 2) for q in all_quads]) == 0
+    points = np.concatenate(quads)
+    x0, y0 = np.floor(points.min(axis=0)).astype(int)
+    x1, y1 = np.ceil(points.max(axis=0)).astype(int)
+    x0, x1 = max(0, x0), min(ink.shape[1], x1)
+    reach = int(round(SPEECH_REACH * line_height))
+    area = max(1.0, (x1 - x0) * line_height)
+    for top, bottom in ((y0 - reach, y0), (y1, y1 + reach)):
+        band = ink[max(0, top):max(0, min(ink.shape[0], bottom)), x0:x1]
+        if band.sum() / area > SPEECH_LOOSE:
+            return True
+    return False
+
+
+LINE_READ = 0.5  # letters read per line height of width, below which a line was not really read...
+LINE_WIDE = 3.0  # ...on a line at least this many heights wide ("LIKE" read "L" in a narrow column is a weak sign)
+
+
+def lines_unread(quads, texts):
+    """True when a line of the block came back from the OCR empty or as a scrap ("DP" for
+    "OPPONENT'S IS WIDE OPEN."): its letters are cleaned, but the translation lacks them.
+
+    Over 1,498 lines of two test chapters only four read under LINE_READ, all scraps.
+    """
+    texts = list(texts or [])
+    if len(texts) != len(quads):
+        return False
+    for quad, text in zip(quads, texts):
+        q = np.asarray(quad, np.float32).reshape(4, 2)
+        width, height = np.ptp(q[:, 0]), max(1.0, float(np.ptp(q[:, 1])))
+        if width >= LINE_WIDE * height and sum(ch.isalnum() for ch in str(text or "")) < LINE_READ * width / height:
+            return True
+    return False
 
 
 def paper_under(image, quads, line_height=None):
@@ -1399,14 +1606,16 @@ def near_lines(lost, kept):
             and _near((x0, y0, x1, y1), kept, height)]
 
 
-def repair_lines(mask, boxes, gray=None):
+def repair_lines(mask, boxes, gray=None, rebuild=False):
     """Return (boxes, changes) with multi-line boxes split and missed lines added.
 
     ``boxes`` are axis-aligned (x0, y0, x1, y1) horizontal text lines and
     ``mask`` is the detector pixel mask of the same page.  Each entry of the
     result is (box, source) where source is the index of the original box, or
     None for a line found only in the mask.  ``gray``, the page in grey levels,
-    lets a line box grow over letters the mask missed.
+    lets a line box grow over letters the mask missed.  ``rebuild`` adds the lines
+    rebuilt to read a speech over the drawing (edge lines, boxes cut at a valley),
+    which only "translate everything" translates.
     """
     if mask is None or not boxes:
         return [(b, i) for i, b in enumerate(boxes)], []
@@ -1469,7 +1678,7 @@ def repair_lines(mask, boxes, gray=None):
             changes.append(("split", (x0, y0, x1, y1), parts))
         else:
             result.append(((x0, y0, x1, y1), index))
-    result = fit_lines(ink, result, height, changes, gray)
+    result = fit_lines(ink, result, height, changes, gray, valley=rebuild)
     # Two detector boxes over the same line (a small one inside a large one) fit to the same
     # letters: one is enough, or the line is read twice ("PIRATES PIRATES", One Piece 1161 p4).
     unique = []
@@ -1529,7 +1738,121 @@ def repair_lines(mask, boxes, gray=None):
     if paragraph:
         result.extend((box, None) for box in paragraph)
         changes.append(("added", None, paragraph))
+    if gray is not None and rebuild:
+        edges = []
+        for box in edge_lines(ink, gray, [b for b, _ in result], height):
+            # The rest of a line that already has a box ("ONE" after "I'LL GET", past a word gap)
+            # widens that box: in two boxes side by side, the line would be read as two speeches.
+            same = [k for k, (b, _) in enumerate(result)
+                    if max(box[0], b[0]) - min(box[2], b[2]) <= min(box[3] - box[1], b[3] - b[1])
+                    and min(box[3], b[3]) - max(box[1], b[1]) >= 0.5 * min(box[3] - box[1], b[3] - b[1])]
+            if len(same) == 1:
+                b, source = result[same[0]]
+                union = (min(b[0], box[0]), min(b[1], box[1]), max(b[2], box[2]), max(b[3], box[3]))
+                result[same[0]] = (union, source)
+                changes.append(("edge", b, [union]))
+            elif not same:
+                edges.append(box)
+        if edges:
+            result.extend((box, None) for box in edges)
+            changes.append(("edge", None, edges))
     return result, changes
+
+
+EDGE_MIN = 0.25  # a strip of mask this many line heights tall, right above or below a line...
+EDGE_WIDE = 2.0  # ...and this many line heights wide may be a line the mask holds only in part
+EDGE_GAP = 0.5   # at most this many line heights from that line
+EDGE_TALL = 1.3  # a strip taller than this many line heights is more than one line
+
+
+def edge_lines(ink, gray, boxes, height):
+    """Lines at the top or bottom of a block that the detector mask holds only in part.
+
+    The mask covered the bottom third of a first line and the top half of a last one, too
+    little to be a line: they had no box, the OCR never read them, and the speech stayed in
+    English.  Such a strip, as wide as words and right against a known line, grows over the
+    dark letters of the page it touches to a box of that line's height.  The letters of a flat
+    background added to the mask can make the strip a whole line, joined to the line below by a
+    few pixels: neither an orphan line (it touches a box) nor a part of that box.
+    """
+    known = np.zeros_like(ink)
+    for x0, y0, x1, y1 in boxes:
+        known[max(0, y0):y1, max(0, x0):x1] = True
+    loose = ink & ~known
+    # The pieces of one row of words are joined across their spacing.
+    join = max(3, int(round(height * 0.6))) | 1
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        cv2.dilate(loose.astype(np.uint8), np.ones((1, join), np.uint8)), connectivity=8)
+    found = []
+    for label in range(1, count):
+        x, y, bw, bh = (int(v) for v in stats[label, :4])
+        pixels = (labels[y:y + bh, x:x + bw] == label) & loose[y:y + bh, x:x + bw]
+        rows, cols = np.flatnonzero(pixels.any(axis=1)), np.flatnonzero(pixels.any(axis=0))
+        if not len(rows):
+            continue
+        strip = (x + int(cols[0]), y + int(rows[0]), x + int(cols[-1]) + 1, y + int(rows[-1]) + 1)
+        sw, sh = strip[2] - strip[0], strip[3] - strip[1]
+        for line in boxes:
+            lh = line[3] - line[1]
+            # Beyond the line's top or bottom (its letters may overhang the box by a row or two).
+            middle = (strip[1] + strip[3]) / 2
+            gap = max(strip[1] - line[3], line[1] - strip[3])
+            if not (lh > 0 and (middle > line[3] or middle < line[1]) and gap <= EDGE_GAP * lh
+                    and EDGE_MIN * lh <= sh <= EDGE_TALL * lh):
+                continue
+            if min(strip[2], line[2]) - max(strip[0], line[0]) <= 0.3 * min(sw, line[2] - line[0]):
+                continue
+            # The other words of the row, past their spacing, as far as the line beside it reaches.
+            lo, hi = max(0, line[0] - lh), min(ink.shape[1], line[2] + lh)
+            cols = np.flatnonzero(loose[strip[1]:strip[3], lo:hi].any(axis=0))
+            if not len(cols):
+                continue
+            row = (min(strip[0], lo + int(cols[0])), strip[1], max(strip[2], lo + int(cols[-1]) + 1), strip[3])
+            if row[2] - row[0] < EDGE_WIDE * lh:
+                continue
+            box = _edge_glyphs(gray, known, row, lh)
+            if box is not None and not any(_covered(box, [b]) > 0.3 for b in found):
+                found.append(box)
+            break
+    return found
+
+
+def _edge_glyphs(gray, known, strip, lh):
+    """The box of the dark letters the strip lies on, one line tall, or None."""
+    sx0, sy0, sx1, sy1 = strip
+    gh, gw = gray.shape
+    wx0, wx1 = max(0, sx0 - lh), min(gw, sx1 + lh)
+    wy0, wy1 = max(0, sy0 - lh), min(gh, sy1 + lh)
+    dark = (gray[wy0:wy1, wx0:wx1] < INK_LEVEL) & ~known[wy0:wy1, wx0:wx1]
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(dark.astype(np.uint8), connectivity=8)
+    on_strip = np.zeros_like(dark)
+    on_strip[sy0 - wy0:sy1 - wy0, sx0 - wx0:sx1 - wx0] = True
+    letters = []
+    for label in range(1, count):
+        x, y, bw, bh = (int(v) for v in stats[label, :4])
+        # A letter: about as tall as the line, not a stroke of the art running past it.
+        if not (0.3 * lh <= bh <= 1.3 * lh and bw <= 2 * lh) or stats[label, 4] < GLYPH_FILL * bw * bh:
+            continue
+        if (on_strip & (labels == label)).any():
+            letters.append((wx0 + x, wy0 + y, wx0 + x + bw, wy0 + y + bh))
+    if not letters:
+        return None
+    # A letter joined to a stroke of the art reaches past the row of the others: it is left out.
+    top, bottom = np.median([b[1] for b in letters]), np.median([b[3] for b in letters])
+    letters = [b for b in letters if b[1] >= top - 0.3 * lh and b[3] <= bottom + 0.3 * lh]
+    x0, y0 = min(b[0] for b in letters), min(b[1] for b in letters)
+    x1, y1 = max(b[2] for b in letters), max(b[3] for b in letters)
+    # The letters have to reach past the strip to a line's height, and cover most of its width.
+    if not (0.6 * lh <= y1 - y0 <= 1.3 * lh) or (x1 - x0) < 0.6 * (sx1 - sx0):
+        return None
+    # Punctuation at either end ("IN DEBT."), inside the row of letters.
+    gap = max(3, int(round(lh * FIT_GAP)))
+    for label in range(1, count):
+        x, y, bw, bh = (int(v) for v in stats[label, :4])
+        mx0, my0, mx1, my1 = wx0 + x, wy0 + y, wx0 + x + bw, wy0 + y + bh
+        if my0 >= y0 and my1 <= y1 and bw <= 0.5 * lh and (0 <= x0 - mx1 <= gap or 0 <= mx0 - x1 <= gap):
+            x0, x1 = min(x0, mx0), max(x1, mx1)
+    return max(0, x0 - 1), max(0, y0 - 1), min(gw, x1 + 1), min(gh, y1 + 1)
 
 
 def _line_runs(ink, box, height):
@@ -1574,12 +1897,32 @@ def _ink_span(ink, x0, x1, y0, y1, height, others):
     return min(x0, int(meeting[0][0])), max(x1, int(meeting[-1][1]))
 
 
+GLYPH_FILL = 0.15  # a letter fills at least this share of its box; a thin slanted stroke of the art does not
+GLYPH_PAPER = 0.6  # and at least this share of the pixels just around it is paper
+
+
+def _on_paper(window, labels, label, stat):
+    """True when the pixels right around a dark piece are mostly paper (or a light halo).
+
+    A letter the detector missed sits on the paper of its line; a piece of the drawing beside
+    the line (the bottles on a shelf next to "GO-AGAIN,") is among the greys of the drawing.
+    """
+    x, y, w, h = (int(v) for v in stat[:4])
+    y0, y1, x0, x1 = max(0, y - 2), min(window.shape[0], y + h + 2), max(0, x - 2), min(window.shape[1], x + w + 2)
+    piece = (labels[y0:y1, x0:x1] == label).astype(np.uint8)
+    ring = (cv2.dilate(piece, np.ones((5, 5), np.uint8)) > 0) & (piece == 0)
+    return bool(ring.any()) and float(np.mean(window[y0:y1, x0:x1][ring] >= PAPER_LIGHT)) >= GLYPH_PAPER
+
+
 def _glyph_span(gray, x0, x1, r0, r1, height, lo, hi):
     """Widen x0..x1 over dark glyphs of the image that sit inside the row band r0..r1.
 
     The detector mask can miss the first letter of a bold italic word (the "A" of
     "AMOUNT", read "MOUN").  A letter stays inside its line; a bubble outline or
-    the art runs above or below it and is never taken.
+    the art runs above or below it and is never taken.  Neither is the end of a speed
+    line that stops at the halo of the letters, as short as a letter but thin and slanted
+    (8% of its box, against 25% for the thinnest letter): the box took the black ground
+    beside it, and the speech was taken for light letters on black.
     """
     h, w = gray.shape
     margin = max(2, int(round(0.15 * height)))
@@ -1588,10 +1931,12 @@ def _glyph_span(gray, x0, x1, r0, r1, height, lo, hi):
     wy0, wy1 = max(0, r0 - margin - 1), min(h, r1 + margin + 1)
     if wx1 <= wx0 or wy1 <= wy0:
         return x0, x1
-    dark = (gray[wy0:wy1, wx0:wx1] < INK_LEVEL).astype(np.uint8)
-    count, _, stats, _ = cv2.connectedComponentsWithStats(dark, connectivity=8)
-    glyphs = [(wx0 + int(sx), wx0 + int(sx + sw)) for sx, sy, sw, sh, _ in stats[1:]
-              if sy > 0 and sy + sh < wy1 - wy0 and sh >= 0.3 * (r1 - r0)]
+    window = gray[wy0:wy1, wx0:wx1]
+    dark = (window < INK_LEVEL).astype(np.uint8)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(dark, connectivity=8)
+    glyphs = [(wx0 + int(sx), wx0 + int(sx + sw)) for k, (sx, sy, sw, sh, area) in enumerate(stats[1:], 1)
+              if sy > 0 and sy + sh < wy1 - wy0 and sh >= 0.3 * (r1 - r0) and area >= GLYPH_FILL * sw * sh
+              and _on_paper(window, labels, k, stats[k])]
     gap = max(3, int(round(height * FIT_GAP)))
     changed = True
     while changed:
@@ -1604,7 +1949,18 @@ def _glyph_span(gray, x0, x1, r0, r1, height, lo, hi):
     return x0, x1
 
 
-def fit_lines(ink, items, height, changes, gray=None):
+def _valley_runs(counts, r0, r1):
+    """Rows r0..r1 cut where the ink nearly stops.
+
+    Lines that touch (outlined lettering, tight leading) have a row or two with only a
+    few pixels between them.  ``counts`` is the ink per row.
+    """
+    body = counts[r0:r1]
+    valley = body > FIT_VALLEY * float(np.median(body[body > 0]))
+    return [(r0 + a, r0 + b) for a, b in _runs(valley, gap=0)]
+
+
+def fit_lines(ink, items, height, changes, gray=None, valley=False):
     """Fit line boxes to the lettering of the detector mask before OCR.
 
     Grand Blue 102 pp. 27/42/47: a box 13 px tall over letters 17 px tall, or one
@@ -1647,11 +2003,7 @@ def fit_lines(ink, items, height, changes, gray=None):
                 if r1 - r0 <= SPLIT_FACTOR * height:
                     runs.append((r0, r1))
                     continue
-                # Lines that touch (outlined lettering, tight leading) are cut where the
-                # ink nearly stops: a row or two with only a few pixels between them.
-                body = counts[r0:r1]
-                valley = body > FIT_VALLEY * float(np.median(body[body > 0]))
-                runs.extend((r0 + a, r0 + b) for a, b in _runs(valley, gap=0))
+                runs.extend(_valley_runs(counts, r0, r1))
             for r0, r1 in runs:
                 if r1 - r0 < MIN_PART * height:
                     continue
@@ -1671,6 +2023,15 @@ def fit_lines(ink, items, height, changes, gray=None):
             box, source = items[i]
             x0, y0, x1, y1 = box
             runs = _line_runs(ink, box, height) if x1 - x0 > y1 - y0 else []
+            cut = False
+            if valley and len(runs) == 1 and runs[0][1] - runs[0][0] > SPLIT_CHECK * height:
+                # Lines with tight leading touch through a stray dot or the tip of a letter: cut
+                # where the ink nearly stops, and keep the line that holds the box.  A box 11 px
+                # tall over letters 14 px tall, joined to the line above, read "DP".
+                pieces = [(a, b) for a, b in _valley_runs(ink[:, x0:x1].sum(axis=1), *runs[0])
+                          if b - a >= MIN_PART * height]
+                if pieces:
+                    runs, cut = [max(pieces, key=lambda p: min(p[1], y1) - max(p[0], y0))], True
             # Only a run one line tall: a taller one is several lines, left to the split above.
             if len(runs) != 1 or runs[0][1] - runs[0][0] > SPLIT_CHECK * height:
                 out.append(items[i])
@@ -1693,7 +2054,7 @@ def fit_lines(ink, items, height, changes, gray=None):
             fitted = (max(0, nx0 - 1), max(0, (r0 if tall else min(y0, r0)) - 1),
                       min(ink.shape[1], nx1 + 1), min(ink.shape[0], (r1 if tall else max(y1, r1)) + 1))
             out.append((fitted, source))
-            changes.append(("fit", box, [fitted]))
+            changes.append(("valley" if cut else "fit", box, [fitted]))
     return out
 
 

@@ -64,6 +64,11 @@ def profile_config(profile, requested, speed=None):
     return config
 
 
+def art_choice(requested):
+    """The reader's choice for speech over the drawing (engine_compat.ART_MODES); preserve by default."""
+    return "traduzir" if requested.get("arte") == "traduzir" else "preservar"
+
+
 def page_work(value):
     """Optional {"obra", "capitulo", "pagina"} from the app, for the work's glossary and context.
 
@@ -227,6 +232,7 @@ def create_app(key=None, upstream=None, profile=None, transport=None):
                     raise ValueError("Configuração deve ser um objeto JSON.")
                 config = profile_config(profile, requested)
                 work = page_work(form.get("work"))
+                art = art_choice(requested)
                 original = await asyncio.to_thread(open_page, data)
         except (ValueError, TypeError, AttributeError) as exc:
             raise HTTPException(422, str(exc))
@@ -234,7 +240,7 @@ def create_app(key=None, upstream=None, profile=None, transport=None):
             result = await app.state.client.post(
                 "/translate/with-form/image",
                 files={"image": ("page.png", data, "application/octet-stream"), **neighbours},
-                data={"config": json.dumps(config), **({"work": work} if work else {})},
+                data={"config": json.dumps(config), "art": art, **({"work": work} if work else {})},
             )
         except httpx.TimeoutException:
             raise HTTPException(504, "O motor demorou demais. Prepare os modelos com check.py --warmup.")

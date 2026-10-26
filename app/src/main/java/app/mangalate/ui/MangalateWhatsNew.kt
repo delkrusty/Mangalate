@@ -15,6 +15,9 @@ internal object MangalateWhatsNew {
             listOf(
                 "Depois de cada atualização, o Mangalate mostra o que mudou. A lista completa fica em Mais › Sobre o Mangalate › O que há de novo.",
                 "Falas escritas por cima do desenho são traduzidas apagando só as letras, sem levar junto a arte em volta.",
+                "Nova opção \"Preservar a arte\", no lugar de \"Só traduzir texto dentro de balões\", agora também no servidor. Ligada (o padrão no servidor), a maioria das falas escritas sobre o desenho fica no original. Desligada (experimental), elas também são traduzidas, com uma borda branca justa em volta do texto, mas o desenho atrás pode sair borrado e, às vezes, sobra um pedaço em inglês.",
+                "Falas em balões cercados de linhas de efeito, que às vezes ficavam em inglês, agora são traduzidas.",
+                "Falas sobre o desenho que eram lidas sem a primeira ou a última linha agora são traduzidas inteiras, com uma borda branca em volta; o desenho logo atrás das letras pode ficar manchado de cinza.",
                 "Logotipos, títulos de capítulo e créditos ficam como foram desenhados.",
                 "Duas falas lado a lado, no mesmo balão ou em dois balões colados, não se misturam mais, e legendas em colunas são lidas na ordem certa.",
                 "Balões estreitos, com uma letra por linha ou falas curtas empilhadas, são traduzidos inteiros.",

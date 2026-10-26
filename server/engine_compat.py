@@ -164,6 +164,18 @@ import contextvars
 _PAGE_CONTEXT = contextvars.ContextVar("mangalate_page_context", default=None)
 _LEARNED_TERMS = contextvars.ContextVar("mangalate_learned_terms", default=None)
 _PAGE_ROWS = contextvars.ContextVar("mangalate_page_rows", default=None)
+# The reader's choice for speech written over the drawing: "preservar" leaves it as drawn,
+# "traduzir" translates it too, cleaning only its letters (set per page like the rows).
+_ART_MODE = contextvars.ContextVar("mangalate_art_mode", default="preservar")
+ART_MODES = ("preservar", "traduzir")
+
+
+def set_art_mode(mode):
+    _ART_MODE.set(mode if mode in ART_MODES else "preservar")
+
+
+def art_mode():
+    return _ART_MODE.get()
 
 
 def page_context():
@@ -684,6 +696,19 @@ def end_punctuation(ctx, kept):
         print(f"Punctuation join skipped: {type(exc).__name__}", flush=True)
 
 
+def _block_lines(region):
+    """Lines of a block whose ink speech_goes_on takes as another block's.
+
+    A line of English the merge put into a block of drawn kana ("SCISSORS" over the kana
+    of the same cry) stays as drawn with it: its ink is still the rest of the speech above
+    (Manga teste p11: "Pedra, papel-" came out over a half-cleaned "SCISSORS").
+    """
+    texts = list(getattr(region, "texts", None) or [])
+    if not is_sound_effect(getattr(region, "text", "")) or len(texts) != len(region.lines):
+        return list(region.lines)
+    return [line for line, text in zip(region.lines, texts) if is_sound_effect(str(text))]
+
+
 def classify_regions(original_merge):
     """Decide once, before translation, which blocks are cleaned and translated.
 
@@ -749,12 +774,27 @@ def classify_regions(original_merge):
             # "WELL, CONSIDERING..."), is translated too: only its letters are cleaned.
             if region.mangalate_background["kind"] == "art":
                 try:
-                    from quality import reads_as_speech, speech_on_paper
+                    from quality import HALO_COVER, halo_cover, lines_unread, reads_as_speech, speech_goes_on, speech_on_paper
                     ending = " ".join(str(line.text) for owner, line in endings if owner is region)
-                    if (reads_as_speech(f"{text} {ending}".strip(), len(region.lines) > 1)
-                            and speech_on_paper(image, raw, region.lines)):
-                        region.mangalate_background["kind"] = "tracos"
-                        region.mangalate_background["fala"] = True
+                    if reads_as_speech(f"{text} {ending}".strip(), len(region.lines) > 1):
+                        if speech_on_paper(image, raw, region.lines):
+                            region.mangalate_background["kind"] = "tracos"
+                            region.mangalate_background["fala"] = True
+                        elif (art_mode() == "traduzir"
+                              and speech_on_paper(image, raw, region.lines, paper_share=0, masked_share=0)
+                              and halo_cover(image, raw, region.lines) >= HALO_COVER
+                              and not speech_goes_on(raw, region.lines, [q for r in regions for q in _block_lines(r)])
+                              and not lines_unread(region.lines, getattr(region, "texts", None))):
+                            # Dark letters with a white halo over the drawing: translated only when
+                            # the reader asked for everything (the model draws the art back under
+                            # its letters and halo, blurred where the drawing is detailed), the
+                            # cleaning takes all the ink on the lines (the halo shows the letters
+                            # the detector missed) and no line of it was lost or misread, and
+                            # listed for review.  With 20% of paper around, preserving the art,
+                            # bricks, hatching and hair came back as a grey smear.
+                            region.mangalate_background["kind"] = "tracos"
+                            region.mangalate_background["fala"] = True
+                            region.mangalate_background["sobre_arte"] = True
                 except Exception as exc:  # the speech stays as drawn, as before
                     print(f"Speech on paper skipped: {type(exc).__name__}", flush=True)
             # Lettering on a white part of the drawing, crossed by its strokes: translated, and
@@ -835,7 +875,11 @@ def repair_textlines(original_detect):
             for box in boxes:
                 seen = seen | bubble_glyphs(np.asarray(image), box, box[3] - box[1], near=NEAR_LINES)
         gray = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2GRAY) if image is not None else None
-        repaired, changes = repair_lines(seen.astype(np.uint8) * 255, boxes, gray)
+        # Lines rebuilt to read a speech over the drawing (an edge line, a box cut at a valley) in
+        # both modes: the owner chose to translate such a speech even preserving the art, where the
+        # drawing behind it may come out smeared (Manga teste p4 "IF I WIN... IN DEBT.").
+        rebuild = True
+        repaired, changes = repair_lines(seen.astype(np.uint8) * 255, boxes, gray, rebuild)
         # A box the detector called vertical but about as tall as wide may hold short lines of a
         # narrow bubble ("CON- / DOMS / ?!", Grand Blue 106 p22).  It is tried on its own: when it
         # splits into lines, they replace it; otherwise it stays as it was and changes nothing around
@@ -847,7 +891,7 @@ def repair_textlines(original_detect):
                 continue
             box = _box(line.pts)
             try:
-                trial, trial_changes = repair_lines(seen.astype(np.uint8) * 255, boxes + [box], gray)
+                trial, trial_changes = repair_lines(seen.astype(np.uint8) * 255, boxes + [box], gray, rebuild)
             except Exception as exc:  # the vertical box stays as it was
                 print(f"Square box check skipped: {type(exc).__name__}", flush=True)
                 continue
@@ -937,7 +981,7 @@ def repair_textlines(original_detect):
         split = sum(1 for kind, _, _ in changes if kind == "split")
         scan = sum(1 for kind, _, _ in changes if kind == "bubble")
         column = sum(1 for kind, _, _ in changes if kind == "column")
-        fit = sum(1 for kind, _, _ in changes if kind in ("fit", "refit"))
+        fit = sum(1 for kind, before, _ in changes if kind in ("fit", "refit", "valley") or kind == "edge" and before)
         same = sum(1 for kind, _, _ in changes if kind == "same")
         print(f"Line repair: split={split} added={len(changes) - split - scan - column - fit - same} scanned={scan} "
               f"column_cuts={column} fitted={fit} same_line={same}", flush=True)
@@ -1053,6 +1097,20 @@ def bubble_layout(rendering, text_render):
         return points
 
     def render(img, region, dst_points, hyphenate, line_spacing, disable_font_border):
+        halo = getattr(region, "mangalate_halo", None)
+        if halo is not None:
+            # Speech over the drawing: the art was drawn back under the old letters
+            # (speed.paint_halos), and the translation gets a halo of its own, as the original had.
+            try:
+                from quality import halo_cloud
+                probe = draw(img.copy(), region, dst_points, hyphenate, line_spacing, disable_font_border)
+                letters = np.abs(np.asarray(probe).astype(np.int16) - img.astype(np.int16)).max(axis=2) > 0
+                img[halo_cloud(letters, region.font_size)] = halo
+            except Exception as exc:  # the text is still drawn, without its halo
+                print(f"Halo skipped: {type(exc).__name__}", flush=True)
+        return draw(img, region, dst_points, hyphenate, line_spacing, disable_font_border)
+
+    def draw(img, region, dst_points, hyphenate, line_spacing, disable_font_border):
         shaped = getattr(region, "mangalate_shaped", None)
         if shaped is not None:
             fg, bg = rendering.fg_bg_compare(*region.get_font_colors())

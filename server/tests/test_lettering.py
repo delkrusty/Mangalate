@@ -171,6 +171,39 @@ class BubbleLayoutHookTest(unittest.TestCase):
         self.assertLessEqual(abs((changed[:, 1].min() + changed[:, 1].max()) / 2 - 300), pad)
         self.assertLessEqual(abs((changed[:, 0].min() + changed[:, 0].max()) / 2 - 300), pad + 2)
 
+    def test_translation_over_the_drawing_gets_a_halo_that_hugs_it(self):
+        # Speech over the drawing: painted flat, the old block stayed as a white patch much bigger
+        # than the translation.  Now the art is drawn back and the new letters get a tight halo.
+        import types
+        import cv2
+        from engine_compat import bubble_layout
+
+        def engine_render(img, region, *a):  # two dark words, as the engine draws them
+            img[100:110, 50:70] = 0
+            img[100:110, 76:96] = 0
+            return img
+        rendering = types.SimpleNamespace(resize_regions_to_font_size=None, render=engine_render,
+                                          fg_bg_compare=lambda fg, bg: (fg, bg))
+        bubble_layout(rendering, types.SimpleNamespace())
+        image = np.full((200, 200, 3), 150, np.uint8)
+        for x in range(-200, 200, 6):  # hatching
+            cv2.line(image, (x, 0), (x + 200, 199), (30, 30, 30), 1)
+        region = types.SimpleNamespace(font_size=20, mangalate_halo=(250, 250, 250))
+        out = rendering.render(image.copy(), region, None, False, None, False)
+        self.assertTrue((out[100:110, 50:70] == 0).all())                     # the letters
+        self.assertTrue((out[100:110, 71:75] == 250).all())                   # the gap between the words
+        self.assertTrue((out[97, 52:68] == 250).all() and (out[112, 78:94] == 250).all())  # its rim
+        self.assertTrue((out[150:, :] == image[150:, :]).all())               # the drawing away from it stays
+        self.assertTrue((out[:, 130:] == image[:, 130:]).all())
+        # A hole the halo closes around (between two lines far apart) is filled, not left dark.
+        from quality import halo_cloud
+        ring = np.zeros((120, 120), bool)
+        ring[30:36, 30:90] = ring[84:90, 30:90] = ring[30:90, 30:36] = ring[30:90, 84:90] = True
+        self.assertTrue(halo_cloud(ring, 10)[60, 60])
+        # Without a halo (any other region) only the letters are drawn.
+        out = rendering.render(image.copy(), types.SimpleNamespace(font_size=20), None, False, None, False)
+        self.assertTrue((out[100:110, 71:75] == image[100:110, 71:75]).all())
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -551,3 +584,4 @@ class TextAtTheTopTest(unittest.TestCase):
         cv2.rectangle(image, (150, 120), (550, 520), (0, 0, 0), 3)
         box = (230, 140, 470, 200)  # two lines right under the top edge of the box
         self.check(image, box, lambda x, y: 153 <= x <= 547 and 123 <= y <= 517)
+

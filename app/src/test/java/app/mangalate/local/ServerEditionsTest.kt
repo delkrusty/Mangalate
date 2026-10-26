@@ -31,4 +31,15 @@ class ServerEditionsTest {
         assertEquals(TranslatorEngine.OFFLINE, TranslatorEngine.fromId(null))
         assertTrue(MangalateSettings(mode = TranslateMode.SERVER).cacheSignature().startsWith("server-scan-v2|"))
     }
+
+    @Test
+    fun artIsPreservedOnTheServerUnlessTheReaderAsksForEverything() {
+        val server = MangalateSettings(mode = TranslateMode.SERVER)
+        val all = server.copy(preserveArtText = false)
+        assertFalse(server.toServerConfig().contains("\"arte\""))  // the server preserves by default
+        assertTrue(all.toServerConfig().contains("\"arte\":\"traduzir\""))
+        assertNotEquals(server.cacheSignature(), all.cacheSignature())
+        // On the phone the default stays as before: text over the art is translated too.
+        assertFalse(MangalateSettings(mode = TranslateMode.ON_DEVICE).preservesArt)
+    }
 }

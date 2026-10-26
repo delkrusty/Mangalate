@@ -203,7 +203,8 @@ class ServerTest(unittest.TestCase):
     def test_direct_engine_returns_png_without_internal_rpc(self):
         class Engine:
             async def translate(self, image, config):
-                self.config = config
+                from engine_compat import art_mode
+                self.config, self.art = config, art_mode()
                 return type("Context", (), {"result": image})()
         engine = Engine()
         with TestClient(create_core(engine)) as client:
@@ -214,6 +215,10 @@ class ServerTest(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.headers["content-type"], "image/png")
             self.assertEqual(engine.config["translator"]["target_lang"], "PTB")
+            self.assertEqual(engine.art, "preservar")
+            client.post("/translate/with-form/image", files={"image": ("page.png", png())},
+                        data={"config": "{}", "art": "traduzir"})
+            self.assertEqual(engine.art, "traduzir")
             self.assertEqual(client.post("/simple_execute/translate").status_code, 404)
 
     def test_direct_engine_sanitizes_provider_errors(self):
@@ -262,6 +267,18 @@ class ServerTest(unittest.TestCase):
                                  files={"image": ("page.png", png(), "image/png")}, data={"config": "{}"})
             self.assertEqual(result.status_code, 200, result.text if result.status_code != 200 else "")
             self.assertEqual(result.headers["x-mangalate-review"], "required")
+
+    def test_art_choice_reaches_the_worker_and_defaults_to_preserve(self):
+        sent = []
+        def upstream(request):
+            sent.append(request.content)
+            return httpx.Response(200, content=png())
+        with self.client(upstream) as client:
+            for config in ('{"arte":"traduzir"}', '{"arte":"tudo"}', "{}"):
+                client.post("/translate/with-form/image", headers=self.headers(),
+                            files={"image": ("page.png", png(), "image/png")}, data={"config": config})
+        modes = [content.split(b'name="art"')[1].split(b"\r\n\r\n")[1].split(b"\r\n")[0] for content in sent]
+        self.assertEqual(modes, [b"traduzir", b"preservar", b"preservar"])
 
     def test_invalid_page_and_config_rejected(self):
         with self.client() as client:

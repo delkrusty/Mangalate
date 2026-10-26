@@ -109,7 +109,7 @@ object GeminiClient {
     private fun prompt(s: MangalateSettings): String = buildString {
         append("You are an expert manga scanlation translator. Find EVERY piece of text in this ")
         append("${s.sourceLanguage.geminiName} comic page: speech bubbles, thought bubbles, narration boxes")
-        if (s.ignoreOutsideBubbles) {
+        if (s.preservesArt) {
             append(". Skip sound effects and any text drawn directly over the artwork")
         } else {
             append(", sound effects and text written over the artwork")

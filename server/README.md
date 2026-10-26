@@ -75,6 +75,7 @@ Opções úteis:
 | `--no-memory` | Traduz sem a memória da obra (sem glossário aprendido e sem páginas anteriores) |
 | `--speed fast` / `--speed quality` | Força uma velocidade |
 | `--diagnostics` | Salva máscaras e regiões de cada página em `diagnostico/` |
+| `--art-text traduzir` | Experimental: traduz também a fala escrita sobre o desenho; o fundo sob as letras é refeito pelo modelo e pode sair borrado (padrão: `preservar`, que deixa no original) |
 | `--box-layout` | Encaixa o texto na caixa do original, como na 0.5.3 (para comparar) |
 
 Com placa NVIDIA, use `--profile gpu run ... translator-gpu` e acrescente `--gpu`. No Linux/macOS, troque `${PWD}` por `$PWD`.

@@ -542,12 +542,6 @@ private fun QualitySection(
             valueRange = -20f..30f,
             steps = 9,
         )
-        SwitchRow(
-            title = "Só traduzir texto dentro de balões",
-            subtitle = "Ignora onomatopeias e textos soltos sobre a arte",
-            checked = settings.ignoreOutsideBubbles,
-            onChecked = { v -> onChange { it.copy(ignoreOutsideBubbles = v) } },
-        )
     }
 }
 
@@ -597,14 +591,18 @@ private fun TypesetSection(
             checked = settings.uppercase,
             onChecked = { v -> onChange { it.copy(uppercase = v) } },
         )
-        if (settings.mode != TranslateMode.SERVER) {
-            SwitchRow(
-                title = "Só traduzir texto dentro de balões",
-                subtitle = "Ignora onomatopeias e textos soltos sobre a arte",
-                checked = settings.ignoreOutsideBubbles,
-                onChecked = { v -> onChange { it.copy(ignoreOutsideBubbles = v) } },
-            )
-        }
+        SwitchRow(
+            title = "Preservar a arte",
+            subtitle = if (settings.mode == TranslateMode.SERVER) {
+                "Fala escrita sobre o desenho, fora do balão, fica no original, salvo a que tem papel em volta, " +
+                    "que é traduzida (o desenho logo atrás das letras pode ficar manchado). Desligado " +
+                    "(experimental), mais falas sobre o desenho são traduzidas, e o desenho atrás pode sair borrado."
+            } else {
+                "Ignora onomatopeias e textos soltos sobre a arte"
+            },
+            checked = settings.preservesArt,
+            onChecked = { v -> onChange { it.copy(preserveArtText = v) } },
+        )
     }
 }
 

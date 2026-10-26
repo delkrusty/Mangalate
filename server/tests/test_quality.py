@@ -398,6 +398,129 @@ class PipelineHookTest(unittest.TestCase):
         # dots is not paper, and cleaning the letters smeared the tone.
         self.assertEqual(self.hatched_speech("WELL, I GUESS I DESERVE THIS TOO...", tone=True)[0], [])
 
+    def haloed_speech(self, text, mode, halo=True, lost=False, texts=None, unmarked=False, bare=None,
+                      ground=170, taller=0, kana_block=None):
+        """Dark letters with a white halo written straight over the drawing, no paper around."""
+        import asyncio
+        from types import SimpleNamespace
+        from engine_compat import classify_regions, set_art_mode
+        image = page(fill=(ground, ground, ground), size=(420, 260))
+        stroke = (40, 40, 40) if ground > 100 else (220, 220, 220)  # speed lines on a black ground
+        for x in range(-260, 420, 7):  # cross-hatched shading all over
+            cv2.line(image, (x, 0), (x + 260, 259), stroke, 1)
+            cv2.line(image, (x + 260, 0), (x, 259), stroke, 1)
+        if bare is not None:  # paper from this column on
+            image[:, bare:] = 255
+        mask, quads = BackgroundTest.paragraph(BackgroundTest, page(size=(420, 260)))
+        if halo:
+            image[cv2.dilate(mask, np.ones((7, 7), np.uint8)) > 0] = 255
+        image[mask > 0] = 0
+        if unmarked:  # the detector missed the last line whole: on the page, not in its mask
+            top = int(np.asarray(quads[-1])[:, 1].min()) - 2
+            mask = mask.copy()
+            mask[top:] = 0
+        # Line boxes fitted to the letters reach a few pixels past the halo.
+        quads = [np.asarray(q) + np.array([[0, -taller], [0, -taller], [0, taller], [0, taller]]) for q in quads]
+        # The OCR lost the last line: its letters are on the page and in the mask, not in the block.
+        region = SimpleNamespace(name="fala", text=text, lines=np.array(quads[:-1] if lost else quads), texts=texts)
+        blocks = [region]
+        if kana_block is not None:  # the lost line went into a block of drawn kana, read as these lines
+            kana = np.asarray(quads[-1]) + np.array([[0, 40], [0, 40], [0, 40], [0, 40]])
+            blocks.append(SimpleNamespace(name="efeito", text="".join(kana_block), texts=list(kana_block),
+                                          lines=np.array([quads[-1], kana])))
+        async def merge(self, config, ctx):
+            return blocks
+        ctx = SimpleNamespace(img_rgb=image, mask_raw=mask)
+        config = SimpleNamespace(ocr=SimpleNamespace(ignore_bubble=8))
+        set_art_mode(mode)
+        try:
+            kept = asyncio.run(classify_regions(merge)(None, config, ctx))
+        finally:
+            set_art_mode("preservar")
+        return [r.name for r in kept], region.mangalate_background
+
+    def test_haloed_speech_on_a_black_ground_is_translated_with_fitted_line_boxes(self):
+        # Manga teste p22: a halo a few pixels wide over a black ground.  Once the line boxes
+        # fitted the letters, 2 px taller, the margin around them was black, and the dark letters
+        # were taken for light letters on black: the speech stayed in English.
+        speech = "WELL, I GUESS I DESERVE THIS TOO..."
+        kept, background = self.haloed_speech(speech, "traduzir", ground=15, taller=4)
+        self.assertEqual((kept, background.get("sobre_arte")), (["fala"], True))
+        self.assertEqual(self.haloed_speech(speech, "preservar", ground=15, taller=4)[0], [])
+
+    def test_haloed_speech_whose_lost_line_went_into_a_kana_block_stays_as_drawn(self):
+        # Manga teste p11: "SCISSORS", the end of "ROCK, PAPER-", was merged with the drawn
+        # kana of the same cry.  Taken as that block's, its ink no longer held the speech back:
+        # "Pedra, papel-" came out over a half-cleaned "SCISSORS".
+        speech = "WELL, I GUESS I DESERVE THIS"
+        kept, _ = self.haloed_speech(speech, "traduzir", lost=True, kana_block=["TOO...", "け"])
+        self.assertEqual(kept, [])
+        # A block of kana only is drawn lettering of its own: the speech beside it is translated.
+        kept, _ = self.haloed_speech(speech, "traduzir", lost=True, kana_block=["じゃ", "け"])
+        self.assertEqual(kept, ["fala"])
+
+    def test_haloed_speech_over_the_drawing_follows_the_readers_choice(self):
+        # Speech with a white halo over the drawing, no balloon: the margin is all art.  By
+        # default it stays as drawn; "traduzir" translates it, cleaning only the letters.
+        speech = "WELL, I GUESS I DESERVE THIS TOO..."
+        kept, background = self.haloed_speech(speech, "preservar")
+        self.assertEqual((kept, background["kind"]), ([], "art"))
+        kept, background = self.haloed_speech(speech, "traduzir")
+        self.assertEqual((kept, background["kind"], background.get("sobre_arte")), (["fala"], "tracos", True))
+        self.assertEqual(self.haloed_speech(speech, "qualquer")[0], [])  # unknown choice: preserve
+        # A line of it was lost: translating the rest would invert or cut the sense, next to English.
+        self.assertEqual(self.haloed_speech(speech, "traduzir", lost=True)[0], [])
+        # A line read as a scrap ("DP" for a whole line): its letters would go, its words with them.
+        read = [t for t, _ in BackgroundTest.LINES]
+        self.assertEqual(self.haloed_speech(speech, "traduzir", texts=read)[0], ["fala"])
+        self.assertEqual(self.haloed_speech(speech, "traduzir", texts=read[:-1] + ["DP"])[0], [])
+
+    def test_preserved_art_keeps_haloed_speech_even_with_some_paper_around(self):
+        # With 20% to 45% of paper around, the model still had the drawing under the letters to
+        # make up: bricks, hatching and hair came back as a grey smear.  Preserving the art, such
+        # a speech stays as drawn; "traduzir" translates it.
+        speech = "WELL, I GUESS I DESERVE THIS TOO..."
+        self.assertEqual(self.haloed_speech(speech, "preservar", bare=250)[0], [])
+        self.assertEqual(self.haloed_speech(speech, "traduzir", bare=250)[0], ["fala"])
+
+    def test_translate_everything_cleans_a_word_the_detector_missed_in_the_halo(self):
+        # "PONG PERIL..." under a marked "PING-": the halo shows the letters the mask left out.
+        speech = "WELL, I GUESS I DESERVE THIS TOO..."
+        kept, background = self.haloed_speech(speech, "traduzir", unmarked=True)
+        self.assertEqual((kept, background.get("sobre_arte")), (["fala"], True))
+        image = page(fill=(170, 170, 170), size=(420, 260))
+        mask, quads = BackgroundTest.paragraph(BackgroundTest, page(size=(420, 260)))
+        image[cv2.dilate(mask, np.ones((7, 7), np.uint8)) > 0] = 255
+        image[mask > 0] = 0
+        last = np.zeros(mask.shape, bool)
+        last[int(np.asarray(quads[-1])[:, 1].min()) - 2:] = True
+        letters = (mask > 0) & last
+        partial = mask.copy()
+        partial[last] = 0
+        paint, _ = quality.halo_paint(image, partial, quads)
+        self.assertTrue(paint[letters].all())
+        self.assertGreaterEqual(quality.halo_cover(image, partial, quads), quality.HALO_COVER)
+        # Without a halo the same words are not taken from the drawing.
+        plain = page(fill=(170, 170, 170), size=(420, 260))
+        plain[mask > 0] = 0
+        self.assertFalse(quality.halo_paint(plain, partial, quads)[0][letters].any())
+
+    def test_lines_unread_finds_empty_or_scrap_lines_only(self):
+        wide, short = quad(20, 455, 213, 466), quad(564, 730, 596, 748)
+        self.assertTrue(quality.lines_unread([wide], ["DP"]))
+        self.assertTrue(quality.lines_unread([wide], [""]))
+        self.assertFalse(quality.lines_unread([wide], ["TO COVER WHILE THE"]))
+        self.assertFalse(quality.lines_unread([short], ["THE"]))
+        self.assertFalse(quality.lines_unread([wide, short], ["DP"]))  # lines and texts do not match: no verdict
+
+    def test_translate_everything_still_keeps_sounds_and_unreadable_letters(self):
+        self.assertEqual(self.haloed_speech("BAM", "traduzir")[0], [])
+        # Without the halo the dark letters sink into the drawing: the mask cannot be trusted.
+        self.assertEqual(self.haloed_speech("WELL, I GUESS I DESERVE THIS TOO...", "traduzir", halo=False)[0], [])
+        # Speech on paper is translated in both modes, and not listed as over the drawing.
+        kept, background = self.hatched_speech("WELL, I GUESS I DESERVE THIS TOO...")
+        self.assertEqual((kept, background.get("sobre_arte")), (["fala"], None))
+
     def test_speech_the_mask_misses_or_two_speeches_stay_as_drawn(self):
         image = page(size=(420, 260))
         mask, quads = BackgroundTest.paragraph(BackgroundTest, image)
@@ -406,6 +529,17 @@ class PipelineHookTest(unittest.TestCase):
         missed = mask.copy()
         missed[40:100] = 0
         self.assertFalse(quality.speech_on_paper(image, missed, quads))
+        # Manga teste p12: the mask held the last line only by a strip along its top.  The block
+        # was still 86% marked; half of the line stayed in English under the translation.
+        hair = image.copy()
+        last = np.asarray(quads[-1])
+        top, bottom, left = int(last[:, 1].min()), int(last[:, 1].max()), int(last[:, 0].min())
+        for x in range(left, left + 50, 9):  # hair through its first letters: no letter on its own
+            cv2.line(hair, (x - 20, bottom + 60), (x + 6, top + 4), (0, 0, 0), 2)
+        strip = mask.copy()
+        strip[top:bottom + 1, left:left + 50] = 0
+        self.assertFalse(quality.speech_on_paper(hair, strip, quads))
+        self.assertTrue(quality.speech_on_paper(hair, mask, quads))
         # Grand Blue 102 p33: two speeches side by side in one block, their lines interleaved.
         side = [quad(98, 40, 200, 64), quad(260, 40, 380, 64), quad(98, 70, 200, 94), quad(260, 70, 380, 94)]
         self.assertFalse(quality.speech_on_paper(image, mask, side))
@@ -734,6 +868,76 @@ class LineRepairTest(unittest.TestCase):
         self.assertTrue(fitted[1] <= y0 and fitted[3] >= y1, fitted)
         self.assertLess(fitted[3] - fitted[1], (y1 - y0) + 4)  # still one line, not two
 
+    def test_box_clipping_a_line_that_touches_the_one_above_is_fitted(self):
+        # Manga teste p15: tight leading joined the last line to the one above through a stray
+        # mark; the box, 3 px short of the letters, was never fitted and the OCR read "DP".
+        gray, mask, ink = self.lettered(["THE KI", "RESTRAINER", "FUNCTIONED."], step=28)
+        mask[ink[1][3] - 2:ink[2][1] + 2, 200:202] = 255  # the two lines touch through a mark
+        x0, y0, x1, y1 = ink[2]
+        boxes = [ink[0], ink[1], (x0, y0 + 2, x1, y1 - 3)]
+        repaired, changes = repair_lines(mask, boxes, rebuild=True)
+        self.assertEqual([kind for kind, _, _ in changes], ["valley"])
+        fitted = repaired[2][0]
+        self.assertTrue(fitted[1] <= y0 and fitted[3] >= y1, fitted)
+        self.assertGreaterEqual(fitted[1], ink[1][3] - 3)  # the line above stays out
+        # A box that holds its line is left as it is, touching or not.
+        untouched, changes = repair_lines(mask, [ink[0], ink[1], (x0 - 1, y0 - 1, x1 + 1, y1 + 1)], rebuild=True)
+        self.assertEqual(changes, [])
+        # Preserving the art, the box is left as the detector drew it.
+        _, changes = repair_lines(mask, boxes, rebuild=False)
+        self.assertEqual(changes, [])
+
+    def test_first_and_last_lines_half_in_the_mask_are_added(self):
+        # Manga teste p4: the mask held the bottom of "IF I WIN," and the top of "IN DEBT."; with
+        # no box, they were never read, and the speech stayed in English between them.
+        gray, mask, ink = self.lettered(["IF I WIN,", "I'LL GET ONE", "MILLION YEN", "IN DEBT."], step=28)
+        whole = mask.copy()
+        first, last = ink[0], ink[3]
+        mask[:first[3] - 6, :] = 0                   # only the bottom of the first line
+        mask[last[1] + 9:, :] = 0                    # only the top of the last one
+        boxes = [(x0 - 1, y0 - 1, x1 + 1, y1 + 1) for x0, y0, x1, y1 in ink[1:3]]
+        repaired, changes = repair_lines(mask, boxes, gray, rebuild=True)
+        added = sorted((box for box, source in repaired if source is None), key=lambda b: b[1])
+        self.assertEqual(len(added), 2, changes)
+        self.assertEqual({kind for kind, _, _ in changes}, {"edge"})
+        for box, line in zip(added, (first, last)):
+            self.assertTrue(box[0] <= line[0] and box[2] >= line[2] and box[1] <= line[1] and box[3] >= line[3],
+                            (box, line))
+            self.assertLess(box[3] - box[1], 1.4 * (line[3] - line[1]))
+        _, changes = repair_lines(whole, [(x0 - 1, y0 - 1, x1 + 1, y1 + 1) for x0, y0, x1, y1 in ink], gray, rebuild=True)
+        self.assertEqual(changes, [])
+        # Preserving the art, the lines stay as the detector boxed them.
+        _, changes = repair_lines(mask, boxes, gray, rebuild=False)
+        self.assertEqual(changes, [])
+
+    def test_rest_of_a_line_past_a_word_gap_widens_its_box(self):
+        # Manga teste p4: the box held "I'LL GET" and the mask "ONE" past the word gap; read in a
+        # box of its own, the line would come back twice.
+        gray, mask, ink = self.lettered(["I'LL GET     ONE", "MILLION YEN"], step=24)
+        x0, y0, x1, y1 = ink[0]
+        gaps = np.flatnonzero(~mask[y0:y1, x0:x1].any(axis=0)) + x0
+        end = int(max(g for g in gaps if g < x0 + 0.7 * (x1 - x0)))  # in the blank before "ONE"
+        first = (x0 - 1, y0 - 1, end - 10, y1 + 1)
+        line = ink[1]
+        mask[y1 - 2:line[1] + 2, x1 - 12:x1 - 10] = 255  # "ONE" touches the line below, as letters of a bubble did
+        repaired, changes = repair_lines(mask, [first, (line[0] - 1, line[1] - 1, line[2] + 1, line[3] + 1)], gray,
+                                         rebuild=True)
+        row = [box for box, _ in repaired if box[1] < y1 and box[3] > y0]
+        self.assertEqual(len(row), 1, repaired)
+        self.assertIn(("edge", first, [row[0]]), changes)
+        self.assertGreaterEqual(row[0][2], x1 - 1)
+
+    def test_strip_of_art_at_the_edge_of_a_block_is_not_a_line(self):
+        # Hatching right above a block, partly in the mask: its strokes run longer than any letter.
+        gray, mask, ink = self.lettered(["", "I'LL GET ONE", "MILLION YEN"], step=28)
+        top = ink[1][1]
+        for y in range(top - 24, top - 4, 3):
+            cv2.line(gray, (ink[1][0] - 10, y), (ink[1][2] + 10, y + 2), 0, 1)
+        mask[top - 10:top - 4, ink[1][0]:ink[1][2]] = 255
+        boxes = [(x0 - 1, y0 - 1, x1 + 1, y1 + 1) for x0, y0, x1, y1 in ink[1:]]
+        repaired, _ = repair_lines(mask, boxes, gray, rebuild=True)
+        self.assertEqual([box for box, source in repaired if source is None], [])
+
     def test_box_missing_the_first_letter_grows_over_the_page(self):
         # Grand Blue 102 p42: the mask missed the "A" of "AMOUNT" and the OCR read "MOUN".
         gray, mask, ink = self.lettered(["THE KI", "RESTRAINER", "FUNCTIONED."])
@@ -744,6 +948,30 @@ class LineRepairTest(unittest.TestCase):
         self.assertLessEqual(repaired[1][0][0], x0)
         unchanged, _ = repair_lines(mask, boxes)  # without the page, the mask alone decides
         self.assertEqual(unchanged[1][0][0], x0 + 18)
+
+    def test_end_of_a_speed_line_beside_the_letters_is_not_a_letter(self):
+        # Manga teste p22: a speed line stopping at the halo, as short as a letter, widened the box
+        # over the black ground beside it; the speech was then taken for light letters on black.
+        gray, mask, ink = self.lettered(["THE KI", "RESTRAINER", "FUNCTIONED."])
+        x0, y0, x1, y1 = ink[1]
+        cv2.line(gray, (x0 - 18, y1 - 2), (x0 - 5, y0 + 2), 0, 1)  # thin and slanted, inside the row
+        boxes = [ink[0], (x0, y0 + 2, x1, y1 - 3), ink[2]]   # clipped: the box is fitted
+        repaired, changes = repair_lines(mask, boxes, gray)
+        self.assertEqual([kind for kind, _, _ in changes], ["fit"])
+        self.assertGreaterEqual(repaired[1][0][0], x0 - 1)
+
+    def test_drawing_right_after_the_line_is_not_a_letter(self):
+        # Manga teste p4: bottles on a shelf right after "GO-AGAIN," widened the box over them;
+        # the room planned for the translation came out pointed and the letters shrank.
+        gray, mask, ink = self.lettered(["THE KI", "RESTRAINER", "FUNCTIONED."])
+        x0, y0, x1, y1 = ink[1]
+        gray[y0 - 12:y1 + 12, x1 + 3:x1 + 40] = 150             # the drawing's grey
+        for x in range(x1 + 5, x1 + 38, 8):
+            gray[y0 + 1:y1 - 1, x:x + 4] = 30                   # dark pieces, as tall as letters
+        boxes = [ink[0], (x0, y0 + 2, x1, y1 - 3), ink[2]]      # clipped: the box is fitted
+        repaired, changes = repair_lines(mask, boxes, gray)
+        self.assertEqual([kind for kind, _, _ in changes], ["fit"])
+        self.assertLessEqual(repaired[1][0][2], x1 + 1)
 
     def test_outline_next_to_the_line_is_not_a_letter(self):
         gray, mask, ink = self.lettered(["THE KI", "RESTRAINER", "FUNCTIONED."])
@@ -858,7 +1086,7 @@ class LineRepairTest(unittest.TestCase):
         self.assertEqual(len(ctx.mangalate_line_repairs), 1)
         self.assertIs(result[1], mask)
 
-    def run_hook(self, mask, lines):
+    def run_hook(self, mask, lines, image=None, mode="preservar"):
         import asyncio
         import types
         from types import SimpleNamespace
@@ -867,14 +1095,17 @@ class LineRepairTest(unittest.TestCase):
         fake.Quadrilateral = self.Quad
         package = types.ModuleType("manga_translator")
         package.utils = fake
+        from engine_compat import set_art_mode
         async def detect(self, config, ctx):
             return lines, mask, mask
-        ctx = SimpleNamespace(img_rgb=np.zeros(mask.shape + (3,), np.uint8))
+        ctx = SimpleNamespace(img_rgb=np.zeros(mask.shape + (3,), np.uint8) if image is None else image)
         saved = {k: sys.modules.get(k) for k in ("manga_translator", "manga_translator.utils")}
         sys.modules.update({"manga_translator": package, "manga_translator.utils": fake})
+        set_art_mode(mode)
         try:
             return asyncio.run(repair_textlines(detect)(None, None, ctx))[0]
         finally:
+            set_art_mode("preservar")
             for key, value in saved.items():
                 if value is None:
                     sys.modules.pop(key, None)
@@ -884,6 +1115,22 @@ class LineRepairTest(unittest.TestCase):
     class Quad:
         def __init__(self, pts, text, prob, direction="h"):
             self.pts, self.text, self.prob, self.direction = np.asarray(pts), text, prob, direction
+
+    def test_edge_lines_are_rebuilt_in_both_modes(self):
+        # Manga teste p4: "IF I WIN, ... IN DEBT." over the drawing is read whole and translated
+        # preserving the art too (a held speech kept its widened lines, and the stroke one of them
+        # touched was kept whole, leaving a letter of the speech beside it on the page).
+        gray, mask, ink = self.lettered(["IF I WIN,", "I'LL GET ONE", "MILLION YEN", "IN DEBT."], step=28)
+        first, last = ink[0], ink[3]
+        mask[:first[3] - 6, :] = 0
+        mask[last[1] + 9:, :] = 0
+        lines = [self.Quad(quad(x0 - 1, y0 - 1, x1 + 1, y1 + 1), "", 0.9) for x0, y0, x1, y1 in ink[1:3]]
+        image = np.dstack([gray] * 3)
+        from unittest import mock
+        # Over the drawing there is no flat interior whose letters would complete the mask.
+        with mock.patch("quality.bubble_glyphs", lambda image, box, *a, **k: np.zeros(image.shape[:2], bool)):
+            self.assertEqual(len(self.run_hook(mask, lines, image)), 4)
+            self.assertEqual(len(self.run_hook(mask, lines, image, mode="traduzir")), 4)
 
     def test_square_vertical_box_of_short_lines_is_split(self):
         # Grand Blue 106 p22: "CON- / DOMS / ?!" in a narrow bubble came as one box a little
@@ -2159,8 +2406,6 @@ class BrokenWordTest(unittest.TestCase):
         for text in ("WALK IN TO THE ROOM", "A LOT OF FUN", "THE KING IS DEAD", "I CAN SING", "WAIT-- WHAT"):
             self.assertEqual(quality.fix_ocr_words(text), (text, 0))
 
-
-class OuroSevenTest(unittest.TestCase):
     def test_short_ocr_mixups(self):
         self.assertEqual(quality.fix_ocr_words("IWO BODIES IN PAIN")[0], "TWO BODIES IN PAIN")
         self.assertEqual(quality.fix_ocr_words("ITLL PASS RIGHI THROUGH--")[0], "ITLL PASS RIGHT THROUGH--")

@@ -170,6 +170,60 @@ class FlatFillTest(unittest.TestCase):
         image[top - 2:top, 60:340] = 0                        # outline, 2 px thick
         return image, mask, (slice(top - 2, top), slice(60, 340))
 
+    def haloed_page(self, over_art, tone=170):
+        """Dark letters with a white halo over cross-hatched shading, as a "tracos" block."""
+        import cv2
+        import numpy as np
+        image = np.full((260, 420, 3), tone, np.uint8)
+        for x in range(-260, 420, 7):
+            cv2.line(image, (x, 0), (x + 260, 259), (40, 40, 40), 1)
+            cv2.line(image, (x + 260, 0), (x, 259), (40, 40, 40), 1)
+        raw = np.zeros((260, 420), np.uint8)
+        quads = []
+        for i, text in enumerate(("WELL, I GUESS", "I DESERVE", "THIS TOO...")):
+            y = 70 + 30 * i
+            cv2.putText(raw, text, (100, y), cv2.FONT_HERSHEY_SIMPLEX, 0.7, 255, 2)
+            (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+            quads.append([[98, y - th - 3], [102 + tw, y - th - 3], [102 + tw, y + 4], [98, y + 4]])
+        image[cv2.dilate(raw, np.ones((7, 7), np.uint8)) > 0] = 255
+        image[raw > 0] = 0
+        mask = cv2.dilate(raw, np.ones((21, 21), np.uint8))  # the engine's mask, grown
+        background = {"kind": "tracos", "fala": True, **({"sobre_arte": True} if over_art else {})}
+        region = SimpleNamespace(lines=np.array(quads), xyxy=(98, 40, 270, 134), font_size=18,
+                                 mangalate_background=background)
+        return image, mask, raw, region
+
+    def test_haloed_speech_over_the_drawing_sends_only_letters_and_halo_to_the_model(self):
+        # The model smeared the whole block (bars, bricks, hair); painted flat with the halo, the
+        # old block stayed as a white patch bigger than the translation.  Only the letters and
+        # their halo are drawn back by the model.
+        import cv2
+        import numpy as np
+        engine, seen = self.engine()
+        image, mask, raw, region = self.haloed_page(over_art=True)
+        out = asyncio.run(engine._run_inpainting(None, SimpleNamespace(img_rgb=image, mask=mask, mask_raw=raw,
+                                                                       text_regions=[region])))
+        self.assertEqual(len(seen), 1)
+        self.assertTrue((out[raw > 0] == (1, 2, 3)).all())                  # letters drawn back by the model
+        self.assertEqual(region.mangalate_halo, (255, 255, 255))            # the halo, for the new text
+        # The drawing past the halo and its soft rim stays.
+        hatching = (image.max(axis=2) < 100) & (cv2.dilate(raw, np.ones((15, 15), np.uint8)) == 0)
+        self.assertTrue((out[hatching] == image[hatching]).all())
+        self.assertTrue((out[mask == 0] == image[mask == 0]).all())
+        # A light tone of the drawing (hair, a pale screentone) inside the line boxes stays: only
+        # the halo right around the letters goes to the model.
+        image, mask, raw, region = self.haloed_page(over_art=True, tone=225)
+        left = speed.paint_halos(image, mask, [region], raw)[1]
+        away = cv2.dilate(raw, np.ones((25, 25), np.uint8)) == 0
+        self.assertFalse(left[away].any())
+        # The same block not listed as over the drawing goes to the model with its whole mask.
+        engine, seen = self.engine()
+        image, mask, raw, region = self.haloed_page(over_art=False)
+        asyncio.run(engine._run_inpainting(None, SimpleNamespace(img_rgb=image, mask=mask, mask_raw=raw,
+                                                                 text_regions=[region])))
+        self.assertEqual(seen[0][1], int((mask > 0).sum()))
+        self.assertFalse(hasattr(region, "mangalate_halo"))
+
     def test_outline_near_the_text_does_not_send_a_plain_bubble_to_the_model(self):
         # Seen in white bubbles: the ring caught the outline, the model left a smudge of the letters.
         engine, seen = self.engine()
