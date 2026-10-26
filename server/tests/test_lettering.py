@@ -585,3 +585,71 @@ class TextAtTheTopTest(unittest.TestCase):
         box = (230, 140, 470, 200)  # two lines right under the top edge of the box
         self.check(image, box, lambda x, y: 153 <= x <= 547 and 123 <= y <= 517)
 
+
+class TonedBubbleTest(unittest.TestCase):
+    """Speech in a bubble filled with light screentone, cleaned letter by letter.
+
+    Manga teste p10: only the cleaned patch around the letters is flat, the flood fill stopped at
+    the dots of the tone and the translation came out at 14 px for letters of 22.
+    """
+    LINE = 22
+    TEXT = "O jogo será uma partida única de um set até 11 pontos."
+    BOX = (250, 250, 350, 350)
+    HULL = np.array([[250, 250], [350, 250], [350, 350], [250, 350]], np.int32)
+
+    def page(self, outline=True, drawing=False):
+        image = np.full((600, 600, 3), 90, np.uint8)  # the art around
+        inside = np.zeros((600, 600), np.uint8)
+        cv2.ellipse(inside, (300, 300), (75, 125), 0, 0, 360, 1, -1)
+        if not outline:
+            inside[:] = 1
+        tone = np.full((600, 600), 245, np.uint8)
+        tone[(np.indices((600, 600)).sum(axis=0) % 2) == 0] = 195  # fine dots, none of them ink
+        image[inside > 0] = tone[inside > 0][:, None]
+        if outline:
+            cv2.ellipse(image, (300, 300), (75, 125), 0, 0, 360, (0, 0, 0), 2)
+        if drawing:  # a panel drawn in ink, not a bubble
+            for y in range(180, 430, 8):
+                cv2.line(image, (225, y), (375, y + 20), (30, 30, 30), 2)
+        x0, y0, x1, y1 = self.BOX
+        image[y0:y1, x0:x1] = 231  # the cleaned letters
+        return image
+
+    def test_the_toned_bubble_gives_the_letters_their_size(self):
+        image = self.page()
+        flat = lettering.plan_shaped(image, self.BOX, [], self.TEXT, FONT, self.LINE, 8)
+        self.assertLess(flat["size"], 0.75 * self.LINE)  # the defect: the room stops at the tone
+        toned = lettering.toned_page(image, self.BOX, self.HULL)
+        self.assertIsNotNone(toned)
+        plan = lettering.plan_shaped(toned, self.BOX, [], self.TEXT, FONT, self.LINE, 8, scale=1.0)
+        self.assertGreaterEqual(plan["size"], 0.75 * self.LINE)
+        self.assertLessEqual(plan["size"], self.LINE)  # never bigger than the original letters
+        for x0, y0, x1, y1 in line_slots(plan):
+            for x in (x0, x1):
+                self.assertLess(((x - 300) / 75) ** 2 + (((y0 + y1) / 2 - 300) / 125) ** 2, 1.0)
+
+    def test_a_drawn_panel_or_an_open_tone_is_no_bubble(self):
+        self.assertIsNone(lettering.toned_page(self.page(drawing=True), self.BOX, self.HULL))
+        self.assertIsNone(lettering.toned_page(self.page(outline=False), self.BOX, self.HULL))
+
+    def test_the_hook_plans_a_cleaned_speech_in_the_toned_bubble(self):
+        import types
+        from unittest import mock
+        from engine_compat import bubble_layout
+        rendering = types.SimpleNamespace(
+            resize_regions_to_font_size=lambda img, regions, *a: [np.zeros((1, 4, 2), np.int64) for _ in regions],
+            render=lambda img, region, *a: img, fg_bg_compare=lambda fg, bg: (fg, bg))
+        text_render = types.SimpleNamespace(
+            calc_horizontal=lambda size, text, w, h, lang, hyphenate: char_layout(text)(size, w, h))
+        bubble_layout(rendering, text_render)
+        x0, y0, x1, y1 = self.BOX
+        step = (y1 - y0) / 4
+        lines = np.array([[[x0, y0 + k * step], [x1, y0 + k * step], [x1, y0 + k * step + self.LINE],
+                           [x0, y0 + k * step + self.LINE]] for k in range(4)])
+        region = types.SimpleNamespace(
+            xyxy=self.BOX, lines=lines, font_size=self.LINE, direction="h", horizontal=True, target_lang="PTB",
+            mangalate_background={"kind": "tracos", "fala": True}, get_translation_for_rendering=lambda: self.TEXT)
+        with mock.patch.object(lettering, "font_file", lambda: FONT):
+            rendering.resize_regions_to_font_size(self.page(), [region], None, 0, -1)
+        self.assertGreaterEqual(region.mangalate_shaped["size"], 0.75 * self.LINE)
+        self.assertLessEqual(region.mangalate_shaped["size"], self.LINE)

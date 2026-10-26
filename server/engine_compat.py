@@ -1052,6 +1052,7 @@ def bubble_layout(rendering, text_render):
                 return text_render.calc_horizontal(size, text, width, height, lang, False)
             others = boxes[:i] + boxes[i + 1:]
             page = img
+            hull = None
             if (getattr(region, "mangalate_background", None) or {}).get("kind") == "tracos":
                 # Strokes of the drawing still cross where the letters were: plan as if the
                 # block were paper (quality.paper_under), so the text keeps its room.
@@ -1072,6 +1073,19 @@ def bubble_layout(rendering, text_render):
             except Exception as exc:  # never lose a page over the nicer layout
                 print(f"Shaped layout skipped: {type(exc).__name__}", flush=True)
                 shaped = None
+            if hull is not None and (shaped is None or shaped["size"] < lettering.TONE_BELOW * line_height(region)):
+                # Letters cleaned one by one in a bubble of screentone: the room is the bubble the
+                # ink closes, the letters no bigger than the original plus the reader's offset
+                # (lettering.toned_page).
+                try:
+                    toned = lettering.toned_page(img, boxes[i], hull)
+                    roomy = toned is not None and lettering.plan_shaped(
+                        toned, boxes[i], others, text, lettering.font_file(), line_height(region),
+                        max(8, round(minimum * 0.6)), offset=font_size_offset or 0, scale=1.0)
+                    if roomy and (shaped is None or roomy["size"] > shaped["size"]):
+                        shaped = roomy
+                except Exception as exc:  # keep the plan of the cleaned patch
+                    print(f"Toned bubble skipped: {type(exc).__name__}", flush=True)
             if shaped is not None:
                 region.mangalate_shaped = shaped
                 region.font_size = shaped["size"]

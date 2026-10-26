@@ -561,8 +561,11 @@ class Measure:
         return sum(font.getlength(piece) for piece, font in self.runs(text))
 
 
-def plan_shaped(image, region_box, others, text, font_path, original_size, minimum, offset=0, syllables=True):
+def plan_shaped(image, region_box, others, text, font_path, original_size, minimum, offset=0, syllables=True,
+                scale=SHAPED_MAX_SCALE):
     """Font size and lines that follow the bubble; None to use the rectangle plan.
+
+    ``scale`` caps the letters, in original line heights.
 
     With ``syllables`` a long word may be cut at a syllable when that lets the letters grow
     by HYPHEN_GAIN (One Piece 1161 p4: "...transformando" whole in a narrow caption column
@@ -593,7 +596,7 @@ def plan_shaped(image, region_box, others, text, font_path, original_size, minim
         reach = max(min(cy - top, bottom - cy), int(round((y1 - y0) / 2 + CENTRE_SPARE * original_size)))
         top, bottom = max(top, cy - reach), min(bottom, cy + reach)
     floor = max(1, int(minimum))
-    cap = max(floor, int(round(original_size * SHAPED_MAX_SCALE)) + int(offset))
+    cap = max(floor, int(round(original_size * scale)) + int(offset))
 
     def largest(strict, sentences=False, cut=False, cap=cap):
         def attempt(size):
@@ -640,6 +643,44 @@ def plan_shaped(image, region_box, others, text, font_path, original_size, minim
     box = (int(x - width / 2), int(top), int(x + width / 2) + 1, int(top + slot + advance * (len(lines) - 1)) + 1)
     return {"size": lo, "lines": lines, "x": x, "top": top, "slot": slot, "advance": advance,
             "font": font_path, "box": box}
+
+
+TONE_DARK = 128       # a pixel darker than this is ink (an outline, a stroke); screentone dots are lighter
+TONE_CLUTTER = 0.02   # share of ink inside the outline above which the room is a drawn panel, not a bubble
+TONE_BELOW = 0.75     # the toned room is tried when the letters came out smaller than this share of the original
+TONE_CLOSE = 9        # gap between strokes of a drawing closed to find them inside the fill, px
+
+
+def toned_page(image, box, hull):
+    """The page with all but the ink made white, when that shows a clean bubble around ``box``; else None.
+
+    Manga teste p10: speech in a bubble of light screentone, cleaned letter by letter, so only
+    the patch around the letters was flat and the room for the translation stopped at the dots
+    of the tone (14 px letters for 22).  Ink closes the bubble; ``hull`` (the original lines) is
+    white whatever is left in it.  A fill that reaches the edge of the search window (no outline
+    around) or that holds strokes of ink (a panel of the drawing) is no bubble.
+    """
+    gray = cv2.cvtColor(np.ascontiguousarray(image[..., :3]), cv2.COLOR_RGB2GRAY)
+    ink = gray < TONE_DARK
+    inside = np.zeros(gray.shape, np.uint8)
+    cv2.fillPoly(inside, [np.asarray(hull, np.int32).reshape(-1, 1, 2)], 1)
+    ink &= inside == 0
+    page = np.dstack([np.where(ink, 0, 255).astype(np.uint8)] * 3)
+    x0, y0, x1, y1 = box
+    found = _fill(page, box, int(max(x1 - x0, y1 - y0) * GROW) + GROW_MIN)
+    if found is None or any(found[2].values()):
+        return None
+    mask, (wx0, wy0, wx1, wy1), _ = found
+    # Strokes of a drawing split the fill into strips; closing the gaps between them puts the
+    # strokes inside, where the outline of a bubble stays out.
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (TONE_CLOSE, TONE_CLOSE))
+    closed = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_CLOSE, kernel)
+    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    outline = np.zeros(mask.shape, np.uint8)
+    cv2.drawContours(outline, contours, -1, 1, -1)
+    if (ink[wy0:wy1, wx0:wx1] & (outline > 0)).sum() > TONE_CLUTTER * outline.sum():
+        return None
+    return page
 
 
 STACK_ADVANCE = 1.3   # rows of stacked letters, in cap heights
