@@ -2406,6 +2406,19 @@ class BrokenWordTest(unittest.TestCase):
         for text in ("WALK IN TO THE ROOM", "A LOT OF FUN", "THE KING IS DEAD", "I CAN SING", "WAIT-- WHAT"):
             self.assertEqual(quality.fix_ocr_words(text), (text, 0))
 
+    def test_last_letter_echoed_after_the_punctuation_is_dropped(self):
+        # Manga teste p15: "NICE CONTROL." was read "NICE CONTROL,L"; the AI took the stray "L" as the
+        # start of the next speech and moved its "But" into this bubble.
+        self.assertEqual(quality.fix_ocr_words("NICE CONTROL,L"), ("NICE CONTROL,", 1))
+        self.assertEqual(quality.fix_ocr_words("WELL.L "), ("WELL. ", 1))
+        # Another letter, a word, initials, no word before the punctuation, or a letter the speech goes
+        # on after (a glued word "HI,I KNOW", "IDEA.A GOOD ONE", a stutter "WAIT,T-THAT"): untouched.
+        for text in ("YES,I KNOW", "WELL,LOOK", "U.S.A", "A.A", "ZQX,X", "NICE CONTROL, L", "HI,I KNOW YOU",
+                     "IT WAS AN IDEA.A GOOD ONE", "WAIT,T-THAT", "STOP!P-PLEASE", "WITH THIS.S SERVE"):
+            self.assertEqual(quality.fix_ocr_words(text), (text, 0))
+
+
+class OuroSevenTest(unittest.TestCase):
     def test_short_ocr_mixups(self):
         self.assertEqual(quality.fix_ocr_words("IWO BODIES IN PAIN")[0], "TWO BODIES IN PAIN")
         self.assertEqual(quality.fix_ocr_words("ITLL PASS RIGHI THROUGH--")[0], "ITLL PASS RIGHT THROUGH--")

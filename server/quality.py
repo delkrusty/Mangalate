@@ -3003,6 +3003,18 @@ def fix_ocr_words(text, keep=()):
         i += 2
     text = "".join(parts)
 
+    # The last letter of a word echoed after its punctuation at the end of the speech: "NICE CONTROL,L"
+    # for "NICE CONTROL." (Manga teste p15), which the translator reads as the start of the next speech.
+    # Inside the speech the letter may be a glued word ("HI,I KNOW") or a stutter ("WAIT,T-THAT").
+    def echo(match):
+        nonlocal changed
+        if not _known(match.group(1), common, names):
+            return match.group(0)
+        changed += 1
+        return match.group(1) + match.group(3)
+
+    text = re.sub(r"\b([A-Z]+([A-Z]))([,.!?])\2(?=\s*$)", echo, text)
+
     def repl(match):
         nonlocal changed
         word = match.group(0)
