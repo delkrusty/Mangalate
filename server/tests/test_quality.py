@@ -395,8 +395,10 @@ class PipelineHookTest(unittest.TestCase):
         self.assertEqual(self.hatched_speech("BAM")[0], [])
         self.assertEqual(self.hatched_speech("WELL, I GUESS I DESERVE THIS TOO...", dark=True)[0], [])
         # Grand Blue 102 p7: white-outlined letters over screentone; the white between the
-        # dots is not paper, and cleaning the letters smeared the tone.
-        self.assertEqual(self.hatched_speech("WELL, I GUESS I DESERVE THIS TOO...", tone=True)[0], [])
+        # dots is not paper, and cleaning only the letters smeared the tone.  Their white
+        # outline is a halo: the tone is drawn back under it and the translation gets its own.
+        kept, background = self.hatched_speech("WELL, I GUESS I DESERVE THIS TOO...", tone=True)
+        self.assertEqual((kept, background.get("sobre_arte")), (["fala"], True))
 
     def haloed_speech(self, text, mode, halo=True, lost=False, texts=None, unmarked=False, bare=None,
                       ground=170, taller=0, kana_block=None):
@@ -446,7 +448,7 @@ class PipelineHookTest(unittest.TestCase):
         speech = "WELL, I GUESS I DESERVE THIS TOO..."
         kept, background = self.haloed_speech(speech, "traduzir", ground=15, taller=4)
         self.assertEqual((kept, background.get("sobre_arte")), (["fala"], True))
-        self.assertEqual(self.haloed_speech(speech, "preservar", ground=15, taller=4)[0], [])
+        self.assertEqual(self.haloed_speech(speech, "preservar", ground=15, taller=4)[0], ["fala"])
 
     def test_haloed_speech_whose_lost_line_went_into_a_kana_block_stays_as_drawn(self):
         # Manga teste p11: "SCISSORS", the end of "ROCK, PAPER-", was merged with the drawn
@@ -459,29 +461,29 @@ class PipelineHookTest(unittest.TestCase):
         kept, _ = self.haloed_speech(speech, "traduzir", lost=True, kana_block=["じゃ", "け"])
         self.assertEqual(kept, ["fala"])
 
-    def test_haloed_speech_over_the_drawing_follows_the_readers_choice(self):
-        # Speech with a white halo over the drawing, no balloon: the margin is all art.  By
-        # default it stays as drawn; "traduzir" translates it, cleaning only the letters.
+    def test_haloed_speech_over_the_drawing_is_translated_in_both_modes(self):
+        # Speech with a white halo over the drawing, no balloon: the margin is all art.  Manga
+        # teste p15, p22: preserving the art, five such speeches stayed in English, and the owner
+        # prefers the translation with its own white halo, a smear behind the letters accepted.
         speech = "WELL, I GUESS I DESERVE THIS TOO..."
-        kept, background = self.haloed_speech(speech, "preservar")
-        self.assertEqual((kept, background["kind"]), ([], "art"))
-        kept, background = self.haloed_speech(speech, "traduzir")
-        self.assertEqual((kept, background["kind"], background.get("sobre_arte")), (["fala"], "tracos", True))
-        self.assertEqual(self.haloed_speech(speech, "qualquer")[0], [])  # unknown choice: preserve
+        for mode in ("preservar", "traduzir", "qualquer"):
+            kept, background = self.haloed_speech(speech, mode)
+            self.assertEqual((kept, background["kind"], background.get("sobre_arte")), (["fala"], "tracos", True))
         # A line of it was lost: translating the rest would invert or cut the sense, next to English.
-        self.assertEqual(self.haloed_speech(speech, "traduzir", lost=True)[0], [])
+        self.assertEqual(self.haloed_speech(speech, "preservar", lost=True)[0], [])
         # A line read as a scrap ("DP" for a whole line): its letters would go, its words with them.
         read = [t for t, _ in BackgroundTest.LINES]
-        self.assertEqual(self.haloed_speech(speech, "traduzir", texts=read)[0], ["fala"])
-        self.assertEqual(self.haloed_speech(speech, "traduzir", texts=read[:-1] + ["DP"])[0], [])
+        self.assertEqual(self.haloed_speech(speech, "preservar", texts=read)[0], ["fala"])
+        self.assertEqual(self.haloed_speech(speech, "preservar", texts=read[:-1] + ["DP"])[0], [])
 
-    def test_preserved_art_keeps_haloed_speech_even_with_some_paper_around(self):
-        # With 20% to 45% of paper around, the model still had the drawing under the letters to
-        # make up: bricks, hatching and hair came back as a grey smear.  Preserving the art, such
-        # a speech stays as drawn; "traduzir" translates it.
+    def test_haloed_speech_with_some_paper_around_gets_its_halo(self):
+        # Manga teste p13, p15: letters with a halo, half of the lines on paper and the last ones
+        # over a table or hair (44.5% of paper around).  With 20% or 42% of paper, as with none,
+        # the speech is translated, and its translation gets the white halo the original had.
         speech = "WELL, I GUESS I DESERVE THIS TOO..."
-        self.assertEqual(self.haloed_speech(speech, "preservar", bare=250)[0], [])
-        self.assertEqual(self.haloed_speech(speech, "traduzir", bare=250)[0], ["fala"])
+        for bare in (250, 230):
+            kept, background = self.haloed_speech(speech, "preservar", bare=bare)
+            self.assertEqual((kept, background.get("sobre_arte")), (["fala"], True))
 
     def test_translate_everything_cleans_a_word_the_detector_missed_in_the_halo(self):
         # "PONG PERIL..." under a marked "PING-": the halo shows the letters the mask left out.

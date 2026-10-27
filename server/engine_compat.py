@@ -780,18 +780,17 @@ def classify_regions(original_merge):
                         if speech_on_paper(image, raw, region.lines):
                             region.mangalate_background["kind"] = "tracos"
                             region.mangalate_background["fala"] = True
-                        elif (art_mode() == "traduzir"
-                              and speech_on_paper(image, raw, region.lines, paper_share=0, masked_share=0)
+                        elif (speech_on_paper(image, raw, region.lines, paper_share=0, masked_share=0)
                               and halo_cover(image, raw, region.lines) >= HALO_COVER
                               and not speech_goes_on(raw, region.lines, [q for r in regions for q in _block_lines(r)])
                               and not lines_unread(region.lines, getattr(region, "texts", None))):
-                            # Dark letters with a white halo over the drawing: translated only when
-                            # the reader asked for everything (the model draws the art back under
-                            # its letters and halo, blurred where the drawing is detailed), the
+                            # Dark letters with a white halo over the drawing, in both modes (Manga
+                            # teste p15, p22: five speeches stayed in English): the model draws the
+                            # art back under its letters and halo, blurred where the drawing is
+                            # detailed, and the translation gets a halo of its own.  Only when the
                             # cleaning takes all the ink on the lines (the halo shows the letters
-                            # the detector missed) and no line of it was lost or misread, and
-                            # listed for review.  With 20% of paper around, preserving the art,
-                            # bricks, hatching and hair came back as a grey smear.
+                            # the detector missed) and no line of it was lost or misread; listed
+                            # for review.
                             region.mangalate_background["kind"] = "tracos"
                             region.mangalate_background["fala"] = True
                             region.mangalate_background["sobre_arte"] = True

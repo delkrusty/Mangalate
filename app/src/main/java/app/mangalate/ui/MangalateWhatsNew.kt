@@ -19,6 +19,7 @@ internal object MangalateWhatsNew {
                 "Falas em balões cercados de linhas de efeito, que às vezes ficavam em inglês, agora são traduzidas.",
                 "Falas sobre o desenho que eram lidas sem a primeira ou a última linha agora são traduzidas inteiras, com uma borda branca em volta; o desenho logo atrás das letras pode ficar manchado de cinza.",
                 "Em balões com fundo pontilhado, a tradução usa o balão inteiro e sai com letra maior.",
+                "Falas com borda branca escritas sobre o desenho, fora dos balões, agora são traduzidas também no padrão, com uma borda branca em volta. O desenho logo atrás das letras pode ficar levemente manchado.",
                 "Logotipos, títulos de capítulo e créditos ficam como foram desenhados.",
                 "Duas falas lado a lado, no mesmo balão ou em dois balões colados, não se misturam mais, e legendas em colunas são lidas na ordem certa.",
                 "Balões estreitos, com uma letra por linha ou falas curtas empilhadas, são traduzidos inteiros.",
