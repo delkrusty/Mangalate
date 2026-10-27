@@ -201,6 +201,51 @@ class BackgroundTest(unittest.TestCase):
         far = ~cv2.dilate(lines.astype(np.uint8), np.ones((21, 21), np.uint8)).astype(bool)
         self.assertFalse(allowed[far].any())                      # the page around stays
 
+    def joined(self):
+        """A letter, then a word whose letters touch along their feet, with the detector mask on their tops only."""
+        image, letters = page(size=(300, 130)), page(size=(300, 130))
+        for canvas in (image, letters):
+            cv2.putText(canvas, "F", (40, 80), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 3, cv2.LINE_AA)
+            cv2.putText(canvas, "EES", (64, 80), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 3, cv2.LINE_AA)
+            cv2.line(canvas, (66, 79), (122, 79), (0, 0, 0), 3)
+        mask = text_mask(letters, (255, 255, 255))
+        mask[62:] = 0
+        return image, mask, [quad(36, 54, 130, 84)]
+
+    def test_letters_joined_into_one_piece_are_cleaned_whole(self):
+        # Manga p22: the last line of a speech over the drawing, hand lettered with its letters
+        # touching.  The detector marked only their tops; the joined letters were one piece
+        # wider than a letter, so only the top half was cleaned and the rest stayed in English.
+        image, mask, quads = self.joined()
+        allowed = quality.letters_area(image, mask, quads)
+        self.assertTrue(allowed[image.min(axis=2) < 128].all())
+
+    def test_wide_piece_of_drawing_reaching_into_the_line_stays(self):
+        # Neighbours: a piece of the drawing the mask grazes that runs out of the line box (the
+        # top of a bottle under the letters), and thin hatching inside it, are not letters.
+        image, mask, _ = self.joined()
+        quads = [quad(36, 54, 210, 84)]  # the line box runs over both
+        bottle = np.zeros(mask.shape, bool)
+        bottle[78:128, 150:200] = True
+        bottle[78:90, 160:190] = False
+        hatch = np.zeros(mask.shape, bool)
+        hatch[70, 135:200] = True
+        image[bottle | hatch] = 0
+        mask[78:80, 150:200] = 255
+        mask[66:72, 135:150] = 255
+        allowed = quality.letters_area(image, mask, quads)
+        self.assertFalse(allowed[100:, 150:200].any())
+        self.assertFalse(allowed[70, 175:200].any())  # past the rim of the mask
+
+    def test_stroke_right_after_joined_letters_stays(self):
+        # One Piece 1161 p5: a stroke of hatching right after a word of joined letters, half out
+        # of the line box, was taken as the next letter on the row and smeared.
+        image, mask, quads = self.joined()
+        cv2.line(image, (128, 66), (140, 104), (0, 0, 0), 3)
+        allowed = quality.letters_area(image, mask, quads)
+        self.assertTrue(allowed[:, :124][image[:, :124].min(axis=2) < 128].all())
+        self.assertFalse(allowed[96:106, 130:145].any())
+
     def logo(self):
         """Lettering five times taller than a speech, crossed by the lines of its ornaments."""
         image, letters = page(size=(800, 600)), page(size=(800, 600))

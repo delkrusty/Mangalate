@@ -319,11 +319,12 @@ HALO_DELTA = 12     # and is this much (0-255 grey) further from the paper, on t
 LETTER_WHOLE = 1.5  # a piece of ink up to this size (line heights) touching the mask is a letter, taken whole
 LETTER_CHAIN = 0.4  # a letter this close beside a taken one, on the same row, is taken too (in line heights)
 LETTER_STROKE = 0.6  # if its strokes are at least this share as thick as the letters' (hatching is thinner)
+LETTER_ON_LINE = 0.9  # a wider piece (letters joined by hand) is taken if this share of it is on the line boxes
 
 
 def whole_letters(image, letters, lines, paper, line_height):
-    """``letters`` completed: every letter-sized piece of ink the detector mask touches, whole, and
-    the letters right beside them on the same row.
+    """``letters`` completed: every letter-sized piece of ink the detector mask touches, whole (or
+    letters joined into one piece on the line), and the letters right beside them on the same row.
 
     The detector mask is clipped to the line boxes: a tilted line (Grand Blue 106 p16, "IN
     WINTER?") lost the tops of its letters and its question mark, and they were left as an
@@ -348,6 +349,12 @@ def whole_letters(image, letters, lines, paper, line_height):
     thick = np.zeros(count)
     np.maximum.at(thick, labels.ravel(), depth.ravel())
     stroke = float(np.median(thick[taken]))
+    # Hand-lettered letters touching each other are one piece wider than a letter, but as tall
+    # as one and on the line; a piece of the drawing runs out of the line box.
+    on_line = np.bincount(labels[lines & ink], minlength=count) >= LETTER_ON_LINE * stats[:, cv2.CC_STAT_AREA]
+    joined = (touched & ~size & on_line & (stats[:, cv2.CC_STAT_HEIGHT] <= LETTER_WHOLE * lh)
+              & (thick >= LETTER_STROKE * stroke))
+    taken |= joined
     gap = LETTER_CHAIN * lh
     grew = True
     while grew:
@@ -355,6 +362,8 @@ def whole_letters(image, letters, lines, paper, line_height):
         for k in np.flatnonzero(size & ~taken & (thick >= LETTER_STROKE * stroke)):
             kx, ky, kw, kh = stats[k, :4]
             for t in np.flatnonzero(taken):
+                if joined[t] and not on_line[k]:
+                    continue  # hatching right after the word (One Piece 1161 p5), half out of the line box
                 tx, ty, tw, th = stats[t, :4]
                 rows = min(ky + kh, ty + th) - max(ky, ty)
                 apart = max(kx - (tx + tw), tx - (kx + kw))
