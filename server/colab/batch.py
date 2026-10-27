@@ -85,6 +85,14 @@ def save_diagnostics(folder, ctx, original):
                          "ocr": str(getattr(region, "text_raw", region.text)),
                          "textos": [str(t) for t in getattr(region, "texts", None) or []],
                          "traducao": str(getattr(region, "translation", "") or "")})
+            if state == "traduzida":
+                # Font size of the translation (its capitals are about 0.7 of it) and height of
+                # the original capitals, to measure the lettering on the run.
+                try:
+                    from quality import letter_height
+                    rows[-1]["letra"] = {"tamanho": int(region.font_size), "original": letter_height(original, region.lines)}
+                except Exception as exc:
+                    print(f"Letter size skipped: {type(exc).__name__}", flush=True)
     for repair in getattr(ctx, "mangalate_line_repairs", None) or []:
         for x0, y0, x1, y1 in repair["depois"]:
             draw.rectangle((x0 - 2, y0 - 2, x1 + 2, y1 + 2), outline=(255, 140, 0), width=2)

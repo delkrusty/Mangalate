@@ -2052,6 +2052,19 @@ class DrawnSymbolTest(unittest.TestCase):
         self.assertGreater((keep & ink)[44:56, v + 12:v + 32].sum(), 10)
         self.assertEqual((keep & ink)[18:42, v + 28:v + 50].sum(), 0)
 
+    def test_letter_height_reads_the_capitals_and_not_the_line_box(self):
+        # Line boxes reach a few pixels past the letters, and by how much varies (Manga teste
+        # p13: capitals of 15 px in boxes of 21); the commas and dots do not set the height.
+        gray = np.full((80, 260), 255, np.uint8)
+        cv2.putText(gray, "WELL, I GUESS...", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, 0, 2)
+        alone = np.full((80, 60), 255, np.uint8)
+        cv2.putText(alone, "H", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, 0, 2)
+        rows = np.flatnonzero((alone < 110).any(axis=1))
+        capital = rows[-1] - rows[0] + 1
+        box = [[6, 50 - capital - 6], [250, 50 - capital - 6], [250, 57], [6, 57]]
+        self.assertLessEqual(abs(quality.letter_height(gray, [box]) - capital), 1)
+        self.assertIsNone(quality.letter_height(gray, [[[6, 66], [250, 66], [250, 78], [6, 78]]]))  # no letters
+
     def test_letters_and_punctuation_are_not_symbols(self):
         for text in ("AH...", "...TO FIND", "WE   GO", "...?"):
             gray, quad, _ = self.line(text)

@@ -275,6 +275,7 @@ def paint_halos(image, mask, regions, raw):
         # they were left as a ghost of the English.  The paint is letters and halo only.
         paint &= zone
         region.mangalate_halo = tuple(int(c) for c in np.asarray(colour).round())
+        region.mangalate_halo_area = paint  # the room of the translation (engine_compat.bubble_layout)
         page[paint] = region.mangalate_halo  # what stays if the model is not run
         left[zone] = 0
         # With the halo's soft rim: left out, its white spread into the art the model drew back.

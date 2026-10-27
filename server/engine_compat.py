@@ -794,6 +794,11 @@ def classify_regions(original_merge):
                             region.mangalate_background["kind"] = "tracos"
                             region.mangalate_background["fala"] = True
                             region.mangalate_background["sobre_arte"] = True
+                            try:  # the size of its capitals, for the lettering (the letters go with the cleaning)
+                                from quality import letter_height
+                                region.mangalate_letters = letter_height(image, region.lines)
+                            except Exception as exc:
+                                print(f"Letter height skipped: {type(exc).__name__}", flush=True)
                 except Exception as exc:  # the speech stays as drawn, as before
                     print(f"Speech on paper skipped: {type(exc).__name__}", flush=True)
             # Lettering on a white part of the drawing, crossed by its strokes: translated, and
@@ -1085,6 +1090,55 @@ def bubble_layout(rendering, text_render):
                         shaped = roomy
                 except Exception as exc:  # keep the plan of the cleaned patch
                     print(f"Toned bubble skipped: {type(exc).__name__}", flush=True)
+            area = getattr(region, "mangalate_halo_area", None)
+            if (hull is not None and getattr(region, "mangalate_halo", None) is not None
+                    and area is not None and area.shape == img.shape[:2]):
+                # Speech with a halo over the drawing: short last lines narrow the hull, and the
+                # letters shrank (Manga teste p15: 9 px for 12).  The room is where the original
+                # letters and their halo were (speed.paint_halos), closed between words and lines,
+                # and the rest of the rectangle of the lines where no stroke of the drawing is (a
+                # wall, the sky); the strokes inside it (an eyebrow, an arm) bound it, and the
+                # plan's margin keeps the letters and their halo off them.  The size aims at the original
+                # capitals (line boxes reach a few pixels past them; capped at the box, they came
+                # out at three quarters), never past them.  Without a halo of its own, black
+                # letters past the hull would land on the drawing.
+                letters = getattr(region, "mangalate_letters", None)
+                try:
+                    import cv2
+                    target = line_height(region)
+                    if letters:
+                        target = min(letters / lettering.capital_share(lettering.font_file()),
+                                     lettering.SHAPED_MAX_SCALE * target)
+                    if shaped is None or shaped["size"] < lettering.BLOCK_BELOW * target:
+                        margin = max(lettering.MIN_MARGIN, int(round(line_height(region) * lettering.SHAPED_MARGIN)))
+                        close = 2 * int(round(line_height(region) / 2)) + 1
+                        room = cv2.morphologyEx(area.astype(np.uint8), cv2.MORPH_CLOSE,
+                                                cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close, close)))
+                        # The plan keeps a margin inside its room: grown by it, the letters reach
+                        # the edge of the old halo, as the original ones did.
+                        room = cv2.dilate(room, np.ones((2 * margin + 1, 2 * margin + 1), np.uint8)) > 0
+                        x0, y0, x1, y1 = (int(round(v)) for v in boxes[i])
+                        grown = (max(0, x0 - margin), max(0, y0 - margin),
+                                 min(img.shape[1] - 1, x1 + margin), min(img.shape[0] - 1, y1 + margin))
+                        inside = np.zeros(room.shape, bool)
+                        inside[grown[1]:grown[3] + 1, grown[0]:grown[2] + 1] = True
+                        gray = cv2.cvtColor(np.ascontiguousarray(img[:, :, :3]), cv2.COLOR_RGB2GRAY)
+                        # Grown by 2 px: the room's fill closes holes of 5 px, and a thin stroke
+                        # (a line of hatching) would vanish into it.
+                        ink = cv2.dilate((gray < lettering.TONE_DARK).astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+                        room |= inside & ~ink
+                        # Only the room: past it, paper joined across a stroke the margin covered
+                        # (the edge of a sign and the ground under it, GB 106 p6).
+                        block = np.zeros_like(img)
+                        block[room] = tuple(int(c) for c in region.mangalate_halo)
+                        filled = lettering.plan_shaped(
+                            block, grown, others, text, lettering.font_file(), line_height(region),
+                            max(8, round(minimum * 0.6)), offset=font_size_offset or 0,
+                            scale=target / line_height(region))
+                        if filled and (shaped is None or filled["size"] > shaped["size"]):
+                            shaped = filled
+                except Exception as exc:  # keep the plan of the hull
+                    print(f"Block room skipped: {type(exc).__name__}", flush=True)
             if shaped is not None:
                 region.mangalate_shaped = shaped
                 region.font_size = shaped["size"]

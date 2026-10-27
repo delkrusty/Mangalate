@@ -522,6 +522,12 @@ def _has_glyph(font, ch, cache=_GLYPHS):
     return cache[key]
 
 
+def capital_share(font_path):
+    """Height of a capital of ``font_path``, as a share of its size (Comic Neue Bold: about 0.7)."""
+    x0, y0, x1, y1 = Measure._load(font_path, 100).getbbox("H")
+    return (y1 - y0) / 100
+
+
 class Measure:
     """Width of a line at one size of a font file (PIL), with its line slot."""
 
@@ -649,6 +655,7 @@ TONE_DARK = 128       # a pixel darker than this is ink (an outline, a stroke); 
 TONE_CLUTTER = 0.02   # share of ink inside the outline above which the room is a drawn panel, not a bubble
 TONE_BELOW = 0.75     # the toned room is tried when the letters came out smaller than this share of the original
 TONE_CLOSE = 9        # gap between strokes of a drawing closed to find them inside the fill, px
+BLOCK_BELOW = 0.85    # a speech with a halo over the drawing may use the room of its old halo when its letters came out below this share of the original
 
 
 def toned_page(image, box, hull):

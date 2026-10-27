@@ -1227,6 +1227,30 @@ SYMBOL_BAND = 0.25  # a letter starts and ends within this many letter heights o
 SYMBOL_JOIN = 0.3   # a stroke this close to the symbol (letter heights) and outside every line box joins it
 
 
+def letter_height(image, lines):
+    """Height of the original letters on ``lines`` (px), or None when no line holds three pieces of ink.
+
+    A line box is a few pixels taller than its capitals, and by how much varies (Manga teste
+    p13: capitals of 15 px in boxes of 21; p10: 14 in 22).  Per line, the median height of the pieces at least
+    SYMBOL_TALLEST of the second tallest (dots and commas do not set it), as line_symbols reads it.
+    The lettering aims at it for a speech with a halo over the drawing, and the diagnostics report it.
+    """
+    gray = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2GRAY) if np.asarray(image).ndim == 3 else np.asarray(image)
+    count, labels, stats, centres = cv2.connectedComponentsWithStats((gray < SYMBOL_INK).astype(np.uint8), connectivity=8)
+    heights = []
+    for quad in [] if lines is None else lines:
+        x0, y0, x1, y1 = _box(quad)
+        inside = [k for k in range(1, count) if stats[k, cv2.CC_STAT_AREA] >= 4
+                  and x0 <= centres[k][0] <= x1 and y0 <= centres[k][1] <= y1
+                  and stats[k, cv2.CC_STAT_WIDTH] < x1 - x0 + 1]
+        if len(inside) < 3:
+            continue
+        tall = sorted(stats[k, cv2.CC_STAT_HEIGHT] for k in inside)[-2]
+        heights.append(float(np.median([stats[k, cv2.CC_STAT_HEIGHT] for k in inside
+                                        if stats[k, cv2.CC_STAT_HEIGHT] >= SYMBOL_TALLEST * tall])))
+    return float(np.median(heights)) if heights else None
+
+
 def line_symbols(image, lines):
     """Pixels of a symbol drawn at the end of a line of speech, to be left out of the cleaning.
 
