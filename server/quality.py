@@ -1787,6 +1787,9 @@ EDGE_MIN = 0.25  # a strip of mask this many line heights tall, right above or b
 EDGE_WIDE = 2.0  # ...and this many line heights wide may be a line the mask holds only in part
 EDGE_GAP = 0.5   # at most this many line heights from that line
 EDGE_TALL = 1.3  # a strip taller than this many line heights is more than one line
+EDGE_TOUCH = 2   # a thinner strip may stop this many px short of the letters it lies on...
+EDGE_ROW = 3     # ...which then have to be at least this many full letters...
+EDGE_ALIGN = 0.15  # ...with their tops and bottoms within this many line heights of each other
 
 
 def edge_lines(ink, gray, boxes, height):
@@ -1822,7 +1825,7 @@ def edge_lines(ink, gray, boxes, height):
             middle = (strip[1] + strip[3]) / 2
             gap = max(strip[1] - line[3], line[1] - strip[3])
             if not (lh > 0 and (middle > line[3] or middle < line[1]) and gap <= EDGE_GAP * lh
-                    and EDGE_MIN * lh <= sh <= EDGE_TALL * lh):
+                    and 1 <= sh <= EDGE_TALL * lh):
                 continue
             if min(strip[2], line[2]) - max(strip[0], line[0]) <= 0.3 * min(sw, line[2] - line[0]):
                 continue
@@ -1834,23 +1837,31 @@ def edge_lines(ink, gray, boxes, height):
             row = (min(strip[0], lo + int(cols[0])), strip[1], max(strip[2], lo + int(cols[-1]) + 1), strip[3])
             if row[2] - row[0] < EDGE_WIDE * lh:
                 continue
-            box = _edge_glyphs(gray, known, row, lh)
+            box = _edge_glyphs(gray, known, row, lh, thin=sh < EDGE_MIN * lh)
             if box is not None and not any(_covered(box, [b]) > 0.3 for b in found):
                 found.append(box)
             break
     return found
 
 
-def _edge_glyphs(gray, known, strip, lh):
-    """The box of the dark letters the strip lies on, one line tall, or None."""
+def _edge_glyphs(gray, known, strip, lh, thin=False):
+    """The box of the dark letters the strip lies on, one line tall, or None.
+
+    A ``thin`` strip, a row or two of the mask over the tops of the letters ("FEES..." under
+    "HOSPITAL", the rest of the speech in English under its translation), may stop short of
+    them; it only counts on a row of whole letters of one height, which the hatching or the
+    drawing under a speech is not.
+    """
     sx0, sy0, sx1, sy1 = strip
     gh, gw = gray.shape
-    wx0, wx1 = max(0, sx0 - lh), min(gw, sx1 + lh)
-    wy0, wy1 = max(0, sy0 - lh), min(gh, sy1 + lh)
+    reach = 2 * lh if thin else lh  # a stroke cut by a window of one line looks like a letter
+    wx0, wx1 = max(0, sx0 - reach), min(gw, sx1 + reach)
+    wy0, wy1 = max(0, sy0 - reach), min(gh, sy1 + reach)
     dark = (gray[wy0:wy1, wx0:wx1] < INK_LEVEL) & ~known[wy0:wy1, wx0:wx1]
     count, labels, stats, _ = cv2.connectedComponentsWithStats(dark.astype(np.uint8), connectivity=8)
     on_strip = np.zeros_like(dark)
-    on_strip[sy0 - wy0:sy1 - wy0, sx0 - wx0:sx1 - wx0] = True
+    touch = EDGE_TOUCH if thin else 0
+    on_strip[max(0, sy0 - touch - wy0):sy1 + touch - wy0, sx0 - wx0:sx1 - wx0] = True
     letters = []
     for label in range(1, count):
         x, y, bw, bh = (int(v) for v in stats[label, :4])
@@ -1864,6 +1875,9 @@ def _edge_glyphs(gray, known, strip, lh):
     # A letter joined to a stroke of the art reaches past the row of the others: it is left out.
     top, bottom = np.median([b[1] for b in letters]), np.median([b[3] for b in letters])
     letters = [b for b in letters if b[1] >= top - 0.3 * lh and b[3] <= bottom + 0.3 * lh]
+    if thin and sum(1 for b in letters if b[3] - b[1] >= 0.6 * lh and abs(b[1] - top) <= EDGE_ALIGN * lh
+                    and abs(b[3] - bottom) <= EDGE_ALIGN * lh) < EDGE_ROW:
+        return None
     x0, y0 = min(b[0] for b in letters), min(b[1] for b in letters)
     x1, y1 = max(b[2] for b in letters), max(b[3] for b in letters)
     # The letters have to reach past the strip to a line's height, and cover most of its width.

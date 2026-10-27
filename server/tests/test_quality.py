@@ -940,6 +940,34 @@ class LineRepairTest(unittest.TestCase):
         repaired, _ = repair_lines(mask, boxes, gray, rebuild=True)
         self.assertEqual([box for box, source in repaired if source is None], [])
 
+    def test_last_line_under_a_thin_strip_of_mask_is_added(self):
+        # Manga teste p22: the mask held one dashed row over the tops of "FEES...", a pixel short
+        # of the letters; the line was never read, half cleaned, and its bottom stayed in English
+        # under the translation.
+        gray, mask, ink = self.lettered(["IT SEEMS LIKE", "FOR HOSPITAL", "FEES TO PAY"], step=28)
+        last = ink[2]
+        mask[last[1]:, :] = 0
+        mask[last[1] - 2, last[0]:last[2]:2] = 255  # a dashed row, 2 px over the letters
+        boxes = [(x0 - 1, y0 - 1, x1 + 1, y1 + 1) for x0, y0, x1, y1 in ink[:2]]
+        repaired, changes = repair_lines(mask, boxes, gray, rebuild=True)
+        added = [box for box, source in repaired if source is None]
+        self.assertEqual(len(added), 1, changes)
+        box = added[0]
+        self.assertTrue(box[0] <= last[0] + 2 and box[2] >= last[2] - 2 and box[1] <= last[1] and box[3] >= last[3],
+                        (box, last))
+
+    def test_thin_strip_of_mask_over_hatching_is_not_a_line(self):
+        # The same thin strip under a block, but over the hatching of the drawing: strokes cut by
+        # the window looked like a row of letters of one height (One Piece 1161 p5).
+        gray, mask, ink = self.lettered(["IT SEEMS LIKE", "FOR HOSPITAL"], step=28)
+        x0, _, x1, bottom = ink[1]
+        for x in range(x0 - 20, x1 + 20, 5):
+            cv2.line(gray, (x, bottom + 5), (x + 12, bottom + 60), 0, 2)
+        mask[bottom + 3, x0:x1:2] = 255
+        boxes = [(a - 1, b - 1, c + 1, d + 1) for a, b, c, d in ink]
+        repaired, _ = repair_lines(mask, boxes, gray, rebuild=True)
+        self.assertEqual([box for box, source in repaired if source is None], [])
+
     def test_box_missing_the_first_letter_grows_over_the_page(self):
         # Grand Blue 102 p42: the mask missed the "A" of "AMOUNT" and the OCR read "MOUN".
         gray, mask, ink = self.lettered(["THE KI", "RESTRAINER", "FUNCTIONED."])
