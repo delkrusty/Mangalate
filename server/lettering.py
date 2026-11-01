@@ -351,10 +351,15 @@ def wrap(words, widths, measure, strict=True, sentences=False, syllables=False):
 SENTENCE_END = re.compile(r"[.!?…]$")
 # After the hyphen of "bem-vindo", never in "--" nor before a pronoun ("salvá-la", "dar-lhes").
 HYPHEN_BREAK = re.compile(r"(?<=[^\W\d_]{2}-)(?=[^\W\d_]{4})(?!lhes(?![^\W\d_]))", re.I)
+# A laugh breaks at any of its hyphens ("Ah-ha-" / "ha-ha!"): its last two bits are the same.
+LAUGH = re.compile(r"\W*(?:[^\W\d_]{1,3}-){2,}[^\W\d_]{1,3}\W*")
 
 
 def hyphen_pieces(word):
     """``word`` split after its own hyphens, keeping a stutter whole: "V-você", "Nã-não"."""
+    parts = word.split("-")
+    if LAUGH.fullmatch(word) and re.sub(r"\W", "", parts[-1]).lower() == parts[-2].lower():
+        return [part + "-" for part in parts[:-1]] + [parts[-1]]
     pieces = []
     for part in HYPHEN_BREAK.split(word):
         head = re.sub(r"[\W\d_]", "", pieces[-1]).lower() if pieces else ""

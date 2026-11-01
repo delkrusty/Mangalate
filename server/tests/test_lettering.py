@@ -255,6 +255,16 @@ class ShapedLetteringTest(unittest.TestCase):
         self.assertIsNone(lettering.wrap(["V-você?!"], [measure("você?!") + 2] * 2, measure))
         self.assertIsNone(lettering.wrap(["Nã-não!"], [measure("não!") + 2] * 2, measure))
 
+    def test_a_laugh_joined_by_hyphens_may_break_at_each_one(self):
+        # Grand Blue 106 p43: "Ah-ha-ha-ha-ha-ha!" in a tall narrow balloon came out as one tiny line.
+        measure = lettering.Measure(FONT, 30)
+        narrow = [measure("Ah-ha-") + 2] * 4
+        self.assertEqual(lettering.wrap(["Ah-ha-ha-ha-ha-ha!"], narrow, measure), ["Ah-ha-", "ha-ha-", "ha-ha!"])
+        self.assertEqual(lettering.wrap(["He-he-he..."], [measure("He-he-") + 2] * 2, measure), ["He-he-", "he..."])
+        self.assertEqual(lettering.wrap(["Ah-ha-ha-ha-ha-ha!"], [500], measure), ["Ah-ha-ha-ha-ha-ha!"])
+        # A stutter that ends in a different word stays whole.
+        self.assertIsNone(lettering.wrap(["Nã-nã-não!"], [measure("nã-não!") + 2] * 3, measure))
+
     def test_syllable_breaks_follow_portuguese_rules(self):
         # Points where a long word may be cut, from the pt-BR patterns: never fewer than HYPHEN_SIDE
         # letters on a side, never in a short word or a name.
