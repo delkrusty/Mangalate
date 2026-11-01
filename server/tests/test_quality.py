@@ -1737,6 +1737,15 @@ class OuroThreeTest(unittest.TestCase):
         for word in ("BOB", "NO!", "HELLO", "TOKITA", "I JUST CANT GET IT!", "I...", "A", "O!", "H?"):
             self.assertFalse(quality.english_sound_effect(word), word)
 
+    def test_sound_words_that_are_english_words_stay_drawn(self):
+        # Grand Blue 106 p43: "CLICK" alone in a balloon, read "K CLICK" (the column's last letter
+        # twice), was translated "CLIC" over a smear of the old letters.  A sound is an action,
+        # drawn as it is; the same word in a sentence is speech.
+        for sfx in ("CLICK", "K CLICK", "CLICK!", "KNOCK KNOCK", "BANG!!", "CLICK CLICK", "TICK TOCK..."):
+            self.assertTrue(quality.english_sound_effect(sfx), sfx)
+        for word in ("CLICK IT!", "I HEARD A BANG", "KNOCK IT OFF!", "A CLICK?", "SNAPPED", "BOOM?", "CRASH?!", "KNOCK, KNOCK.", "POP."):
+            self.assertFalse(quality.english_sound_effect(word), word)
+
     def test_stretched_words_are_speech_and_cries_stay_drawn(self):
         # One Piece 1161 p16: a shouted "YEAAAH" stayed in English as a drawn effect.
         for word in ("YEAAAH!!", "NOOOO!", "WHAAAT?!", "GOOOOD"):

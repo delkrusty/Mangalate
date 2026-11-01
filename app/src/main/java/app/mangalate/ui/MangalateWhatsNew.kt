@@ -27,6 +27,7 @@ internal object MangalateWhatsNew {
                 "Desenhos dentro do balão (veia de raiva, coração, um rosto encostado no texto) e textos miúdos do cenário não são mais apagados nem confundidos com fala.",
                 "Pontuação numa linha própria (\"?!\", \"...\") e linhas que ficavam de fora agora entram na fala traduzida.",
                 "Gritos esticados como \"NOOOO\" e \"YEAAAH\" são traduzidos; gritos que se leem igual em português, como \"AAAAH\", ficam como desenhados.",
+                "Sons como \"CLICK\" e \"BANG!\" sozinhos num balão também ficam como desenhados, sem tradução.",
                 "Falas curtas que a IA devolvia em inglês, como \"AH..\", risadas e sons, agora aparecem no balão.",
                 "Português mais cuidadoso: a IA tenta de novo quando escreve em espanhol, erra o gênero, repete palavra ou erra o formato, e nomes de lugares ficam iguais no capítulo todo.",
                 "Sinais e símbolos como \"⁈\", \"♡\" e \"★\" não aparecem mais como quadradinho, e marcas como \"<I>\" que a IA escrevia somem do balão.",

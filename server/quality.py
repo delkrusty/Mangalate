@@ -3107,6 +3107,12 @@ HONORIFICS = {"san", "kun", "chan", "sama", "senpai", "sensei", "dono", "nim", "
 SFX_SHAPE = re.compile(r"(.)\1\1|(?:OOSH|OOM|OOF|ASH|USH|ANG|ONK|ACK|UNK|RRK|SSH|HH|ZZ|WHAM|THUD|THUMP|SPLA\w*|KR\w+)$")
 # Cries a Brazilian reader reads the same as they are drawn: stretched out ("AAAAH") they stay drawn.
 SAME_CRY = {"ah", "oh", "uh", "eh", "ha", "hah", "ugh"}
+# Sounds that are English words too: alone in a block (or repeated, "KNOCK KNOCK") they are an
+# action drawn on the page, not speech; in a sentence ("CLICK IT!") they are words.
+SOUND_WORDS = {"click", "clack", "clank", "clang", "clink", "bang", "boom", "crash", "crack", "creak", "snap",
+               "slam", "thunk", "tap", "knock", "beep", "buzz", "pop", "whoosh", "swoosh", "swish", "splash",
+               "splat", "drip", "gulp", "sniff", "smack", "thwack", "whack", "zap", "ding", "dong", "rumble",
+               "rattle", "crunch", "munch", "sizzle", "tick", "tock", "flick", "flap", "clap", "slurp", "squeak"}
 
 
 def english_sound_effect(text):
@@ -3133,6 +3139,13 @@ def english_sound_effect(text):
     # p19, was written over as "É.") is a piece of a drawn sound.
     if len(words) == 1 and len(words[0]) == 1 and words[0].upper() not in "IAO" \
             and not re.search(r"[?!]", text):
+        return True
+    # A letter read twice at the end of a column ("K CLICK") is no word of its own.  A question,
+    # a comma or a full stop ("BOOM?", "KNOCK, KNOCK.") is someone saying the word.
+    whole = [w for w in words if len(w) > 1 or w.upper() in "IAO" or not any(w.upper() in o.upper() for o in words if len(o) > 1)]
+    if whole and not re.search(r"[?,]|(?<!\.)\.(?!\.)", text) \
+            and all(w.lower() in SOUND_WORDS and w == w.upper() for w in whole) \
+            and len(set(w.lower() for w in whole)) <= 2:
         return True
     if len(words) != 1 or len(words[0]) < 4 or words[0] != words[0].upper():
         return False
