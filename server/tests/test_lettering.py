@@ -53,6 +53,25 @@ class BubbleLayoutTest(unittest.TestCase):
         cv2.ellipse(mask, (300, 300), (110, 190), 0, 0, 360, 255, -1)
         self.assertTrue(mask[y0:y1, x0:x1].all())
 
+    def test_the_biggest_size_that_fits_is_found_past_a_size_that_does_not(self):
+        # Grand Blue 106 p27: the engine's wrap runs a line 1 or 2 px past the width at some
+        # sizes (fits at 19 and 30-33, not at 20 or 27); the search stopped at 19, and the
+        # speech came out at 70% of the original.  The neighbour: a text that fits nowhere
+        # above a size still gets that size.
+        box = (0, 0, 200, 260)
+        plain = char_layout(self.TEXT)
+        def layout(size, width, height):
+            lines, widths = plain(size, width, height)
+            if 20 <= size <= 27:
+                widths = [width + 2] + widths[1:]
+            return lines, widths
+        self.assertEqual(lettering.best_layout(self.TEXT, [box], layout, 33, 8)[0],
+                         lettering.best_layout(self.TEXT, [box], plain, 33, 8)[0])
+        def tight(size, width, height):
+            lines, widths = plain(size, width, height)
+            return lines, (widths if size <= 15 else [width + 2] + widths[1:])
+        self.assertEqual(lettering.best_layout(self.TEXT, [box], tight, 33, 8)[0], 15)
+
     def test_short_text_is_capped_near_the_original_size(self):
         image = page_with_bubble()
         plan = lettering.plan(image, (280, 285, 320, 315), [], "Ah!", char_layout("Ah!"), 24, 10)

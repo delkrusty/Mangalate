@@ -207,17 +207,14 @@ def best_layout(text, rects, layout, cap, floor):
     def any_fit(size):
         return next((rect for rect in ordered if fits(size, rect)), None)
 
-    lo, hi = int(floor), int(cap)
-    if lo > hi or any_fit(lo) is None:
-        return None
-    # Binary search for the biggest size that still fits somewhere.
-    while lo < hi:
-        mid = (lo + hi + 1) // 2
-        if any_fit(mid) is not None:
-            lo = mid
-        else:
-            hi = mid - 1
-    return lo, any_fit(lo)
+    # From the top down: the engine's wrap runs a line a pixel or two past the width at some
+    # sizes and not at bigger ones (Grand Blue 106 p27: fits at 19 and 30-33, not at 20 or 27),
+    # so a binary search could stop far below the biggest size that fits.
+    for size in range(int(cap), int(floor) - 1, -1):
+        rect = any_fit(size)
+        if rect is not None:
+            return size, rect
+    return None
 
 
 def plan(image, region_box, others, text, layout, original_size, minimum, offset=0):
