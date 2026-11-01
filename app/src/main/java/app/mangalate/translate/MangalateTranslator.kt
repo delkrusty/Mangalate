@@ -123,7 +123,12 @@ object MangalateTranslator {
         engine = TranslatorEngine.fromId(p.getString("engine", null)),
         quality = QualityProfile.fromName(p.getString("quality", null)),
         typeset = TypesetMode.fromName(p.getString("typeset", null)),
-        ignoreOutsideBubbles = p.getBoolean("ignore_outside_bubbles", false),
+        // A opção antiga "Só traduzir texto dentro de balões", se ligada, vira "Preservar a arte".
+        preserveArtText = when {
+            p.contains("preserve_art_text") -> p.getBoolean("preserve_art_text", false)
+            p.getBoolean("ignore_outside_bubbles", false) -> true
+            else -> null
+        },
         uppercase = p.getBoolean("uppercase", false),
         fontSizeOffset = p.getInt("font_size_offset", 0),
         maskDilation = p.getInt("mask_dilation", 0),
@@ -148,7 +153,10 @@ object MangalateTranslator {
             ?.putString("engine", new.engine.id)
             ?.putString("quality", new.quality.name)
             ?.putString("typeset", new.typeset.name)
-            ?.putBoolean("ignore_outside_bubbles", new.ignoreOutsideBubbles)
+            ?.also { editor ->
+                new.preserveArtText?.let { editor.putBoolean("preserve_art_text", it) }
+                    ?: editor.remove("preserve_art_text")
+            }
             ?.putBoolean("uppercase", new.uppercase)
             ?.putInt("font_size_offset", new.fontSizeOffset)
             ?.putInt("mask_dilation", new.maskDilation)

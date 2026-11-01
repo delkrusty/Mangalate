@@ -83,7 +83,16 @@ def save_diagnostics(folder, ctx, original):
                          "linhas": [[[int(c) for c in point] for point in quad] for quad in region.lines],
                          "fundo": getattr(region, "mangalate_background", None),
                          "ocr": str(getattr(region, "text_raw", region.text)),
+                         "textos": [str(t) for t in getattr(region, "texts", None) or []],
                          "traducao": str(getattr(region, "translation", "") or "")})
+            if state == "traduzida":
+                # Font size of the translation (its capitals are about 0.7 of it) and height of
+                # the original capitals, to measure the lettering on the run.
+                try:
+                    from quality import letter_height
+                    rows[-1]["letra"] = {"tamanho": int(region.font_size), "original": letter_height(original, region.lines)}
+                except Exception as exc:
+                    print(f"Letter size skipped: {type(exc).__name__}", flush=True)
     for repair in getattr(ctx, "mangalate_line_repairs", None) or []:
         for x0, y0, x1, y1 in repair["depois"]:
             draw.rectangle((x0 - 2, y0 - 2, x1 + 2, y1 + 2), outline=(255, 140, 0), width=2)
@@ -144,7 +153,7 @@ async def run(args):
         os.environ["MANGALATE_LEGACY_QUALITY"] = "true"
     if args.box_layout:
         os.environ["MANGALATE_BUBBLE_LAYOUT"] = "false"
-    from engine_compat import apply_compatibility, set_page_context, set_page_rows, take_learned_terms
+    from engine_compat import apply_compatibility, set_art_mode, set_page_context, set_page_rows, take_learned_terms
     apply_compatibility()
     from manga_translator import MangaTranslator, Config
     output = args.output.resolve()
@@ -177,7 +186,7 @@ async def run(args):
                                   "verbose": False, "kernel_size": int(config.get("kernel_size", 3))})
     report, consecutive_failures = [], 0
     from seams import SeamCache, Strip, finish
-    seam_cache, salt = SeamCache(), json.dumps(config, sort_keys=True)
+    seam_cache, salt = SeamCache(), json.dumps(config, sort_keys=True) + f"|{args.art_text}"
 
     def neighbour(position):
         if args.no_seams or not 1 <= position <= len(pages):
@@ -199,6 +208,7 @@ async def run(args):
             started = time.monotonic()
             strip = Strip(original, neighbour(index - 1), neighbour(index + 1))
             set_page_rows(strip.top, strip.bottom)
+            set_art_mode(args.art_text)
             ctx = await translate_with_patience(translator, strip.image, Config(**config))
             result = finish(strip, ctx.result, getattr(ctx, "text_regions", None) if strip.stitched else None,
                             seam_cache, salt)
@@ -221,6 +231,11 @@ async def run(args):
             rescued = getattr(ctx, "mangalate_ocr_rescued", None)
             if rescued:
                 entry["ocr_rescued"] = len(rescued)
+            # Speech over the drawing translated by --art-text traduzir: worth a look.
+            over_art = sum(bool((getattr(region, "mangalate_background", None) or {}).get("sobre_arte"))
+                           for region in getattr(ctx, "text_regions", None) or [])
+            if over_art:
+                entry["speech_over_art"] = over_art
             if args.diagnostics:
                 # Diagnostic images use the strip, whose coordinates match the regions.
                 rows = save_diagnostics(output / "diagnostico" / f"{index:04d}", ctx, strip.image)
@@ -303,6 +318,8 @@ if __name__ == "__main__":
                         help="Salva máscaras, regiões, OCR e tradução de cada página em diagnostico/")
     parser.add_argument("--speed", choices=("quality", "fast"),
                         help="quality: limpeza mais fina; fast: mais rápido em CPU (padrão: o do servidor)")
+    parser.add_argument("--art-text", choices=("preservar", "traduzir"), default="preservar",
+                        help="Fala escrita sobre o desenho: preservar (fica no original) ou traduzir (experimental: o fundo sob as letras é refeito pelo modelo e pode sair borrado)")
     parser.add_argument("--no-seams", action="store_true",
                         help="Traduz cada página sozinha, sem emendar balões cortados entre páginas")
     parser.add_argument("--box-layout", action="store_true",

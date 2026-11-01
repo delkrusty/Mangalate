@@ -164,6 +164,18 @@ import contextvars
 _PAGE_CONTEXT = contextvars.ContextVar("mangalate_page_context", default=None)
 _LEARNED_TERMS = contextvars.ContextVar("mangalate_learned_terms", default=None)
 _PAGE_ROWS = contextvars.ContextVar("mangalate_page_rows", default=None)
+# The reader's choice for speech written over the drawing: "preservar" leaves it as drawn,
+# "traduzir" translates it too, cleaning only its letters (set per page like the rows).
+_ART_MODE = contextvars.ContextVar("mangalate_art_mode", default="preservar")
+ART_MODES = ("preservar", "traduzir")
+
+
+def set_art_mode(mode):
+    _ART_MODE.set(mode if mode in ART_MODES else "preservar")
+
+
+def art_mode():
+    return _ART_MODE.get()
 
 
 def page_context():
@@ -684,6 +696,19 @@ def end_punctuation(ctx, kept):
         print(f"Punctuation join skipped: {type(exc).__name__}", flush=True)
 
 
+def _block_lines(region):
+    """Lines of a block whose ink speech_goes_on takes as another block's.
+
+    A line of English the merge put into a block of drawn kana ("SCISSORS" over the kana
+    of the same cry) stays as drawn with it: its ink is still the rest of the speech above
+    (Manga teste p11: "Pedra, papel-" came out over a half-cleaned "SCISSORS").
+    """
+    texts = list(getattr(region, "texts", None) or [])
+    if not is_sound_effect(getattr(region, "text", "")) or len(texts) != len(region.lines):
+        return list(region.lines)
+    return [line for line, text in zip(region.lines, texts) if is_sound_effect(str(text))]
+
+
 def classify_regions(original_merge):
     """Decide once, before translation, which blocks are cleaned and translated.
 
@@ -749,12 +774,31 @@ def classify_regions(original_merge):
             # "WELL, CONSIDERING..."), is translated too: only its letters are cleaned.
             if region.mangalate_background["kind"] == "art":
                 try:
-                    from quality import reads_as_speech, speech_on_paper
+                    from quality import HALO_COVER, halo_cover, lines_unread, reads_as_speech, speech_goes_on, speech_on_paper
                     ending = " ".join(str(line.text) for owner, line in endings if owner is region)
-                    if (reads_as_speech(f"{text} {ending}".strip(), len(region.lines) > 1)
-                            and speech_on_paper(image, raw, region.lines)):
-                        region.mangalate_background["kind"] = "tracos"
-                        region.mangalate_background["fala"] = True
+                    if reads_as_speech(f"{text} {ending}".strip(), len(region.lines) > 1):
+                        if speech_on_paper(image, raw, region.lines):
+                            region.mangalate_background["kind"] = "tracos"
+                            region.mangalate_background["fala"] = True
+                        elif (speech_on_paper(image, raw, region.lines, paper_share=0, masked_share=0)
+                              and halo_cover(image, raw, region.lines) >= HALO_COVER
+                              and not speech_goes_on(raw, region.lines, [q for r in regions for q in _block_lines(r)])
+                              and not lines_unread(region.lines, getattr(region, "texts", None))):
+                            # Dark letters with a white halo over the drawing, in both modes (Manga
+                            # teste p15, p22: five speeches stayed in English): the model draws the
+                            # art back under its letters and halo, blurred where the drawing is
+                            # detailed, and the translation gets a halo of its own.  Only when the
+                            # cleaning takes all the ink on the lines (the halo shows the letters
+                            # the detector missed) and no line of it was lost or misread; listed
+                            # for review.
+                            region.mangalate_background["kind"] = "tracos"
+                            region.mangalate_background["fala"] = True
+                            region.mangalate_background["sobre_arte"] = True
+                            try:  # the size of its capitals, for the lettering (the letters go with the cleaning)
+                                from quality import letter_height
+                                region.mangalate_letters = letter_height(image, region.lines)
+                            except Exception as exc:
+                                print(f"Letter height skipped: {type(exc).__name__}", flush=True)
                 except Exception as exc:  # the speech stays as drawn, as before
                     print(f"Speech on paper skipped: {type(exc).__name__}", flush=True)
             # Lettering on a white part of the drawing, crossed by its strokes: translated, and
@@ -835,7 +879,11 @@ def repair_textlines(original_detect):
             for box in boxes:
                 seen = seen | bubble_glyphs(np.asarray(image), box, box[3] - box[1], near=NEAR_LINES)
         gray = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2GRAY) if image is not None else None
-        repaired, changes = repair_lines(seen.astype(np.uint8) * 255, boxes, gray)
+        # Lines rebuilt to read a speech over the drawing (an edge line, a box cut at a valley) in
+        # both modes: the owner chose to translate such a speech even preserving the art, where the
+        # drawing behind it may come out smeared (Manga teste p4 "IF I WIN... IN DEBT.").
+        rebuild = True
+        repaired, changes = repair_lines(seen.astype(np.uint8) * 255, boxes, gray, rebuild)
         # A box the detector called vertical but about as tall as wide may hold short lines of a
         # narrow bubble ("CON- / DOMS / ?!", Grand Blue 106 p22).  It is tried on its own: when it
         # splits into lines, they replace it; otherwise it stays as it was and changes nothing around
@@ -847,7 +895,7 @@ def repair_textlines(original_detect):
                 continue
             box = _box(line.pts)
             try:
-                trial, trial_changes = repair_lines(seen.astype(np.uint8) * 255, boxes + [box], gray)
+                trial, trial_changes = repair_lines(seen.astype(np.uint8) * 255, boxes + [box], gray, rebuild)
             except Exception as exc:  # the vertical box stays as it was
                 print(f"Square box check skipped: {type(exc).__name__}", flush=True)
                 continue
@@ -937,7 +985,7 @@ def repair_textlines(original_detect):
         split = sum(1 for kind, _, _ in changes if kind == "split")
         scan = sum(1 for kind, _, _ in changes if kind == "bubble")
         column = sum(1 for kind, _, _ in changes if kind == "column")
-        fit = sum(1 for kind, _, _ in changes if kind in ("fit", "refit"))
+        fit = sum(1 for kind, before, _ in changes if kind in ("fit", "refit", "valley") or kind == "edge" and before)
         same = sum(1 for kind, _, _ in changes if kind == "same")
         print(f"Line repair: split={split} added={len(changes) - split - scan - column - fit - same} scanned={scan} "
               f"column_cuts={column} fitted={fit} same_line={same}", flush=True)
@@ -1008,6 +1056,7 @@ def bubble_layout(rendering, text_render):
                 return text_render.calc_horizontal(size, text, width, height, lang, False)
             others = boxes[:i] + boxes[i + 1:]
             page = img
+            hull = None
             if (getattr(region, "mangalate_background", None) or {}).get("kind") == "tracos":
                 # Strokes of the drawing still cross where the letters were: plan as if the
                 # block were paper (quality.paper_under), so the text keeps its room.
@@ -1028,6 +1077,68 @@ def bubble_layout(rendering, text_render):
             except Exception as exc:  # never lose a page over the nicer layout
                 print(f"Shaped layout skipped: {type(exc).__name__}", flush=True)
                 shaped = None
+            if hull is not None and (shaped is None or shaped["size"] < lettering.TONE_BELOW * line_height(region)):
+                # Letters cleaned one by one in a bubble of screentone: the room is the bubble the
+                # ink closes, the letters no bigger than the original plus the reader's offset
+                # (lettering.toned_page).
+                try:
+                    toned = lettering.toned_page(img, boxes[i], hull)
+                    roomy = toned is not None and lettering.plan_shaped(
+                        toned, boxes[i], others, text, lettering.font_file(), line_height(region),
+                        max(8, round(minimum * 0.6)), offset=font_size_offset or 0, scale=1.0)
+                    if roomy and (shaped is None or roomy["size"] > shaped["size"]):
+                        shaped = roomy
+                except Exception as exc:  # keep the plan of the cleaned patch
+                    print(f"Toned bubble skipped: {type(exc).__name__}", flush=True)
+            area = getattr(region, "mangalate_halo_area", None)
+            if (hull is not None and getattr(region, "mangalate_halo", None) is not None
+                    and area is not None and area.shape == img.shape[:2]):
+                # Speech with a halo over the drawing: short last lines narrow the hull, and the
+                # letters shrank (Manga teste p15: 9 px for 12).  The room is where the original
+                # letters and their halo were (speed.paint_halos), closed between words and lines,
+                # and the rest of the rectangle of the lines where no stroke of the drawing is (a
+                # wall, the sky); the strokes inside it (an eyebrow, an arm) bound it, and the
+                # plan's margin keeps the letters and their halo off them.  The size aims at the original
+                # capitals (line boxes reach a few pixels past them; capped at the box, they came
+                # out at three quarters), never past them.  Without a halo of its own, black
+                # letters past the hull would land on the drawing.
+                letters = getattr(region, "mangalate_letters", None)
+                try:
+                    import cv2
+                    target = line_height(region)
+                    if letters:
+                        target = min(letters / lettering.capital_share(lettering.font_file()),
+                                     lettering.SHAPED_MAX_SCALE * target)
+                    if shaped is None or shaped["size"] < lettering.BLOCK_BELOW * target:
+                        margin = max(lettering.MIN_MARGIN, int(round(line_height(region) * lettering.SHAPED_MARGIN)))
+                        close = 2 * int(round(line_height(region) / 2)) + 1
+                        room = cv2.morphologyEx(area.astype(np.uint8), cv2.MORPH_CLOSE,
+                                                cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close, close)))
+                        # The plan keeps a margin inside its room: grown by it, the letters reach
+                        # the edge of the old halo, as the original ones did.
+                        room = cv2.dilate(room, np.ones((2 * margin + 1, 2 * margin + 1), np.uint8)) > 0
+                        x0, y0, x1, y1 = (int(round(v)) for v in boxes[i])
+                        grown = (max(0, x0 - margin), max(0, y0 - margin),
+                                 min(img.shape[1] - 1, x1 + margin), min(img.shape[0] - 1, y1 + margin))
+                        inside = np.zeros(room.shape, bool)
+                        inside[grown[1]:grown[3] + 1, grown[0]:grown[2] + 1] = True
+                        gray = cv2.cvtColor(np.ascontiguousarray(img[:, :, :3]), cv2.COLOR_RGB2GRAY)
+                        # Grown by 2 px: the room's fill closes holes of 5 px, and a thin stroke
+                        # (a line of hatching) would vanish into it.
+                        ink = cv2.dilate((gray < lettering.TONE_DARK).astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+                        room |= inside & ~ink
+                        # Only the room: past it, paper joined across a stroke the margin covered
+                        # (the edge of a sign and the ground under it, GB 106 p6).
+                        block = np.zeros_like(img)
+                        block[room] = tuple(int(c) for c in region.mangalate_halo)
+                        filled = lettering.plan_shaped(
+                            block, grown, others, text, lettering.font_file(), line_height(region),
+                            max(8, round(minimum * 0.6)), offset=font_size_offset or 0,
+                            scale=target / line_height(region))
+                        if filled and (shaped is None or filled["size"] > shaped["size"]):
+                            shaped = filled
+                except Exception as exc:  # keep the plan of the hull
+                    print(f"Block room skipped: {type(exc).__name__}", flush=True)
             if shaped is not None:
                 region.mangalate_shaped = shaped
                 region.font_size = shaped["size"]
@@ -1053,6 +1164,20 @@ def bubble_layout(rendering, text_render):
         return points
 
     def render(img, region, dst_points, hyphenate, line_spacing, disable_font_border):
+        halo = getattr(region, "mangalate_halo", None)
+        if halo is not None:
+            # Speech over the drawing: the art was drawn back under the old letters
+            # (speed.paint_halos), and the translation gets a halo of its own, as the original had.
+            try:
+                from quality import halo_cloud
+                probe = draw(img.copy(), region, dst_points, hyphenate, line_spacing, disable_font_border)
+                letters = np.abs(np.asarray(probe).astype(np.int16) - img.astype(np.int16)).max(axis=2) > 0
+                img[halo_cloud(letters, region.font_size)] = halo
+            except Exception as exc:  # the text is still drawn, without its halo
+                print(f"Halo skipped: {type(exc).__name__}", flush=True)
+        return draw(img, region, dst_points, hyphenate, line_spacing, disable_font_border)
+
+    def draw(img, region, dst_points, hyphenate, line_spacing, disable_font_border):
         shaped = getattr(region, "mangalate_shaped", None)
         if shaped is not None:
             fg, bg = rendering.fg_bg_compare(*region.get_font_colors())
@@ -1118,6 +1243,39 @@ def keep_clean_copy(original_render):
 
 
 RESCUE_PROB = 0.02
+HALO_PROB = 0.2  # a haloed line dropped on the page is kept read on white this surely (the OCR's own bar)
+
+
+async def read_haloed(self, config, ctx, lines):
+    """{id(line): the line read on white} for the lines written over the drawing with a light halo.
+
+    Manga teste p11: the OCR read the streaks of the drawing around the halo as strokes, and the
+    speech was translated with the wrong sense.  Those lines are read again on a copy of the page
+    where the drawing around their letters is white (quality.halo_reading); the caller keeps the
+    surer of the two readings of each line.
+    """
+    image = getattr(ctx, "img_rgb", None)
+    if image is None:
+        return {}
+    import cv2
+    import numpy as np
+    from quality import _box, halo_reading, haloed_lines
+    horizontal = [line for line in lines if getattr(line, "direction", "h") == "h"]
+    boxes = [_box(line.pts) for line in horizontal]
+    gray = cv2.cvtColor(np.ascontiguousarray(np.asarray(image)[:, :, :3]), cv2.COLOR_RGB2GRAY)
+    picked = [horizontal[i] for i in haloed_lines(gray, boxes)]
+    if not picked:
+        return {}
+    from manga_translator.ocr import dispatch as dispatch_ocr
+    from manga_translator.utils import Quadrilateral
+    page = halo_reading(np.asarray(image), [_box(line.pts) for line in picked])
+    # Copies: the OCR writes its reading on the lines it is given.
+    copies = [Quadrilateral(np.asarray(line.pts).copy(), "", 0.0) for line in picked]
+    owner = {id(copy): line for copy, line in zip(copies, picked)}
+    retry = config.ocr.model_copy(deep=True) if hasattr(config.ocr, "model_copy") else config.ocr
+    retry.prob = RESCUE_PROB
+    read = await dispatch_ocr(config.ocr.ocr, page, copies, retry, self.device, self.verbose)
+    return {id(owner[id(copy)]): copy for copy in read if id(copy) in owner}
 
 
 def rescue_ocr(original_ocr):
@@ -1131,7 +1289,30 @@ def rescue_ocr(original_ocr):
     async def ocr(self, config, ctx):
         before = list(ctx.textlines or [])
         ctx.mangalate_drawn = []
+        try:
+            white = await read_haloed(self, config, ctx, before)
+        except Exception as exc:  # the page reading stays as it is
+            print(f"Halo reading skipped: {type(exc).__name__}", flush=True)
+            white = {}
         result = await original_ocr(self, config, ctx)
+        if white:
+            # The surer reading of each haloed line; one the OCR dropped on the page is kept when
+            # read on white as surely as the OCR keeps a line.
+            kept = {id(line) for line in result}
+            better = 0
+            for line in before:
+                read = white.get(id(line))
+                bar = float(getattr(line, "prob", 0) or 0) if id(line) in kept else HALO_PROB
+                if read is None or read.prob <= bar:
+                    continue
+                line.text, line.prob = read.text, read.prob
+                if id(line) not in kept:  # its colours too: the page reading gave none
+                    for name in ("fg_r", "fg_g", "fg_b", "bg_r", "bg_g", "bg_b"):
+                        if hasattr(read, name):
+                            setattr(line, name, getattr(read, name))
+                    result = list(result) + [line]
+                better += 1
+            print(f"Halo reading: {better} of {len(white)} haloed lines read better on white", flush=True)
         kept = {id(line) for line in result}
         lost = [line for line in before if id(line) not in kept and getattr(line, "direction", "h") == "h"]
         from quality import _box
@@ -1149,21 +1330,9 @@ def rescue_ocr(original_ocr):
         # A dropped box that also covers a kept line beside it is too tall to look like a line:
         # it is read again without those rows (One Piece 1161 p8, "HIM?!").
         trimmed = [trim_lost(_box(l.pts), kept_boxes) for l in lost]
-        candidates = []
-        for i in near_lines(trimmed, kept_boxes):
-            line = lost[i]
-            if trimmed[i] != _box(line.pts):
-                from manga_translator.utils import Quadrilateral
-                x0, y0, x1, y1 = trimmed[i]
-                line = Quadrilateral(np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=np.int64), "",
-                                     getattr(line, "prob", 0.0))
-            candidates.append(line)
-        if not candidates:
-            return result
         from manga_translator.ocr import dispatch as dispatch_ocr
         retry = config.ocr.model_copy(deep=True) if hasattr(config.ocr, "model_copy") else config.ocr
         retry.prob = RESCUE_PROB
-        read = await dispatch_ocr(config.ocr.ocr, ctx.img_rgb, candidates, retry, self.device, self.verbose)
         # A drawing the detector took for a line (an anger vein, One Piece 1161 p16) comes back
         # as one consonant repeated, "JJJJ": real speech has two different letters or a vowel.
         # A drawn-out vowel ("AAA!!!", the end of a cry split in two lines) is still speech.
@@ -1172,9 +1341,31 @@ def rescue_ocr(original_ocr):
         def drawing(line):
             found = set(letters(line))
             return len(found) == 1 and not found & set("AEIOUY")
-        rescued = [line for line in read if len(letters(line)) >= 2 and not drawing(line)]
-        # Kept out of the cleaning mask by refine_mask_consistently.
-        ctx.mangalate_drawn = [list(_box(l.pts)) for l in read if len(letters(l)) >= 2 and drawing(l)]
+        rescued, ctx.mangalate_drawn, tried = [], [], set()
+        # A line beside a line read again is read again too: in a narrow condensed font the last
+        # two lines of a caption were dropped, and the last one stayed in English (webtoon "WORLD.").
+        while True:
+            beside = kept_boxes + [_box(l.pts) for l in rescued]
+            candidates = []
+            for i in near_lines(trimmed, beside):
+                if i in tried:
+                    continue
+                tried.add(i)
+                line = lost[i]
+                if trimmed[i] != _box(line.pts):
+                    from manga_translator.utils import Quadrilateral
+                    x0, y0, x1, y1 = trimmed[i]
+                    line = Quadrilateral(np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=np.int64), "",
+                                         getattr(line, "prob", 0.0))
+                candidates.append(line)
+            if not candidates:
+                break
+            read = await dispatch_ocr(config.ocr.ocr, ctx.img_rgb, candidates, retry, self.device, self.verbose)
+            rescued += [line for line in read if len(letters(line)) >= 2 and not drawing(line)]
+            # Kept out of the cleaning mask by refine_mask_consistently.
+            ctx.mangalate_drawn += [list(_box(l.pts)) for l in read if len(letters(l)) >= 2 and drawing(l)]
+        if not tried:
+            return result
         render = getattr(config, "render", None)
         for line in rescued:
             if getattr(render, "font_color_fg", None):
@@ -1253,7 +1444,7 @@ async def refine_mask_consistently(self, config, ctx):
             print(f"Kept lines skipped: {type(exc).__name__}", flush=True)
     # Outlined lettering over the art, or lettering crossed by strokes of the drawing: the
     # cleaning stays on the letters (and their outline).
-    from quality import letters_area, outlined_area
+    from quality import letters_area, other_boxes, outlined_area, outlined_on_lines
     for region in ctx.text_regions or []:
         kind = (getattr(region, "mangalate_background", None) or {}).get("kind")
         if kind not in ("contorno", "tracos"):
@@ -1261,8 +1452,10 @@ async def refine_mask_consistently(self, config, ctx):
         x0, y0, x1, y1 = (int(v) for v in region.xyxy)
         pad = int(max(8, region.font_size))
         x0, y0, x1, y1 = max(0, x0 - pad), max(0, y0 - pad), min(w, x1 + pad), min(h, y1 + pad)
+        own = None
         if kind == "contorno":
             allowed = outlined_area(ctx.img_rgb, region.lines)
+            own = outlined_on_lines(ctx.img_rgb, region.lines)
         else:
             try:
                 raw = ctx.mask_raw
@@ -1272,12 +1465,14 @@ async def refine_mask_consistently(self, config, ctx):
             except Exception as exc:  # cleaned like a bubble, as before: never lose the speech
                 print(f"Letters-only cleaning skipped: {type(exc).__name__}", flush=True)
                 continue
-        for other in ctx.text_regions:  # the cleaning of a bubble next to it stays
-            if other is not region:
-                ox0, oy0, ox1, oy1 = (int(v) for v in other.xyxy)
-                allowed[max(0, oy0):oy1, max(0, ox0):ox1] = True
+        allowed = allowed | other_boxes(ctx.img_rgb, ctx.text_regions, region)  # the cleaning of a bubble next to it stays
         mask = mask.copy()
         mask[y0:y1, x0:x1][~allowed[y0:y1, x0:x1]] = 0
+        if own is not None:  # letters the detector reached only in part (Grand Blue 106 p27 "...THEY") are cleaned whole
+            for kept in preserved or []:
+                kx0, ky0, kx1, ky1 = (int(v) for v in kept.xyxy)
+                own[max(0, ky0):ky1, max(0, kx0):kx1] = False
+            mask[y0:y1, x0:x1][own[y0:y1, x0:x1]] = 255
     return mask
 
 

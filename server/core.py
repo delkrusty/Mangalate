@@ -63,7 +63,7 @@ def create_core(engine=None, config_factory=None):
     @app.post("/translate/with-form/image")
     async def translate(image: UploadFile = File(...), config: str = Form("{}"),
                         above: UploadFile | None = File(None), below: UploadFile | None = File(None),
-                        work: str = Form("")):
+                        work: str = Form(""), art: str = Form("")):
         if lock.locked():
             raise HTTPException(429, "Engine busy")
         async with lock:
@@ -86,9 +86,10 @@ def create_core(engine=None, config_factory=None):
             except (ValueError, TypeError, AttributeError):
                 raise HTTPException(422, "Invalid page or configuration")
             try:
-                from engine_compat import set_page_context, set_page_rows, take_learned_terms
+                from engine_compat import art_mode, set_art_mode, set_page_context, set_page_rows, take_learned_terms
                 from memory import default_memory, parse_work, remember
                 set_page_rows(strip.top, strip.bottom)
+                set_art_mode(art)
                 # Glossary and previous pages of the same work, when the app names it.
                 page_work = parse_work(work)
                 set_page_context(default_memory().context(page_work["obra"], page_work["capitulo"],
@@ -98,8 +99,10 @@ def create_core(engine=None, config_factory=None):
                     remember(default_memory(), page_work, getattr(ctx, "text_regions", None), take_learned_terms())
                 except Exception as exc:  # the page is done; memory is a bonus
                     print(f"Memória da obra: {type(exc).__name__}", flush=True)
+                # The art choice changes the page, so it keys the seam cache like the settings.
+                salt = config if art_mode() == "preservar" else f"{config}|{art_mode()}"
                 result = finish(strip, ctx.result, getattr(ctx, "text_regions", None) if strip.stitched else None,
-                                seam_cache, config)
+                                seam_cache, salt)
                 from speed import summary
                 if getattr(ctx, "mangalate_timings", None):
                     print(f"Tempos: {summary(ctx.mangalate_timings)}", flush=True)

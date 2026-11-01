@@ -53,6 +53,25 @@ class BubbleLayoutTest(unittest.TestCase):
         cv2.ellipse(mask, (300, 300), (110, 190), 0, 0, 360, 255, -1)
         self.assertTrue(mask[y0:y1, x0:x1].all())
 
+    def test_the_biggest_size_that_fits_is_found_past_a_size_that_does_not(self):
+        # Grand Blue 106 p27: the engine's wrap runs a line 1 or 2 px past the width at some
+        # sizes (fits at 19 and 30-33, not at 20 or 27); the search stopped at 19, and the
+        # speech came out at 70% of the original.  The neighbour: a text that fits nowhere
+        # above a size still gets that size.
+        box = (0, 0, 200, 260)
+        plain = char_layout(self.TEXT)
+        def layout(size, width, height):
+            lines, widths = plain(size, width, height)
+            if 20 <= size <= 27:
+                widths = [width + 2] + widths[1:]
+            return lines, widths
+        self.assertEqual(lettering.best_layout(self.TEXT, [box], layout, 33, 8)[0],
+                         lettering.best_layout(self.TEXT, [box], plain, 33, 8)[0])
+        def tight(size, width, height):
+            lines, widths = plain(size, width, height)
+            return lines, (widths if size <= 15 else [width + 2] + widths[1:])
+        self.assertEqual(lettering.best_layout(self.TEXT, [box], tight, 33, 8)[0], 15)
+
     def test_short_text_is_capped_near_the_original_size(self):
         image = page_with_bubble()
         plan = lettering.plan(image, (280, 285, 320, 315), [], "Ah!", char_layout("Ah!"), 24, 10)
@@ -171,6 +190,39 @@ class BubbleLayoutHookTest(unittest.TestCase):
         self.assertLessEqual(abs((changed[:, 1].min() + changed[:, 1].max()) / 2 - 300), pad)
         self.assertLessEqual(abs((changed[:, 0].min() + changed[:, 0].max()) / 2 - 300), pad + 2)
 
+    def test_translation_over_the_drawing_gets_a_halo_that_hugs_it(self):
+        # Speech over the drawing: painted flat, the old block stayed as a white patch much bigger
+        # than the translation.  Now the art is drawn back and the new letters get a tight halo.
+        import types
+        import cv2
+        from engine_compat import bubble_layout
+
+        def engine_render(img, region, *a):  # two dark words, as the engine draws them
+            img[100:110, 50:70] = 0
+            img[100:110, 76:96] = 0
+            return img
+        rendering = types.SimpleNamespace(resize_regions_to_font_size=None, render=engine_render,
+                                          fg_bg_compare=lambda fg, bg: (fg, bg))
+        bubble_layout(rendering, types.SimpleNamespace())
+        image = np.full((200, 200, 3), 150, np.uint8)
+        for x in range(-200, 200, 6):  # hatching
+            cv2.line(image, (x, 0), (x + 200, 199), (30, 30, 30), 1)
+        region = types.SimpleNamespace(font_size=20, mangalate_halo=(250, 250, 250))
+        out = rendering.render(image.copy(), region, None, False, None, False)
+        self.assertTrue((out[100:110, 50:70] == 0).all())                     # the letters
+        self.assertTrue((out[100:110, 71:75] == 250).all())                   # the gap between the words
+        self.assertTrue((out[97, 52:68] == 250).all() and (out[112, 78:94] == 250).all())  # its rim
+        self.assertTrue((out[150:, :] == image[150:, :]).all())               # the drawing away from it stays
+        self.assertTrue((out[:, 130:] == image[:, 130:]).all())
+        # A hole the halo closes around (between two lines far apart) is filled, not left dark.
+        from quality import halo_cloud
+        ring = np.zeros((120, 120), bool)
+        ring[30:36, 30:90] = ring[84:90, 30:90] = ring[30:90, 30:36] = ring[30:90, 84:90] = True
+        self.assertTrue(halo_cloud(ring, 10)[60, 60])
+        # Without a halo (any other region) only the letters are drawn.
+        out = rendering.render(image.copy(), types.SimpleNamespace(font_size=20), None, False, None, False)
+        self.assertTrue((out[100:110, 71:75] == image[100:110, 71:75]).all())
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -221,6 +273,16 @@ class ShapedLetteringTest(unittest.TestCase):
         # A stutter is one word: "V-" / "você?!" and "Nã-" / "não!" read as a broken line.
         self.assertIsNone(lettering.wrap(["V-você?!"], [measure("você?!") + 2] * 2, measure))
         self.assertIsNone(lettering.wrap(["Nã-não!"], [measure("não!") + 2] * 2, measure))
+
+    def test_a_laugh_joined_by_hyphens_may_break_at_each_one(self):
+        # Grand Blue 106 p43: "Ah-ha-ha-ha-ha-ha!" in a tall narrow balloon came out as one tiny line.
+        measure = lettering.Measure(FONT, 30)
+        narrow = [measure("Ah-ha-") + 2] * 4
+        self.assertEqual(lettering.wrap(["Ah-ha-ha-ha-ha-ha!"], narrow, measure), ["Ah-ha-", "ha-ha-", "ha-ha!"])
+        self.assertEqual(lettering.wrap(["He-he-he..."], [measure("He-he-") + 2] * 2, measure), ["He-he-", "he..."])
+        self.assertEqual(lettering.wrap(["Ah-ha-ha-ha-ha-ha!"], [500], measure), ["Ah-ha-ha-ha-ha-ha!"])
+        # A stutter that ends in a different word stays whole.
+        self.assertIsNone(lettering.wrap(["Nã-nã-não!"], [measure("nã-não!") + 2] * 3, measure))
 
     def test_syllable_breaks_follow_portuguese_rules(self):
         # Points where a long word may be cut, from the pt-BR patterns: never fewer than HYPHEN_SIDE
@@ -551,3 +613,226 @@ class TextAtTheTopTest(unittest.TestCase):
         cv2.rectangle(image, (150, 120), (550, 520), (0, 0, 0), 3)
         box = (230, 140, 470, 200)  # two lines right under the top edge of the box
         self.check(image, box, lambda x, y: 153 <= x <= 547 and 123 <= y <= 517)
+
+
+class TonedBubbleTest(unittest.TestCase):
+    """Speech in a bubble filled with light screentone, cleaned letter by letter.
+
+    Manga teste p10: only the cleaned patch around the letters is flat, the flood fill stopped at
+    the dots of the tone and the translation came out at 14 px for letters of 22.
+    """
+    LINE = 22
+    TEXT = "O jogo será uma partida única de um set até 11 pontos."
+    BOX = (250, 250, 350, 350)
+    HULL = np.array([[250, 250], [350, 250], [350, 350], [250, 350]], np.int32)
+
+    def page(self, outline=True, drawing=False):
+        image = np.full((600, 600, 3), 90, np.uint8)  # the art around
+        inside = np.zeros((600, 600), np.uint8)
+        cv2.ellipse(inside, (300, 300), (75, 125), 0, 0, 360, 1, -1)
+        if not outline:
+            inside[:] = 1
+        tone = np.full((600, 600), 245, np.uint8)
+        tone[(np.indices((600, 600)).sum(axis=0) % 2) == 0] = 195  # fine dots, none of them ink
+        image[inside > 0] = tone[inside > 0][:, None]
+        if outline:
+            cv2.ellipse(image, (300, 300), (75, 125), 0, 0, 360, (0, 0, 0), 2)
+        if drawing:  # a panel drawn in ink, not a bubble
+            for y in range(180, 430, 8):
+                cv2.line(image, (225, y), (375, y + 20), (30, 30, 30), 2)
+        x0, y0, x1, y1 = self.BOX
+        image[y0:y1, x0:x1] = 231  # the cleaned letters
+        return image
+
+    def test_the_toned_bubble_gives_the_letters_their_size(self):
+        image = self.page()
+        flat = lettering.plan_shaped(image, self.BOX, [], self.TEXT, FONT, self.LINE, 8)
+        self.assertLess(flat["size"], 0.75 * self.LINE)  # the defect: the room stops at the tone
+        toned = lettering.toned_page(image, self.BOX, self.HULL)
+        self.assertIsNotNone(toned)
+        plan = lettering.plan_shaped(toned, self.BOX, [], self.TEXT, FONT, self.LINE, 8, scale=1.0)
+        self.assertGreaterEqual(plan["size"], 0.75 * self.LINE)
+        self.assertLessEqual(plan["size"], self.LINE)  # never bigger than the original letters
+        for x0, y0, x1, y1 in line_slots(plan):
+            for x in (x0, x1):
+                self.assertLess(((x - 300) / 75) ** 2 + (((y0 + y1) / 2 - 300) / 125) ** 2, 1.0)
+
+    def test_a_drawn_panel_or_an_open_tone_is_no_bubble(self):
+        self.assertIsNone(lettering.toned_page(self.page(drawing=True), self.BOX, self.HULL))
+        self.assertIsNone(lettering.toned_page(self.page(outline=False), self.BOX, self.HULL))
+
+    def test_the_hook_plans_a_cleaned_speech_in_the_toned_bubble(self):
+        import types
+        from unittest import mock
+        from engine_compat import bubble_layout
+        rendering = types.SimpleNamespace(
+            resize_regions_to_font_size=lambda img, regions, *a: [np.zeros((1, 4, 2), np.int64) for _ in regions],
+            render=lambda img, region, *a: img, fg_bg_compare=lambda fg, bg: (fg, bg))
+        text_render = types.SimpleNamespace(
+            calc_horizontal=lambda size, text, w, h, lang, hyphenate: char_layout(text)(size, w, h))
+        bubble_layout(rendering, text_render)
+        x0, y0, x1, y1 = self.BOX
+        step = (y1 - y0) / 4
+        lines = np.array([[[x0, y0 + k * step], [x1, y0 + k * step], [x1, y0 + k * step + self.LINE],
+                           [x0, y0 + k * step + self.LINE]] for k in range(4)])
+        region = types.SimpleNamespace(
+            xyxy=self.BOX, lines=lines, font_size=self.LINE, direction="h", horizontal=True, target_lang="PTB",
+            mangalate_background={"kind": "tracos", "fala": True}, get_translation_for_rendering=lambda: self.TEXT)
+        with mock.patch.object(lettering, "font_file", lambda: FONT):
+            rendering.resize_regions_to_font_size(self.page(), [region], None, 0, -1)
+        self.assertGreaterEqual(region.mangalate_shaped["size"], 0.75 * self.LINE)
+        self.assertLessEqual(region.mangalate_shaped["size"], self.LINE)
+
+
+class BlockRoomTest(unittest.TestCase):
+    """Speech over the drawing whose last lines are short and run over the drawing.
+
+    Manga teste p15: "I NEVER EXPECTED..." in a column of paper, its last lines ("TABLE / LIKE /
+    THIS.") over a table.  The room was the convex hull of the lines, narrow at the bottom, and
+    the translation came out at 9 px for letters of 12; the original letters, with their halo,
+    filled the whole block.
+    """
+    LINE = 12
+    COLUMN = (276, 326)  # x of the long lines
+    TEXT = "Nunca pensei que alguém fosse usar a força daquela velha cadeira desse jeito..."
+
+    def page(self):
+        image = np.full((400, 400, 3), 90, np.uint8)
+        for x in range(-400, 400, 6):  # hatching all over
+            cv2.line(image, (x, 0), (x + 400, 400), (40, 40, 40), 1)
+        a, c = self.COLUMN
+        image[96:214, a - 14:c + 14] = 255  # the column of paper
+        image[214:262, a - 14:c + 14] = 200  # a flat wall under it
+        return image
+
+    def region(self, short=True, halo=True):
+        import types
+        a, c = self.COLUMN
+        wide = [(a + (k % 2) * 3, 102 + k * 14, c - (k % 3) * 2, 102 + k * 14 + 12) for k in range(8)]
+        tail = [((a + c) // 2 - 10, 214 + k * 14, (a + c) // 2 + 10, 214 + k * 14 + 12) for k in range(3)] if short else []
+        lines = np.array([[[a, b], [c, b], [c, d], [a, d]] for a, b, c, d in wide + tail])
+        box = (int(lines[..., 0].min()), int(lines[..., 1].min()), int(lines[..., 0].max()), int(lines[..., 1].max()))
+        region = types.SimpleNamespace(
+            xyxy=box, lines=lines, font_size=self.LINE, direction="h", horizontal=True, target_lang="PTB",
+            mangalate_background={"kind": "tracos", "fala": True, **({"sobre_arte": True} if halo else {})},
+            get_translation_for_rendering=lambda: self.TEXT)
+        if halo:  # painted by speed.paint_halos: the letters and their halo, 5 px around the lines
+            area = np.zeros((400, 400), bool)
+            for a, b, c, d in wide + tail:
+                area[b - 5:d + 6, a - 5:c + 6] = True
+            region.mangalate_halo, region.mangalate_halo_area = (255, 255, 255), area
+        return region
+
+    def plan(self, region):
+        import types
+        from unittest import mock
+        from engine_compat import bubble_layout
+        rendering = types.SimpleNamespace(
+            resize_regions_to_font_size=lambda img, regions, *a: [np.zeros((1, 4, 2), np.int64) for _ in regions],
+            render=lambda img, region, *a: img, fg_bg_compare=lambda fg, bg: (fg, bg))
+        text_render = types.SimpleNamespace(
+            calc_horizontal=lambda size, text, w, h, lang, hyphenate: char_layout(text)(size, w, h))
+        bubble_layout(rendering, text_render)
+        with mock.patch.object(lettering, "font_file", lambda: FONT):
+            rendering.resize_regions_to_font_size(self.page(), [region], None, 0, -1)
+        return region.mangalate_shaped
+
+    def test_the_translation_fills_the_block_of_the_original_lines(self):
+        region = self.region()
+        hull = self.page()
+        cv2.fillPoly(hull, [cv2.convexHull(region.lines.reshape(-1, 2).astype(np.int32))], (255, 255, 255))
+        before = lettering.plan_shaped(hull, region.xyxy, [], self.TEXT, FONT, self.LINE, 8)
+        self.assertLess(before["size"], lettering.BLOCK_BELOW * self.LINE)  # the defect: 9 px for 12
+        plan = self.plan(region)
+        self.assertGreaterEqual(plan["size"], lettering.BLOCK_BELOW * self.LINE, plan)
+        self.assertLessEqual(plan["size"], self.LINE)  # never bigger than the original letters
+        x0, y0, x1, y1 = region.xyxy
+        for a, b, c, d in line_slots(plan):  # inside the old halo of the block (5 px), give or take the margin
+            self.assertTrue(a >= x0 - self.LINE and c <= x1 + self.LINE and b >= y0 - 6 and d <= y1 + 6, plan)
+
+    def test_strokes_of_the_drawing_inside_the_block_are_not_written_over(self):
+        # Manga teste p22: the last line, short, ended on the left, and the room was the rectangle
+        # of the lines: the translation with its halo covered the tip of an eyebrow in its corner.
+        # Only the old halo and the clean parts of the rectangle are room.
+        import types
+        a, c = self.COLUMN
+        page = np.full((400, 400, 3), 90, np.uint8)
+        for x in range(-400, 400, 6):
+            cv2.line(page, (x, 0), (x + 400, 400), (40, 40, 40), 1)
+        page[96:214, a - 14:c + 14] = 255  # paper around the lines...
+        page[196:214, c - 26:c + 14] = 200  # ...and a wall in the corner, with a stroke on it
+        stroke = np.zeros((400, 400), np.uint8)
+        cv2.line(stroke, (c - 16, 198), (c - 6, 212), 1, 3)
+        page[stroke > 0] = 20
+        quads = [(a + (k % 2) * 3, 102 + k * 16, c - (k % 3) * 2, 102 + k * 16 + 12) for k in range(6)] + [(a, 198, a + 22, 210)]
+        lines = np.array([[[x0, y0], [x1, y0], [x1, y1], [x0, y1]] for x0, y0, x1, y1 in quads])
+        area = np.zeros((400, 400), bool)
+        for x0, y0, x1, y1 in quads:
+            area[y0 - 3:y1 + 4, x0 - 3:x1 + 4] = True
+        region = types.SimpleNamespace(
+            xyxy=(a, 102, c, 210), lines=lines, font_size=self.LINE, direction="h", horizontal=True,
+            target_lang="PTB", mangalate_background={"kind": "tracos", "fala": True, "sobre_arte": True},
+            get_translation_for_rendering=lambda: "Nunca pensei que ele fosse mesmo usar a força daquela mesa especial daquele jeito, logo ali na frente.",
+            mangalate_halo=(255, 255, 255), mangalate_halo_area=area)
+        self.page = lambda: page.copy()
+        plan = self.plan(region)
+        rim = np.zeros((400, 400), bool)
+        for x0, y0, x1, y1 in line_slots(plan):
+            rim[int(y0):int(y1) + 1, int(x0) - 2:int(x1) + 3] = True
+        self.assertFalse((rim & (stroke > 0)).any(), plan)  # with the rectangle as room: 10 px over it
+
+    def test_the_translation_stays_on_its_side_of_a_stroke_next_to_the_halo(self):
+        # A sign over the drawing (GB 106 p6): one line on a plate, the plate's edge a stroke a
+        # few pixels under the letters and blank paper past it.  The room grown by the margin
+        # crossed the stroke, joined the paper, and the second line was written under the plate.
+        import types
+        page = np.full((400, 400, 3), 90, np.uint8)
+        for x in range(-400, 400, 6):
+            cv2.line(page, (x, 0), (x + 400, 400), (40, 40, 40), 1)
+        page[148:175, 100:300] = 255  # the plate...
+        page[175:177, 60:340] = 20    # ...its lower edge...
+        page[177:300, 60:340] = 255   # ...and blank paper under it
+        lines = np.array([[[130, 154], [270, 154], [270, 170], [130, 170]]])
+        area = np.zeros((400, 400), bool)
+        area[151:174, 127:274] = True
+        region = types.SimpleNamespace(
+            xyxy=(130, 154, 270, 170), lines=lines, font_size=16, direction="h", horizontal=True,
+            target_lang="PTB", mangalate_background={"kind": "tracos", "fala": True, "sobre_arte": True},
+            get_translation_for_rendering=lambda: "Entrega rápida de comida caseira",
+            mangalate_halo=(255, 255, 255), mangalate_halo_area=area, mangalate_letters=11.0)
+        self.page = lambda: page.copy()
+        plan = self.plan(region)
+        for x0, y0, x1, y1 in line_slots(plan):
+            self.assertLess(y1, 175, plan)
+
+    def test_the_translation_is_sized_to_the_original_capitals(self):
+        # Line boxes reach a few pixels past the letters, and by how much varies: capped at the
+        # box, the capitals of the translation came out at three quarters of the original ones
+        # (Manga teste p12, p22).  With the capitals measured, the cap is theirs.
+        self.COLUMN = (266, 356)
+        region = self.region()
+        before = self.plan(region)["size"]  # 14: past 85% of the line box, but not of the capitals
+        region.mangalate_letters = 18 * lettering.capital_share(FONT)  # capitals of an 18 px font
+        plan = self.plan(region)
+        self.assertGreater(plan["size"], before, (before, plan))
+        self.assertLessEqual(plan["size"], 18)
+        # Smaller capitals than the line box never shrink the letters.
+        region.mangalate_letters = 9 * lettering.capital_share(FONT)
+        self.assertEqual(self.plan(region)["size"], before)
+
+    def test_a_speech_that_already_has_room_keeps_its_plan(self):
+        # All lines on the paper: the hull is the block, nothing to gain.
+        region = self.region(short=False)
+        page = self.page()
+        cv2.fillPoly(page, [cv2.convexHull(region.lines.reshape(-1, 2).astype(np.int32))], (255, 255, 255))
+        alone = lettering.plan_shaped(page, region.xyxy, [], self.TEXT, FONT, self.LINE, 8)
+        self.assertEqual(self.plan(region)["box"], alone["box"])
+
+    def test_a_speech_without_a_halo_keeps_the_room_of_its_lines(self):
+        # Only the letters were cleaned and no halo is drawn: past the hull the drawing is still
+        # there, and black letters over it would not be read.
+        region = self.region(halo=False)
+        hull = self.page()
+        cv2.fillPoly(hull, [cv2.convexHull(region.lines.reshape(-1, 2).astype(np.int32))], (255, 255, 255))
+        alone = lettering.plan_shaped(hull, region.xyxy, [], self.TEXT, FONT, self.LINE, 8)
+        self.assertEqual(self.plan(region)["size"], alone["size"])

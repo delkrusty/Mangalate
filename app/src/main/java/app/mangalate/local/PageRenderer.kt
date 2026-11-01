@@ -163,7 +163,7 @@ object PageRenderer {
         val uniform = ring.count { dist(it, bg) <= 48 }.toFloat() / ring.size
         val plain = uniform >= 0.72f && !region.overArt
 
-        if (!plain && s.ignoreOutsideBubbles) return null
+        if (!plain && s.preservesArt) return null
 
         val textColor: Int
         val strokeColor: Int?

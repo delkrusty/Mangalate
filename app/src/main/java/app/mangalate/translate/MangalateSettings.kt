@@ -132,7 +132,11 @@ data class MangalateSettings(
     val engine: TranslatorEngine = TranslatorEngine.OFFLINE,
     val quality: QualityProfile = QualityProfile.HIGH,
     val typeset: TypesetMode = TypesetMode.AUTO,
-    val ignoreOutsideBubbles: Boolean = false,
+    /**
+     * Fala escrita sobre o desenho fica no original; desligado, tudo é traduzido. Sem escolha
+     * (null), vale o padrão do modo: preservar no servidor, traduzir no celular, como antes.
+     */
+    val preserveArtText: Boolean? = null,
     val uppercase: Boolean = false,
     val fontSizeOffset: Int = 0,
     val maskDilation: Int = 0,
@@ -144,6 +148,9 @@ data class MangalateSettings(
             TranslateMode.DEEPL -> deeplKey.isNotBlank()
             TranslateMode.SERVER -> serverUrl.isNotBlank() && accessKey.isNotBlank()
         }
+
+    val preservesArt: Boolean
+        get() = preserveArtText ?: (mode == TranslateMode.SERVER)
 
     /** Resumo curto mostrado no app, ex.: "Japonês → Português (Brasil) · No celular". */
     val summary: String
@@ -157,7 +164,7 @@ data class MangalateSettings(
             if (mode == TranslateMode.ON_DEVICE || mode == TranslateMode.DEEPL) "sdk-translation-v5.1" else "bubble-interior-v5",
             mode.name, sourceLanguage.name, targetLanguage.code,
             if (mode == TranslateMode.GEMINI) effectiveGeminiModel else "",
-            ignoreOutsideBubbles, uppercase, fontSizeOffset,
+            preservesArt, uppercase, fontSizeOffset,
         ).joinToString("|")
     }
 
@@ -190,7 +197,6 @@ data class MangalateSettings(
         val ocr = JSONObject().apply {
             put("ocr", "48px")
             put("min_text_length", 0)
-            if (ignoreOutsideBubbles) put("ignore_bubble", 8)
         }
         val inpainter = JSONObject().apply {
             put("inpainter", if (q == QualityProfile.FAST) "lama_mpe" else "lama_large")
@@ -224,6 +230,9 @@ data class MangalateSettings(
             put("inpainter", inpainter)
             put("translator", translator)
             put("render", render)
+            // O servidor só traduz a fala sobre o desenho quando pedido, limpando só as letras.
+            // Sem o pedido, a configuração (e o cache) fica igual à de antes.
+            if (!preservesArt) put("arte", "traduzir")
             if (q == QualityProfile.MAX) {
                 put(
                     "upscale",

@@ -244,6 +244,49 @@ def split_flat(image, mask, ignore=None):
     return page, left
 
 
+def paint_halos(image, mask, regions, raw):
+    """Speech over the drawing with a light halo ("sobre_arte"): only its letters and halo go to
+    the model (quality.halo_paint), which draws the art back under them; the rest of its mask, and
+    the drawing seen between the letters (quality.halo_drawing), is left out.  Painted flat with
+    the halo, the old block stayed as a white patch much bigger than the translation; the new
+    letters get their own halo when drawn (quality.halo_cloud).
+    """
+    import cv2
+    over = [r for r in regions or [] if (getattr(r, "mangalate_background", None) or {}).get("sobre_arte")]
+    if not over or raw is None:
+        return image, mask
+    from quality import HALO_EDGE_PX, halo_drawing, halo_ink, halo_letters, halo_paint, other_boxes
+    raw = np.asarray(raw)
+    if raw.shape[:2] != mask.shape[:2]:
+        raw = cv2.resize(raw, (mask.shape[1], mask.shape[0]), interpolation=cv2.INTER_NEAREST)
+    page, left = image.copy(), mask.copy()
+    for region in over:
+        paint, colour = halo_paint(image, raw, region.lines)
+        if colour is None:
+            continue
+        paint |= halo_letters(image, region.lines)  # over a dark drawing: the letters the mask missed, with their halo
+        x0, y0, x1, y1 = (int(v) for v in region.xyxy)
+        pad = int(max(8, getattr(region, "font_size", 0) or 0))
+        zone = np.zeros(mask.shape[:2], bool)
+        zone[max(0, y0 - pad):y1 + pad, max(0, x0 - pad):x1 + pad] = True
+        zone &= ~other_boxes(image, regions, region)  # the cleaning of a bubble next to it stays
+        # Not limited to the engine's mask: the detector cut the tops of a first line off it, and
+        # they were left as a ghost of the English.  The paint is letters and halo only.
+        paint &= zone
+        region.mangalate_halo = tuple(int(c) for c in np.asarray(colour).round())
+        region.mangalate_halo_area = paint  # the room of the translation (engine_compat.bubble_layout)
+        paint = paint & ~halo_drawing(image, paint, colour, region.lines)
+        ink = halo_ink(image, paint)
+        if ink is not None:  # the translation in the colour of the old letters, its border the halo
+            region.fg_colors, region.bg_colors = np.array(ink), np.array(region.mangalate_halo)
+        page[paint] = region.mangalate_halo  # what stays if the model is not run
+        left[zone] = 0
+        # With the halo's soft rim: left out, its white spread into the art the model drew back.
+        edge = np.ones((2 * HALO_EDGE_PX + 1, 2 * HALO_EDGE_PX + 1), np.uint8)
+        left[(cv2.dilate(paint.astype(np.uint8), edge) > 0) & zone] = 255
+    return page, left
+
+
 def specks(image, text, colour):
     """Pieces of ink of at most DUST_SIZE px outside ``text``: dust of the scan, or screentone dots."""
     import cv2
@@ -306,7 +349,8 @@ def flat_first(original_inpaint):
             if drawn:
                 from quality import drawn_marks
                 ignore = drawn_marks(image, drawn)
-            page, left = split_flat(image, mask, ignore)
+            page, left = paint_halos(image, mask, getattr(ctx, "text_regions", None), getattr(ctx, "mask_raw", None))
+            page, left = split_flat(page, left, ignore)
         except Exception as exc:
             print(f"Limpeza lisa falhou ({type(exc).__name__}); usando o modelo.", flush=True)
             return await original_inpaint(self, config, ctx)
