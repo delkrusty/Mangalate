@@ -799,6 +799,22 @@ class LineRepairTest(unittest.TestCase):
         self.assertEqual(len(added), 1)
         self.assertTrue(boxes[2][1] <= added[0][1] < added[0][3] <= boxes[2][3])
 
+    def test_line_whose_feet_a_loose_box_covers_is_added(self):
+        # Grand Blue 102 p33: no box for "I'LL", and the loose box of "HAVE THE" under it covered its
+        # feet, 36% of its ink: taken as read, the line was lost ("Troquem essas bebidas" for "I'll
+        # have the drinks replaced").
+        mask, boxes = self.bubble_mask()
+        ink = np.flatnonzero((mask[:, boxes[0][0]:boxes[0][2]] > 0).any(axis=1))
+        top, bottom = int(ink[0]), int(ink[ink < boxes[1][1]][-1])
+        loose = (boxes[1][0], bottom - (bottom - top) // 4, boxes[1][2], boxes[1][3])
+        repaired, changes = repair_lines(mask, [loose] + boxes[2:])
+        added = [box for box, source in repaired if source is None]
+        self.assertEqual(len(added), 1)
+        self.assertTrue(boxes[0][1] <= added[0][1] and added[0][3] <= boxes[0][3] + 1)
+        # With a box of its own the line is read once, the loose box beside it or not.
+        repaired, changes = repair_lines(mask, boxes[:1] + [loose] + boxes[2:])
+        self.assertEqual([box for box, source in repaired if source is None], [])
+
     def test_box_holding_two_lines_is_split(self):
         mask, boxes = self.bubble_mask()
         both = (min(boxes[2][0], boxes[3][0]), boxes[2][1], max(boxes[2][2], boxes[3][2]), boxes[3][3])

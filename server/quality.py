@@ -1497,6 +1497,7 @@ SPLIT_INSIDE = 0.25   # a row run must reach this far into the box to be one of 
 MIN_PART = 0.45       # a split part shorter than this share of a line is noise
 STACK_WIDE = 2.0      # in a box as tall as wide, rows this many times wider than tall are lines, not stacked letters
 ORPHAN_COVERED = 0.2  # mask pixels already under a box above this share are not orphans
+ORPHAN_EDGE = 1 / 3   # read on the middle of the line: its top and bottom may lie under a loose box
 NEAR_LINES = 1.6      # an orphan line must sit this many line heights from a known one
 ORPHAN_MIN = 0.5      # an orphan line is at least this many line heights tall
 SMALL_LINE = 0.3      # smaller orphans, from this many line heights, may still be a paragraph of small lettering
@@ -1750,7 +1751,12 @@ def repair_lines(mask, boxes, gray=None, rebuild=False):
         if not (ORPHAN_MIN * height <= bh <= STAIR_FACTOR * height and bw >= height):
             continue
         pixels = (labels[y:y + bh, x:x + bw] == label) & ink[y:y + bh, x:x + bw]
-        if not pixels.any() or known[y:y + bh, x:x + bw][pixels].mean() > ORPHAN_COVERED:
+        # On the middle of the line: the loose box of the next line covered the feet of "I'LL", 36% of
+        # its ink, and the line was taken as read and lost (Grand Blue 102 p33).
+        middle = pixels.copy()
+        middle[:int(bh * ORPHAN_EDGE)] = False
+        middle[bh - int(bh * ORPHAN_EDGE):] = False
+        if not middle.any() or known[y:y + bh, x:x + bw][middle].mean() > ORPHAN_COVERED:
             continue
         if bh > SPLIT_FACTOR * height:
             boxes_here = stair_lines(pixels, x, y, height)
