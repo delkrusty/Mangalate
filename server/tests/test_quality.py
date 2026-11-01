@@ -82,6 +82,155 @@ class BackgroundTest(unittest.TestCase):
         mask[60:125, 50:200] = 255
         self.assertEqual(classify_region(image, mask, [quad(55, 65, 190, 120)])["kind"], "art")
 
+    def haloed_on_black(self, tone=(150, 140)):
+        """Dark letters with a white halo and a black outline over dark, toned art (the same
+        lettering as above, seen the other way round); a light screentone from ``tone`` (x, y)
+        down to the right, under the end of the last word."""
+        image = noisy_art((420, 200)) // 3
+        letters = np.zeros(image.shape[:2], np.uint8)
+        for text, y in (("SO THIS", 80), ("IS IT?", 140)):
+            cv2.putText(letters, text, (60, y), cv2.FONT_HERSHEY_SIMPLEX, 1.6, 255, 6)
+        image[cv2.dilate(letters, np.ones((13, 13), np.uint8)) > 0] = 0
+        x, y = tone
+        image[y:, x:] = 255
+        for dy, dx in ((0, 0), (0, 1), (1, 0), (1, 1)):  # dark dots on white
+            image[y + dy::4, x + dx::4] = 0
+        image[cv2.dilate(letters, np.ones((9, 9), np.uint8)) > 0] = 255
+        image[letters > 0] = 0
+        return image, letters, [quad(55, 45, 320, 90), quad(55, 105, 270, 150)]
+
+    def test_haloed_words_touching_a_light_tone_are_cleaned_whole(self):
+        # Grand Blue 106 p27: the halo of the words next to the hair's light screentone runs
+        # into it; only the letters whose halo stayed closed were cleaned, and "THEY", "LIKE",
+        # "OTHER'S" and "CROTCH." stayed in English under the translation.
+        image, letters, quads = self.haloed_on_black()
+        self.assertEqual(classify_region(image, letters, quads)["kind"], "contorno")
+        area = quality.outlined_area(image, quads)
+        last = letters.copy()
+        last[:100, :] = 0
+        last[:, :130] = 0
+        self.assertGreater(last.sum(), 0)
+        self.assertGreater(np.mean(area[last > 0]), 0.98)
+        self.assertGreater(np.mean(area[letters > 0]), 0.98)
+        # The tone past the halo stays as drawn.
+        near = cv2.dilate(letters, np.ones((31, 31), np.uint8)) > 0
+        self.assertFalse(area[140:, 150:][~near[140:, 150:]].any())
+
+    def test_the_inside_of_an_outlined_letter_with_a_soft_edge_is_cleaned_too(self):
+        # Grand Blue 106 p27: the white of the "O" of "FOR" met its dark middle in a soft grey
+        # edge, so it did not count as a letter; the letters around it were cleaned and the white
+        # of the "O" stayed as a blot in the middle of the translation.
+        image = noisy_art((420, 200)) // 3
+        letters = np.zeros(image.shape[:2], np.uint8)
+        for text, y in (("SO THIS", 80), ("IS IT?", 140)):
+            cv2.putText(letters, text, (60, y), cv2.FONT_HERSHEY_SIMPLEX, 1.6, 255, 4)
+        cv2.ellipse(letters, (285, 124), (14, 17), 0, 0, 360, 255, 5)
+        image[cv2.dilate(letters, np.ones((13, 13), np.uint8)) > 0] = 255  # the white halo around the words
+        image[cv2.dilate(letters, np.ones((9, 9), np.uint8)) > 0] = 0
+        image[letters > 0] = 255
+        cv2.ellipse(image, (285, 124), (11, 14), 0, 0, 360, (150, 150, 150), 2)
+        quads = [quad(55, 45, 320, 90), quad(55, 100, 305, 150)]
+        self.assertEqual(classify_region(image, letters, quads)["kind"], "contorno")
+        inside = np.zeros_like(letters)
+        cv2.ellipse(inside, (285, 124), (17, 20), 0, 0, 360, 255, -1)
+        area = quality.outlined_area(image, quads)
+        self.assertGreater(np.mean(area[inside > 0]), 0.98)
+        # The art between the two lines stays as drawn.
+        self.assertLess(np.mean(area[92:98, 60:300]), 0.5)
+
+    @staticmethod
+    def refine_mask(image, raw, regions):
+        """refine_mask_consistently with the engine's own refinement left out (it returns the raw mask)."""
+        import asyncio
+        import types
+        from types import SimpleNamespace
+        from engine_compat import refine_mask_consistently
+        fake = types.ModuleType("manga_translator.mask_refinement")
+        async def dispatch(regions, img, mask, method, dilation, ignore, verbose, kernel):
+            return mask.copy()
+        fake.dispatch = dispatch
+        package = types.ModuleType("manga_translator")
+        package.mask_refinement = fake
+        saved = {k: sys.modules.get(k) for k in ("manga_translator", "manga_translator.mask_refinement")}
+        sys.modules.update({"manga_translator": package, "manga_translator.mask_refinement": fake})
+        try:
+            ctx = SimpleNamespace(img_rgb=image, mask_raw=raw, text_regions=regions)
+            return asyncio.run(refine_mask_consistently(SimpleNamespace(verbose=False, kernel_size=3),
+                                                        SimpleNamespace(mask_dilation_offset=0), ctx)) > 0
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    sys.modules.pop(key, None)
+                else:
+                    sys.modules[key] = value
+
+    def test_letter_of_a_bubble_running_past_its_box_stays_cleaned_beside_lettering_over_strokes(self):
+        # Grand Blue 102 p33: the "T" of "THERE'S" ran 4 px left of its box, into the margin of the
+        # speech beside it, whose cleaning stays on its own letters; that edge was left out and
+        # the cleaner drew a grey ghost of it.  A stroke of the drawing a little further stays, and
+        # so does the outline of a bubble just past its box (manga p15, "LET'S DO IT!").
+        from types import SimpleNamespace
+        image = np.full((140, 280, 3), 255, np.uint8)
+        raw = np.zeros(image.shape[:2], np.uint8)
+        for x in range(24, 116, 14):  # the letters of the speech over the strokes
+            image[52:70, x:x + 8] = 0
+        image[52:70, 131:160] = 0  # a letter of the bubble beside it, starting 4 px before its box
+        image[80:90, 121:125] = 0  # a stroke of the drawing, past the reach of the other box
+        image[72:136, 130:132] = 0  # the outline of the bubble, 3 px from its box, under the letter
+        raw[image[:, :, 0] == 0] = 255
+        strokes = SimpleNamespace(xyxy=(20, 50, 120, 72), lines=[quad(20, 50, 120, 72)], font_size=20,
+                                  mangalate_background={"kind": "tracos"})
+        bubble = SimpleNamespace(xyxy=(135, 50, 250, 72), lines=[quad(135, 50, 250, 72)], font_size=20,
+                                 mangalate_background={"kind": "interior"})
+        mask = self.refine_mask(image, raw, [strokes, bubble])
+        self.assertTrue(mask[52:70, 131:135].all())
+        self.assertFalse(mask[80:90, 121:125].any())
+        self.assertFalse(mask[72:92, 130:132].any())
+
+    def test_drawing_beside_a_vertical_column_of_text_is_no_letter_of_it(self):
+        # Letters of a column are as big as the column is wide, not as long: a blot of the drawing
+        # touching its box was taken as a letter running past it, and its cleaning ran 60 px out.
+        from types import SimpleNamespace
+        image = np.full((400, 200, 3), 255, np.uint8)
+        image[60:160, 56:140] = 0  # a blot of the drawing running into the column's box
+        column = SimpleNamespace(xyxy=(40, 50, 60, 350), lines=[quad(40, 50, 60, 350)])
+        boxes = quality.other_boxes(image, [column, None], None)
+        self.assertFalse(boxes[60:160, 62:140].any())
+        self.assertTrue(boxes[50:350, 40:60].all())
+
+    def test_outlined_letters_the_detector_mask_reached_only_in_part_are_cleaned_whole(self):
+        # Grand Blue 106 p27: the detector marked only the bottom half of "...THEY"; the outline
+        # only limited the cleaning, and the top of the word stayed in English over the translation.
+        from types import SimpleNamespace
+        image, letters, quads = self.haloed_on_black()
+        image = np.dstack([image] * 3) if image.ndim == 2 else image
+        # A highlight of the drawing ringed in black, just past the end of the first line.
+        cv2.circle(image, (340, 62), 9, (0, 0, 0), -1)
+        cv2.circle(image, (340, 62), 5, (255, 255, 255), -1)
+        raw = np.zeros(letters.shape, np.uint8)
+        raw[68:90, 55:320] = 255  # the first line, from the middle of its letters down
+        raw[105:150, 55:270] = 255
+        region = SimpleNamespace(xyxy=(55, 45, 320, 150), lines=quads, font_size=40,
+                                 mangalate_background={"kind": "contorno"})
+        mask = self.refine_mask(image, raw, [region])
+        top = letters.copy()
+        top[95:, :] = 0
+        self.assertGreater(np.mean(mask[top > 0]), 0.98)
+        self.assertGreater(np.mean(mask[letters > 0]), 0.98)
+        # The art past the outline stays as drawn.
+        near = cv2.dilate(letters, np.ones((41, 41), np.uint8)) > 0
+        self.assertFalse(mask[~near].any())
+        self.assertFalse(mask[55:70, 333:348].any())
+
+    def test_haloed_words_with_a_line_box_reaching_the_tone_stay_outlined_lettering(self):
+        # Grand Blue 106 p27: the box of "LOOK LIKE", grown over its "KE", reached the light
+        # tone beside the speech; only 57% of the light on the lines was closed halo, and the
+        # speech stayed in English as art.  The halo that runs into the tone counts too.
+        image, letters, quads = self.haloed_on_black(tone=(150, 120))
+        quads[1] = quad(55, 105, 290, 150)
+        self.assertEqual(classify_region(image, letters, quads)["kind"], "contorno")
+        self.assertGreater(np.mean(quality.outlined_area(image, quads)[letters > 0]), 0.98)
+
     def test_dark_letters_in_a_white_bubble_are_not_outlined_lettering(self):
         image = noisy_art((420, 200))
         image[30:165, 45:335] = 255  # a narrow white bubble; the art comes right up to it
@@ -446,7 +595,7 @@ class PipelineHookTest(unittest.TestCase):
         self.assertEqual((kept, background.get("sobre_arte")), (["fala"], True))
 
     def haloed_speech(self, text, mode, halo=True, lost=False, texts=None, unmarked=False, bare=None,
-                      ground=170, taller=0, kana_block=None):
+                      ground=170, taller=0, kana_block=None, spill=0):
         """Dark letters with a white halo written straight over the drawing, no paper around."""
         import asyncio
         from types import SimpleNamespace
@@ -462,6 +611,10 @@ class PipelineHookTest(unittest.TestCase):
         if halo:
             image[cv2.dilate(mask, np.ones((7, 7), np.uint8)) > 0] = 255
         image[mask > 0] = 0
+        if spill:  # the detector marks the last line as one patch, running a few pixels past its box
+            x0, y0, w, h = cv2.boundingRect(np.asarray(quads[-1], np.int32))
+            mask = mask.copy()
+            mask[y0 + 4:y0 + h + spill, x0 + 10:x0 + w - 10] = 255
         if unmarked:  # the detector missed the last line whole: on the page, not in its mask
             top = int(np.asarray(quads[-1])[:, 1].min()) - 2
             mask = mask.copy()
@@ -521,6 +674,44 @@ class PipelineHookTest(unittest.TestCase):
         self.assertEqual(self.haloed_speech(speech, "preservar", texts=read)[0], ["fala"])
         self.assertEqual(self.haloed_speech(speech, "preservar", texts=read[:-1] + ["DP"])[0], [])
 
+    def test_haloed_speech_the_detector_mask_runs_a_little_past_is_translated(self):
+        # BC374 p13: the detector mask ran 6 px (0.35 line heights) under the last line of a
+        # speech with a white halo over a dark drawing.  That ink, the bottom of the letters
+        # and their halo, was taken for a line the OCR lost, and the speech stayed in English.
+        speech = "WELL, I GUESS I DESERVE THIS TOO..."
+        for spill in (4, 8):
+            kept, background = self.haloed_speech(speech, "preservar", spill=spill)
+            self.assertEqual((kept, background.get("sobre_arte")), (["fala"], True))
+        # A lost line under it still holds the speech back, also with the mask running past it.
+        self.assertEqual(self.haloed_speech(speech, "preservar", lost=True)[0], [])
+        self.assertEqual(self.haloed_speech(speech, "preservar", lost=True, spill=8)[0], [])
+
+    def test_speech_goes_on_takes_a_whole_line_not_the_edge_of_the_last_one(self):
+        # BC374 p13: the mask of the last line ran 0.35 line heights past its box.  Manga teste
+        # p11 and One Piece 1161 p7: a line lost between tight lines starts as close, at 0.03-0.2.
+        lines = [quad(100, 40 + 20 * i, 300, 56 + 20 * i) for i in range(3)]
+        mask = np.zeros((200, 400), np.uint8)
+        for q in lines:
+            mask[q[0][1] + 2:q[2][1] - 2, 105:295] = 255
+        edge = mask.copy()
+        edge[90:102, 110:290] = 255  # the last line's patch, to 0.35 line heights under the block
+        self.assertFalse(quality.speech_goes_on(edge, lines, lines))
+        lost = mask.copy()
+        lost[99:113, 110:200] = 255  # a short line of its own from 0.2 to 1.05 line heights under it
+        self.assertTrue(quality.speech_goes_on(lost, lines, lines))
+        above = mask.copy()
+        above[22:36, 110:200] = 255  # and one over it
+        self.assertTrue(quality.speech_goes_on(above, lines, lines))
+        joined = mask.copy()
+        joined[90:113, 110:200] = 255  # a lost line in one patch with the last line: it runs a line past
+        self.assertTrue(quality.speech_goes_on(joined, lines, lines))
+        slivers = mask.copy()
+        slivers[98:101, 110:200] = 255  # the detector marked only the tops of a lost line
+        self.assertTrue(quality.speech_goes_on(slivers, lines, lines))
+        close = mask.copy()
+        close[97:104, 110:200] = 255  # letters of their own right under it, only 0.45 line heights tall
+        self.assertTrue(quality.speech_goes_on(close, lines, lines))
+
     def test_haloed_speech_with_some_paper_around_gets_its_halo(self):
         # Manga teste p13, p15: letters with a halo, half of the lines on paper and the last ones
         # over a table or hair (44.5% of paper around).  With 20% or 42% of paper, as with none,
@@ -551,6 +742,48 @@ class PipelineHookTest(unittest.TestCase):
         plain = page(fill=(170, 170, 170), size=(420, 260))
         plain[mask > 0] = 0
         self.assertFalse(quality.halo_paint(plain, partial, quads)[0][letters].any())
+
+    def test_a_thin_halo_the_detector_mask_covers_gives_its_own_white(self):
+        # BC374 p13: a 2 px white halo on a small page, and a detector mask that covered it whole.
+        # Measured around the mask, past the halo, its colour was the grey of the drawing (211),
+        # and the translation got a grey halo.
+        mask, quads = BackgroundTest.paragraph(BackgroundTest, page(size=(420, 260)))
+        for ground in (90, 170):
+            image = page(fill=(ground, ground, ground), size=(420, 260))
+            image[cv2.dilate(mask, np.ones((5, 5), np.uint8)) > 0] = 255
+            image[mask > 0] = 0
+            _, colour = quality.halo_paint(image, cv2.dilate(mask, np.ones((9, 9), np.uint8)), quads)
+            self.assertGreaterEqual(min(colour), 245)
+        # A cream halo the mask follows keeps its colour.
+        image = page(fill=(90, 90, 90), size=(420, 260))
+        image[cv2.dilate(mask, np.ones((7, 7), np.uint8)) > 0] = (235, 225, 200)
+        image[mask > 0] = 0
+        self.assertEqual(tuple(int(c) for c in quality.halo_paint(image, mask, quads)[1]), (235, 225, 200))
+
+    def test_white_letters_with_a_dark_outline_get_no_white_halo(self):
+        # Measured right next to the dark strokes, the white inside letters drawn white with a
+        # dark outline was taken for a halo: on a dark drawing they got a white one and passed as
+        # speech over it.  Only the light outside the letters is a halo.
+        mask, quads = BackgroundTest.paragraph(BackgroundTest, page(size=(420, 260)))
+        loose = cv2.dilate(mask, np.ones((9, 9), np.uint8))
+        for ground in (40, 90):
+            image = page(fill=(ground, ground, ground), size=(420, 260))
+            image[cv2.dilate(mask, np.ones((5, 5), np.uint8)) > 0] = 0
+            image[mask > 0] = 255
+            _, colour = quality.halo_paint(image, loose, quads)
+            self.assertLessEqual(max(colour), ground + 10)
+            self.assertLess(quality.halo_cover(image, loose, quads), quality.HALO_COVER)
+        # One line of thick letters whose insides ("A", "O", "D") hold a hole of their own.
+        letters = np.zeros((160, 600), np.uint8)
+        cv2.putText(letters, "WHAT ARE YOU DOING?!", (40, 90), cv2.FONT_HERSHEY_SIMPLEX, 1.2, 255, 3)
+        ys, xs = np.nonzero(letters)
+        line = [quad(xs.min() - 2, ys.min() - 2, xs.max() + 2, ys.max() + 2)]
+        image = np.full((160, 600, 3), 60, np.uint8)
+        image[cv2.dilate(letters, np.ones((5, 5), np.uint8)) > 0] = 0
+        image[letters > 0] = 255
+        loose = cv2.dilate(letters, np.ones((11, 11), np.uint8))
+        self.assertLessEqual(max(quality.halo_paint(image, loose, line)[1]), 70)
+        self.assertLess(quality.halo_cover(image, loose, line), quality.HALO_COVER)
 
     def test_lines_unread_finds_empty_or_scrap_lines_only(self):
         wide, short = quad(20, 455, 213, 466), quad(564, 730, 596, 748)
@@ -1207,6 +1440,145 @@ class LineRepairTest(unittest.TestCase):
         def __init__(self, pts, text, prob, direction="h"):
             self.pts, self.text, self.prob, self.direction = np.asarray(pts), text, prob, direction
 
+    def haloed_lines(self, lines, halo=True, marked=(1, 3), ground=30):
+        # Dark letters with a white halo over a dark drawing of thin light streaks, no balloon.
+        gray, _, ink = self.lettered(lines, step=28)
+        letters = gray < 128
+        page = np.full_like(gray, ground)
+        page[:, ::6] = 220  # the streaks
+        if halo:
+            page[cv2.dilate(letters.astype(np.uint8), np.ones((7, 7), np.uint8)) > 0] = 255
+        page[letters] = 0
+        # The detector marked only the middle lines; the first and the last have no mask and no box.
+        mask = np.zeros_like(gray)
+        for x0, y0, x1, y1 in ink[slice(*marked)]:
+            mask[y0:y1, x0:x1] = 255
+        boxes = [(x0 - 1, y0 - 1, x1 + 1, y1 + 1) for x0, y0, x1, y1 in ink[slice(*marked)]]
+        return page, mask, boxes, ink
+
+    def test_lines_of_a_haloed_speech_without_mask_are_found_by_their_halo(self):
+        # Manga teste p11: "...I'LL" over the speech and "FEELING." under it had no mask and no
+        # box; the speech stayed as drawn, in English.  A row of letters in the halo right above
+        # or below the block is one of its lines.
+        page, mask, boxes, ink = self.haloed_lines(["SO I", "GUESS WE", "WALK HOME", "TONIGHT."])
+        repaired, _ = repair_lines(mask, boxes, page, rebuild=True)
+        found = sorted((b for b, source in repaired if source is None), key=lambda b: b[1])
+        self.assertEqual(len(found), 2, found)
+        for box, line in zip(found, [ink[0], ink[3]]):
+            self.assertTrue(box[0] <= line[0] + 2 and box[2] >= line[2] - 2 and abs(box[1] - line[1]) <= 3
+                            and abs(box[3] - line[3]) <= 3, (box, line))
+
+    def test_letters_without_halo_or_far_from_the_speech_are_not_its_lines(self):
+        # Without the halo the letters sink into the drawing; a speech two lines up is another one.
+        page, mask, boxes, _ = self.haloed_lines(["SO I", "GUESS WE", "WALK HOME", "TONIGHT."], halo=False)
+        self.assertEqual([b for b, source in repair_lines(mask, boxes, page, rebuild=True)[0] if source is None], [])
+        page, mask, boxes, ink = self.haloed_lines(["FAR AWAY", "", "SO I", "GUESS WE", "WALK HOME"], marked=(2, 4))
+        found = [b for b, source in repair_lines(mask, boxes, page, rebuild=True)[0] if source is None]
+        self.assertEqual(len(found), 1, found)  # the line under it, not the far one
+        self.assertGreater(found[0][1], boxes[-1][3] - 2)
+
+    @staticmethod
+    def blob(page, boxes):
+        """The detector mask over a speech on the drawing: one blob over all its lines."""
+        mask = np.zeros_like(page)
+        mask[min(b[1] for b in boxes):max(b[3] for b in boxes), min(b[0] for b in boxes):max(b[2] for b in boxes)] = 255
+        return mask
+
+    def test_box_short_of_a_haloed_line_grows_over_its_halo_letters(self):
+        # Manga teste p11: the box of "GET USED" left out its first and last letters ("ET USE"),
+        # and Grand Blue 106 p27 the "KE" of "LOOK LIKE", which stayed in English.  Letters in
+        # the halo right beside a line, as tall as its own, are the rest of it.
+        page, _, _, ink = self.haloed_lines(["SO I", "GUESS WE", "WALK HOME"], marked=(0, 3))
+        boxes = [(x0 - 1, y0 - 1, x1 + 1, y1 + 1) for x0, y0, x1, y1 in ink]
+        boxes[1] = (boxes[1][0], boxes[1][1], boxes[1][2] - 22, boxes[1][3])  # "GUESS W"
+        boxes[2] = (boxes[2][0] + 16, boxes[2][1], boxes[2][2], boxes[2][3])  # "ALK HOME"
+        mask = self.blob(page, boxes)
+        repaired = sorted((b for b, _ in repair_lines(mask, boxes, page, rebuild=True)[0]), key=lambda b: b[1])
+        self.assertEqual(len(repaired), 3, repaired)
+        for box, line in zip(repaired, ink):
+            self.assertTrue(box[0] <= line[0] and box[2] >= line[2], (box, line))
+
+    def test_box_beside_letters_without_halo_or_past_a_gap_keeps_its_size(self):
+        page, _, _, ink = self.haloed_lines(["SO I", "GUESS WE", "WALK HOME"], marked=(0, 3), halo=False)
+        boxes = [(x0 - 1, y0 - 1, x1 + 1, y1 + 1) for x0, y0, x1, y1 in ink]
+        boxes[1] = (boxes[1][0], boxes[1][1], boxes[1][2] - 22, boxes[1][3])
+        mask = self.blob(page, boxes)
+        self.assertEqual(sorted(b for b, _ in repair_lines(mask, boxes, page, rebuild=True)[0]), sorted(boxes))
+        # Another word in the halo on the same row, past more than a word gap: another speech.
+        page, _, _, ink = self.haloed_lines(["SO I", "GUESS WE", "WALK HOME"], marked=(0, 3))
+        x0, y0, x1, y1 = ink[1]
+        word = np.zeros_like(page)
+        cv2.putText(word, "OK", (x1 + 40, y1 - 1), cv2.FONT_HERSHEY_SIMPLEX, 0.9, 255, 2)
+        page[cv2.dilate(word, np.ones((7, 7), np.uint8)) > 0] = 255
+        page[word > 0] = 0
+        boxes = [(a - 1, b - 1, c + 1, d + 1) for a, b, c, d in ink]
+        mask = self.blob(page, boxes)
+        self.assertEqual(sorted(b for b, _ in repair_lines(mask, boxes, page, rebuild=True)[0]), sorted(boxes))
+        # Grand Blue 106 p32: a small face with toned hair, drawn in a white outline right beside a
+        # line, and a light tone right after another: neither is a letter of the row.
+        page, _, _, ink = self.haloed_lines(["SO I", "GUESS WE", "WALK HOME"], marked=(0, 3))
+        x0, y0, x1, y1 = ink[1]
+        lh = y1 - y0
+        face = np.zeros_like(page)
+        cv2.ellipse(face, (x1 + 6 + lh // 2, (y0 + y1) // 2), (lh // 2, lh // 2), 0, 0, 360, 255, -1)
+        face[y0:y1, x1:x1 + 2 * lh][1::4, 1::4] = 0  # the light dots of its tone
+        page[cv2.dilate(face, np.ones((7, 7), np.uint8)) > 0] = 255
+        page[face > 0] = 0
+        x0, y0, x1, y1 = ink[2]
+        page[y0 - 3:y1 + 3, x1:x1 + lh] = 255
+        page[y0 - 3:y1 + 3, x1:x1 + lh][2::4, 4::4] = 0  # its dots
+        boxes = [(a - 1, b - 1, c + 1, d + 1) for a, b, c, d in ink]
+        mask = self.blob(page, boxes)
+        self.assertEqual(sorted(b for b, _ in repair_lines(mask, boxes, page, rebuild=True)[0]), sorted(boxes))
+
+    def test_letters_and_halo_of_a_speech_over_the_drawing_are_cleaned_whole(self):
+        # Manga teste p11: "...I'LL" and "FEELING." had no detector mask; the cleaning took them
+        # only by chance (pure black next to the masked letters, read as an outline) and a box
+        # a few pixels wider left their halo on the page.  A dark letter enclosed by the light
+        # halo on a line is cleaned with its halo, soft rim included.
+        import speed
+        from types import SimpleNamespace
+        page, mask, _, ink = self.haloed_lines(["SO I", "GUESS WE", "WALK HOME", "TONIGHT."], marked=(1, 3), ground=10)
+        x0, y0, x1, y1 = ink[0]
+        page[y0 - 40:y0 - 20, x0:x0 + 15] = 255  # a light patch of the drawing, two lines up,
+        page[y0 - 35:y0 - 25, x0 + 4:x0 + 11] = 0  # with a dark mark in it
+        letters = page == 0
+        halo = (page == 255) & (cv2.dilate(letters.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0)
+        page = cv2.GaussianBlur(page, (3, 3), 0)  # the soft edges of a scan
+        quads = [[[a - 1, b - 1], [c + 1, b - 1], [c + 1, d + 1], [a - 1, d + 1]] for a, b, c, d in ink]
+        region = SimpleNamespace(lines=np.array(quads, np.float32), font_size=y1 - y0,
+                                 xyxy=(min(b[0] for b in ink), min(b[1] for b in ink), max(b[2] for b in ink),
+                                       max(b[3] for b in ink)),
+                                 mangalate_background={"kind": "tracos", "fala": True, "sobre_arte": True})
+        image = np.dstack([page] * 3)
+        area = speed.paint_halos(image, cv2.dilate(mask, np.ones((21, 21), np.uint8)), [region], mask)[1] > 0
+        for a, b, c, d in ink:
+            self.assertGreater(area[b:d, a:c][letters[b:d, a:c]].mean(), 0.98)
+            self.assertGreater(area[b - 3:d + 3, a - 3:c + 3][halo[b - 3:d + 3, a - 3:c + 3]].mean(), 0.98)
+        self.assertFalse(area[y0 - 40:y0 - 20, x0:x0 + 15].any())  # the drawing away from the lines stays
+
+    def test_haloed_lines_are_read_with_the_drawing_around_them_white(self):
+        # Manga teste p11: the OCR read the streaks next to the halo as strokes ("GET USED TO
+        # THIS" read "TIUSE ITOITHI").  On the copy for the OCR only the letters stay around the lines.
+        page, mask, boxes, ink = self.haloed_lines(["SO I", "GUESS WE", "WALK HOME", "TONIGHT."], marked=(0, 4))
+        self.assertEqual(quality.haloed_lines(page, boxes), [0, 1, 2, 3])
+        rgb = np.dstack([page] * 3)
+        white = quality.halo_reading(rgb, boxes)[:, :, 0]
+        letters = page == 0
+        self.assertTrue((white[letters] == 0).all())  # every letter kept
+        x0, y0, x1, y1 = boxes[1]
+        around = np.zeros_like(letters)
+        around[y0 - 4:y1 + 4, x0 - 4:x1 + 4] = True
+        # The drawing next to them is white (bits of ground between letters, closed by their halos, may stay).
+        self.assertGreater(np.mean(white[around & ~letters] == 255), 0.95)
+        self.assertTrue((white[:20] == page[:20]).all())  # and the page away from them as it was
+
+    def test_lines_in_a_balloon_or_without_halo_are_not_read_again(self):
+        gray, mask, ink = self.lettered(["SO I", "GUESS WE", "WALK HOME"], step=28)
+        self.assertEqual(quality.haloed_lines(gray, ink), [])
+        page, mask, boxes, ink = self.haloed_lines(["SO I", "GUESS WE", "WALK HOME", "TONIGHT."], halo=False)
+        self.assertEqual(quality.haloed_lines(page, boxes), [])
+
     def test_edge_lines_are_rebuilt_in_both_modes(self):
         # Manga teste p4: "IF I WIN, ... IN DEBT." over the drawing is read whole and translated
         # preserving the art too (a held speech kept its widened lines, and the stroke one of them
@@ -1464,6 +1836,77 @@ class OcrRescueTest(unittest.TestCase):
         result, seen, _ = self.run_ocr(lines, [lines[1]])
         self.assertEqual(seen, {})
         self.assertEqual(len(result), 1)
+
+    def test_last_two_dropped_lines_are_both_read_again(self):
+        # Webtoon in a narrow condensed font: the last two lines of a caption were dropped; the
+        # second was read again beside the first, and the last one, beside only a dropped line,
+        # stayed in English under the translation.
+        lines = [self.Line((100, 40 + i * 42, 300, 68 + i * 42)) for i in range(3)]  # gaps of half a line
+        result, seen, ctx = self.run_ocr(lines, lines[1:])
+        self.assertEqual(len(result), 3)
+        self.assertEqual(len(ctx.mangalate_ocr_rescued), 2)
+
+    def test_line_beside_a_dropped_line_that_stays_dropped_is_left_alone(self):
+        # The line read again is a drawing ("JJJJ"): the one beside it is not read through it.
+        lines = [self.Line((100, 40 + i * 42, 300, 68 + i * 42)) for i in range(3)]  # gaps of half a line
+        result, seen, ctx = self.run_ocr(lines, lines[1:], reading="JJJJ")
+        self.assertEqual((seen["count"], len(result)), (1, 1))
+
+    def read_haloed(self, page, boxes):
+        """The OCR hook over a real page: the OCR reads "ON WHITE" surely where the drawing
+        around the lines was painted white, and the page reading drops the third line."""
+        import asyncio
+        import types
+        from types import SimpleNamespace
+        from engine_compat import rescue_ocr
+        lines = [self.Line(b) for b in boxes]
+        x0, y0, x1, y1 = boxes[0]
+        async def dispatch(name, image, textlines, config, device, verbose):
+            on_white = image[(y0 + y1) // 2, x0 - 7, 0] == 255
+            for line in textlines:
+                line.text, line.prob = ("ON WHITE", 0.6) if on_white else ("PAGE", 0.05)
+            return list(textlines)
+        async def original(self, config, ctx):
+            kept = []
+            for line, reading in zip(ctx.textlines, [("B4D", 0.3), ("GOOD", 0.9), None, ("FINE", 0.8)]):
+                if reading:
+                    line.text, line.prob = reading
+                    kept.append(line)
+            return kept
+        class Quad:
+            def __init__(self, pts, text, prob):
+                self.pts, self.text, self.prob, self.direction = np.asarray(pts), text, prob, "h"
+        ocr_module, utils_module = types.ModuleType("manga_translator.ocr"), types.ModuleType("manga_translator.utils")
+        ocr_module.dispatch, utils_module.Quadrilateral = dispatch, Quad
+        ocr_config = SimpleNamespace(ocr="48px", prob=None, model_copy=lambda deep: SimpleNamespace(ocr="48px", prob=None))
+        config = SimpleNamespace(ocr=ocr_config, render=SimpleNamespace(font_color_fg=None, font_color_bg=None))
+        ctx = SimpleNamespace(textlines=lines, img_rgb=np.dstack([page] * 3))
+        saved = {key: sys.modules.get(key) for key in ("manga_translator.ocr", "manga_translator.utils")}
+        sys.modules.update({"manga_translator.ocr": ocr_module, "manga_translator.utils": utils_module})
+        try:
+            result = asyncio.run(rescue_ocr(original)(SimpleNamespace(device="cpu", verbose=False), config, ctx))
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    sys.modules.pop(key, None)
+                else:
+                    sys.modules[key] = value
+        return lines, result
+
+    def test_haloed_lines_keep_the_surer_reading_made_on_white(self):
+        # Manga teste p11: the drawing next to the halo was read as strokes and the speech was
+        # translated with the wrong sense.  Each haloed line keeps the surer of its two readings,
+        # and one dropped on the page is kept when read on white as surely as the OCR keeps a line.
+        page, _, boxes, _ = LineRepairTest.haloed_lines(LineRepairTest(), ["SO I", "GUESS WE", "WALK HOME", "TONIGHT."],
+                                                       marked=(0, 4))
+        lines, result = self.read_haloed(page, boxes)
+        self.assertEqual([line.text for line in lines], ["ON WHITE", "GOOD", "ON WHITE", "FINE"])
+        self.assertEqual(len(result), 4)
+
+    def test_lines_in_a_balloon_keep_the_page_reading(self):
+        gray, _, ink = LineRepairTest.lettered(LineRepairTest(), ["SO I", "GUESS WE", "WALK HOME", "TONIGHT."], step=28)
+        lines, _ = self.read_haloed(gray, [(x0 - 1, y0 - 1, x1 + 1, y1 + 1) for x0, y0, x1, y1 in ink])
+        self.assertEqual([line.text for line in lines[:2]], ["B4D", "GOOD"])
 
 
 class BubbleGlyphTest(unittest.TestCase):
