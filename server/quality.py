@@ -2938,7 +2938,8 @@ def translation_problems(sources, translations, glossary=(), earlier=""):
 # are touched, and only when exactly one common word comes out.
 OCR_CONFUSIONS = (("LI", "U"), ("LJ", "U"), ("IJ", "U"), ("E", "F"), ("F", "E"), ("O", "D"), ("O", "C"), ("O", "Q"),
                   ("C", "D"), ("I", "D"), ("I", "L"), ("I", "T"), ("L", "I"), ("0", "O"), ("1", "I"), ("5", "S"),
-                  ("7", "T"), ("8", "B"), ("/", "I"), ("|", "I"), ("VV", "W"), ("RN", "M"))
+                  ("7", "T"), ("8", "B"), ("/", "I"), ("|", "I"), ("VV", "W"), ("RN", "M"), ("Q", "O"))
+OCR_FINAL_L = 5  # a final "L" read as "A" after an "A" ("HOSPITAA") is undone in words this long (letters)
 DIGIT_WORD_LETTERS = 3  # a word with one stray digit is retried as every letter only with this many letters
 _WORDS = None
 
@@ -2992,6 +2993,9 @@ def _ocr_candidates(word, depth):
                 while start >= 0:
                     nxt.add(w[:start] + right + w[start + len(wrong):])
                     start = w.find(wrong, start + 1)
+            # Anywhere else an "L" read as "A" turned cries and names into words ("GAA!", "MAIA").
+            if len(w) >= OCR_FINAL_L and w.endswith("AA"):
+                nxt.add(w[:-1] + "L")
         found |= nxt
         frontier = nxt
     return found

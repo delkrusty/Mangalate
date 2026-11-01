@@ -2533,6 +2533,22 @@ class OuroSevenTest(unittest.TestCase):
                      "TO SECTOR7", "ROUND2!"):  # a number after a word is no plural "S"
             self.assertEqual(quality.fix_ocr_words(text), (text, 0))
 
+    def test_o_read_as_q_and_l_read_as_a_at_the_end_of_a_long_word(self):
+        # Manga teste p22: "HOSPITAL" was read "HQSPITAA" and the AI wrote "as taxas da HQSPITAA";
+        # One Piece 1153 "NATIONAA" the same way.  An "L" read as "A" is undone only after an "A" at
+        # the end of a word of 5 letters or more: anywhere else it turned cries and names into
+        # other words ("GAA!" into "GAL!", "MAIA" into "MAIL", the name "HELA" into "HELL").
+        cases = {"WE NEED IT FOR HQSPITAA BILLS.": "WE NEED IT FOR HOSPITAL BILLS.",
+                 "A MATTER OF NATIONAA PRIDE": "A MATTER OF NATIONAL PRIDE",
+                 "HQLD ON!": "HOLD ON!"}
+        for text, fixed in cases.items():
+            self.assertEqual(quality.fix_ocr_words(text)[0], fixed)
+        # Cries, names and words with a real Q or A: untouched.
+        for text in ("AAAAH!!", "GAAAH", "KYAA!", "BAAA", "GYAA- AAA!!!", "HANA", "ARIA", "QATAR", "IRAQ",
+                     "AQUA", "SHE IS A QUEEN", "GAA!", "GAAA!", "GAAA...", "PAA!", "GAA- AAA!", "NIA, WAIT!",
+                     "I MET MAIA.", "AIRA", "SELA", "BALA", "TALA", "WALA", "DELA", "HELA"):
+            self.assertEqual(quality.fix_ocr_words(text), (text, 0))
+
     def test_two_rows_of_letters_are_speech(self):
         self.assertFalse(quality.reads_as_speech("ASS"))
         self.assertTrue(quality.reads_as_speech("ASS", several_rows=True))
