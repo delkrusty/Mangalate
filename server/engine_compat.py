@@ -713,6 +713,31 @@ def _block_lines(region):
     return [line for line, text in zip(region.lines, texts) if is_sound_effect(str(text))]
 
 
+def drop_window_buttons(region):
+    """The buttons in the corner of a system window, read by the OCR as a line ("曰回"), leave the region.
+
+    Manhwa teste p51: they were translated with the speech and would be cleaned.  A line with no
+    Latin letter, digit or end of sentence goes when another line of the window has them; a line of
+    "!!" or "..." is speech.
+    """
+    import functools
+    import re
+    import numpy as np
+    texts = list(getattr(region, "texts", None) or [])
+    lines = np.asarray(getattr(region, "lines", []))
+    if len(texts) != len(lines) or len(texts) < 2:
+        return
+    keep = [i for i, text in enumerate(texts) if re.search(r"[A-Za-z0-9À-ÿ.!?…]", str(text))]
+    if not keep or len(keep) == len(texts):
+        return
+    region.lines = lines[keep]
+    region.texts = [texts[i] for i in keep]
+    region.text = " ".join(str(t) for t in region.texts)
+    for name, attr in vars(type(region)).items():  # the engine's box of the lines is computed once
+        if isinstance(attr, functools.cached_property):
+            region.__dict__.pop(name, None)
+
+
 def classify_regions(original_merge):
     """Decide once, before translation, which blocks are cleaned and translated.
 
@@ -764,6 +789,21 @@ def classify_regions(original_merge):
                 ctx.mangalate_preserved.append(region)
                 continue
             region.mangalate_background = classify_region(image, raw, region.lines)
+            # A system window of a game webtoon (quality.system_window): translated, cleaned inside
+            # its frame and lettered there in the colour and size of its letters.
+            if region.mangalate_background["kind"] in ("interior", "art", "tracos"):
+                try:
+                    from quality import system_window
+                    window = system_window(image, region.lines)
+                except Exception as exc:  # the region goes on as before
+                    print(f"System window skipped: {type(exc).__name__}", flush=True)
+                    window = None
+                if window is not None:
+                    region.mangalate_background["kind"] = "janela"
+                    region.mangalate_window = window
+                    drop_window_buttons(region)
+                    kept.append(region)
+                    continue
             # Outlined lettering over the art is translated; only the letters and their outline are cleaned.
             if region.mangalate_background["kind"] == "contorno":
                 from quality import outlined_area, outlined_colours
@@ -1054,6 +1094,21 @@ def bubble_layout(rendering, text_render):
                     continue
             if not text or not horizontal(region) or has_cjk(text):
                 continue
+            window = getattr(region, "mangalate_window", None)
+            if (getattr(region, "mangalate_background", None) or {}).get("kind") == "janela" and window:
+                try:
+                    shaped = window_plan(img, region, window, text, boxes[:i] + boxes[i + 1:],
+                                         max(8, round(minimum * 0.6)), font_size_offset or 0)
+                except Exception as exc:  # the region goes on to the plans of a bubble
+                    print(f"Window layout skipped: {type(exc).__name__}", flush=True)
+                    shaped = None
+                if shaped is not None:
+                    region.mangalate_shaped = shaped
+                    region.font_size = shaped["size"]
+                    x0, y0, x1, y1 = shaped["box"]
+                    points[i] = np.array([[[x0, y0], [x1, y0], [x1, y1], [x0, y1]]], dtype=np.int64)
+                    planned += 1
+                    continue
             def layout(size, width, height, text=text, lang=region.target_lang):
                 return text_render.calc_horizontal(size, text, width, height, lang, False)
             others = boxes[:i] + boxes[i + 1:]
@@ -1165,6 +1220,32 @@ def bubble_layout(rendering, text_render):
         print(f"Bubble layout: {planned} of {len(text_regions)} regions fitted to the bubble", flush=True)
         return points
 
+    def window_plan(img, region, window, text, others, minimum, offset):
+        """A system window: the room is the inside of its frame, the letters in its condensed sans
+        (lettering.window_font), in capitals when the original is, as tall as the original capitals."""
+        import re
+        font = lettering.window_font()
+        source = str(getattr(region, "text", "") or "")
+        if re.search(r"[A-Za-z]", source) and not re.search(r"[a-z]", source):
+            text = text.upper()
+        import cv2
+        from quality import WINDOW_FRAME_LIGHT, WINDOW_LIGHTER
+        rx0, ry0, rx1, ry1 = (int(v) for v in window["rect"])
+        body = np.asarray(window["body"], np.uint8)
+        room = np.empty_like(img[:, :, :3])
+        room[:] = 255 - body  # nothing outside the frame is room
+        room[max(0, ry0):max(0, ry1 + 1), max(0, rx0):max(0, rx1 + 1)] = body
+        # Nor what stays light in the cleaned window: its buttons in a corner (Manhwa teste p51).
+        gray = cv2.cvtColor(np.ascontiguousarray(img[:, :, :3]), cv2.COLOR_RGB2GRAY)
+        ground = float(np.dot(body, (0.299, 0.587, 0.114)))
+        light = cv2.dilate((gray >= max(WINDOW_FRAME_LIGHT, ground + WINDOW_LIGHTER)).astype(np.uint8),
+                           np.ones((5, 5), np.uint8)) > 0
+        room[light] = 255 - body
+        size = line_height(region)
+        target = window["letters"] / lettering.capital_share(font)
+        return lettering.plan_shaped(room, tuple(int(v) for v in region.xyxy), others, text, font, size, minimum,
+                                     offset=offset, scale=target / size)
+
     def render(img, region, dst_points, hyphenate, line_spacing, disable_font_border):
         halo = getattr(region, "mangalate_halo", None)
         if halo is not None:
@@ -1181,6 +1262,9 @@ def bubble_layout(rendering, text_render):
 
     def draw(img, region, dst_points, hyphenate, line_spacing, disable_font_border):
         shaped = getattr(region, "mangalate_shaped", None)
+        window = getattr(region, "mangalate_window", None)
+        if shaped is not None and window and (getattr(region, "mangalate_background", None) or {}).get("kind") == "janela":
+            return lettering.draw_shaped(img, shaped, window["fg"], None)  # the colour of its letters, no outline
         if shaped is not None:
             fg, bg = rendering.fg_bg_compare(*region.get_font_colors())
             return lettering.draw_shaped(img, shaped, fg, None if disable_font_border else bg)
@@ -1444,6 +1528,24 @@ async def refine_mask_consistently(self, config, ctx):
                 mask[keep] = 0
         except Exception as exc:  # never lose a page over this
             print(f"Kept lines skipped: {type(exc).__name__}", flush=True)
+    # A system window: the cleaning stays inside its frame (the frame and the drawing around stay),
+    # and the cleaning of a bubble next to it too.
+    from quality import other_boxes
+    for region in ctx.text_regions or []:
+        window = getattr(region, "mangalate_window", None)
+        if (getattr(region, "mangalate_background", None) or {}).get("kind") != "janela" or not window:
+            continue
+        try:
+            rx0, ry0, rx1, ry1 = window["rect"]
+            pad = int(max(8, region.font_size))
+            x0, y0, x1, y1 = max(0, rx0 - pad), max(0, ry0 - pad), min(w, rx1 + 1 + pad), min(h, ry1 + 1 + pad)
+            allowed = np.zeros((h, w), bool)
+            allowed[max(0, ry0):max(0, ry1 + 1), max(0, rx0):max(0, rx1 + 1)] = True
+            allowed |= other_boxes(ctx.img_rgb, ctx.text_regions, region)
+            mask = mask.copy()
+            mask[y0:y1, x0:x1][~allowed[y0:y1, x0:x1]] = 0
+        except Exception as exc:  # never lose a page over this
+            print(f"Window mask skipped: {type(exc).__name__}", flush=True)
     # Outlined lettering over the art, or lettering crossed by strokes of the drawing: the
     # cleaning stays on the letters (and their outline).
     from quality import letters_area, other_boxes, outlined_area, outlined_on_lines
@@ -1484,8 +1586,8 @@ def validate_page_translations(original_translate):
         result = await original_translate(self, config, ctx)
         if not legacy_quality() and isinstance(result, list):
             import re
-            from quality import (normalize_spacing, page_names, same_text, sentence_case, source_names, tidy_start,
-                                 unchanged_english)
+            from quality import (normalize_spacing, page_names, same_text, sentence_case, source_names, square_brackets,
+                                 tidy_start, unchanged_english)
             texts = [getattr(region, "translation", None) for region in result]
             names = page_names([t for t in texts if isinstance(t, str)])
             names |= {g["target"] for g in (page_context() or {}).get("glossary", [])}
@@ -1521,6 +1623,7 @@ def validate_page_translations(original_translate):
                     own = names | source_names(getattr(region, "text", ""), region.translation)
                     fixed = sentence_case(region.translation, own)
                     fixed = tidy_start(fixed, getattr(region, "text", ""), own)
+                    fixed = square_brackets(fixed, getattr(region, "text", ""))
                     region.translation = normalize_spacing(fixed)
         blank = sum(not getattr(region, "translation", "").strip() for region in regions)
         unchanged = sum(getattr(region, "translation", "").strip().lower() == region.text.strip().lower()

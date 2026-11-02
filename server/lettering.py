@@ -270,6 +270,19 @@ def font_file():
     return path if path and os.path.exists(path) else None
 
 
+# The system windows of a game webtoon (quality.system_window) are lettered in a condensed sans:
+# Roboto Condensed Bold (Apache 2.0, fonts-roboto-unhinted in the image).  Their letters are
+# narrow (Manhwa teste p36: a line of 28 characters in 516 px, capitals of 30 px), and the same
+# line at the same capitals takes 581 px in Roboto Condensed, 685 in the comic font and 795 in
+# DejaVu Sans Bold.
+WINDOW_FONTS = ("/usr/share/fonts/truetype/roboto/unhinted/RobotoCondensed-Bold.ttf",)
+
+
+def window_font():
+    """The font of a system window; the shaped lettering's font when the image lacks it."""
+    return next((path for path in WINDOW_FONTS if os.path.exists(path)), None) or font_file()
+
+
 # The original lettering is in capitals; mixed-case Portuguese at the same em size
 # reads smaller (x-height ~0.5 em against caps ~0.7 em), so the shaped plan may go
 # further than the rectangle plan when the bubble has the room.

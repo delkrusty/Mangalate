@@ -8,6 +8,8 @@ ARG UPSTREAM_REV=d6de6ab62a7be6afc0d07a3184149cdefbcd32f2
 RUN git clone https://github.com/zyddnys/manga-image-translator.git . && git checkout "$UPSTREAM_REV"
 RUN python -c "from pathlib import Path;p=Path('requirements.txt');s=p.read_text();p.write_text('\n'.join(x for x in s.splitlines() if not x.startswith(('torch==','torchvision=='))).replace('@fix/python313-cython3','@3ca3d8f0cbd9701f4a765f97fbad43f9b2fe80a6'))"
 RUN pip install --no-cache-dir torch==2.14.1 torchvision==0.29.1 --index-url https://download.pytorch.org/whl/cpu && pip install --no-cache-dir -r requirements.txt
+# Roboto Condensed: the lettering of the system windows (lettering.WINDOW_FONTS).
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-roboto-unhinted && rm -rf /var/lib/apt/lists/*
 COPY worker.py /mangalate/worker.py
 COPY core.py /mangalate/core.py
 COPY engine_compat.py /mangalate/engine_compat.py
@@ -34,6 +36,8 @@ WORKDIR /app
 ARG UPSTREAM_REV=d6de6ab62a7be6afc0d07a3184149cdefbcd32f2
 RUN git clone https://github.com/zyddnys/manga-image-translator.git . && git checkout "$UPSTREAM_REV"
 RUN python -c "from pathlib import Path;p=Path('requirements.txt');s=p.read_text();p.write_text('\n'.join(x for x in s.splitlines() if not x.startswith(('torch==','torchvision=='))).replace('@fix/python313-cython3','@3ca3d8f0cbd9701f4a765f97fbad43f9b2fe80a6'))" && pip install --no-cache-dir -r requirements.txt
+# Roboto Condensed: the lettering of the system windows (lettering.WINDOW_FONTS).
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-roboto-unhinted && rm -rf /var/lib/apt/lists/*
 COPY worker.py /mangalate/worker.py
 COPY core.py /mangalate/core.py
 COPY engine_compat.py /mangalate/engine_compat.py
@@ -61,6 +65,8 @@ RUN git clone https://github.com/zyddnys/manga-image-translator.git . && git che
 # whole environment, so pip may install into it. Keep the image's CUDA torch builds.
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
 RUN python -c "from pathlib import Path;p=Path('requirements.txt');s=p.read_text();p.write_text('\n'.join(x for x in s.splitlines() if not x.startswith(('torch==','torchvision=='))).replace('@fix/python313-cython3','@3ca3d8f0cbd9701f4a765f97fbad43f9b2fe80a6'))" && pip install --no-cache-dir -r requirements.txt
+# Roboto Condensed: the lettering of the system windows (lettering.WINDOW_FONTS).
+RUN apt-get update && apt-get install -y --no-install-recommends fonts-roboto-unhinted && rm -rf /var/lib/apt/lists/*
 COPY worker.py /mangalate/worker.py
 COPY core.py /mangalate/core.py
 COPY engine_compat.py /mangalate/engine_compat.py
