@@ -90,7 +90,9 @@ def save_diagnostics(folder, ctx, original):
                 # the original capitals, to measure the lettering on the run.
                 try:
                     from quality import letter_height
-                    rows[-1]["letra"] = {"tamanho": int(region.font_size), "original": letter_height(original, region.lines)}
+                    light = getattr(region, "mangalate_light", None)  # light letters on dark: measured before
+                    rows[-1]["letra"] = {"tamanho": int(region.font_size),
+                                         "original": light["letters"] if light else letter_height(original, region.lines)}
                 except Exception as exc:
                     print(f"Letter size skipped: {type(exc).__name__}", flush=True)
     for repair in getattr(ctx, "mangalate_line_repairs", None) or []:

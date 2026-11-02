@@ -804,6 +804,14 @@ def classify_regions(original_merge):
                     drop_window_buttons(region)
                     kept.append(region)
                     continue
+            if region.mangalate_background["kind"] == "interior":
+                # Light letters on a dark ground: their size and colour, for the lettering (the
+                # letters go with the cleaning).
+                try:
+                    from quality import light_on_dark
+                    region.mangalate_light = light_on_dark(image, region.lines)
+                except Exception as exc:  # lettered as before
+                    print(f"Light letters skipped: {type(exc).__name__}", flush=True)
             # Outlined lettering over the art is translated; only the letters and their outline are cleaned.
             if region.mangalate_background["kind"] == "contorno":
                 from quality import outlined_area, outlined_colours
@@ -1147,6 +1155,26 @@ def bubble_layout(rendering, text_render):
                         shaped = roomy
                 except Exception as exc:  # keep the plan of the cleaned patch
                     print(f"Toned bubble skipped: {type(exc).__name__}", flush=True)
+            light = getattr(region, "mangalate_light", None)
+            if light and (getattr(region, "mangalate_background", None) or {}).get("kind") == "interior" \
+                    and lettering.font_file():
+                # Light letters in a blot of ink: its halftone and ragged edge leave no flat patch
+                # around them, and the room was a sliver of it or none (Manhwa teste p3, p10, p20,
+                # p62, p69: letters at half the original size, or the engine's Arial).  The room is
+                # the whole blot, smoothed (lettering.dark_room); the size aims at the original capitals.
+                try:
+                    target = light["letters"] / lettering.capital_share(lettering.font_file())
+                    if shaped is None or shaped["size"] < lettering.BLOCK_BELOW * target:
+                        room = lettering.dark_room(img, light["ground"], line_height(region), boxes[i])
+                        filled = lettering.plan_shaped(
+                            room, boxes[i], others, text, lettering.font_file(), line_height(region),
+                            max(8, round(minimum * 0.6)), offset=font_size_offset or 0,
+                            scale=target / line_height(region))
+                        if filled and (shaped is None or filled["size"] > shaped["size"]):
+                            filled["fg"], filled["bg"] = light["fg"], light["ground"]
+                            shaped = filled
+                except Exception as exc:  # keep the plan of the flat patch
+                    print(f"Dark room skipped: {type(exc).__name__}", flush=True)
             area = getattr(region, "mangalate_halo_area", None)
             if (hull is not None and getattr(region, "mangalate_halo", None) is not None
                     and area is not None and area.shape == img.shape[:2]):
@@ -1265,6 +1293,8 @@ def bubble_layout(rendering, text_render):
         window = getattr(region, "mangalate_window", None)
         if shaped is not None and window and (getattr(region, "mangalate_background", None) or {}).get("kind") == "janela":
             return lettering.draw_shaped(img, shaped, window["fg"], None)  # the colour of its letters, no outline
+        if shaped is not None and shaped.get("fg") is not None:  # the measured colours (a blot of ink)
+            return lettering.draw_shaped(img, shaped, shaped["fg"], None if disable_font_border else shaped["bg"])
         if shaped is not None:
             fg, bg = rendering.fg_bg_compare(*region.get_font_colors())
             return lettering.draw_shaped(img, shaped, fg, None if disable_font_border else bg)

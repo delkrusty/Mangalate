@@ -14,6 +14,7 @@ internal object MangalateWhatsNew {
             null,
             listOf(
                 "Depois de cada atualização, o Mangalate mostra o que mudou. A lista completa fica em Mais › Sobre o Mangalate › O que há de novo.",
+                "Falas de letra branca dentro de manchas pretas saem com letra do tamanho da original, em vez de pequena e fina.",
                 "As janelas de sistema dos webtoons de jogo agora são traduzidas, com letra branca parecida com a original, dentro da moldura.",
                 "Falas escritas por cima do desenho são traduzidas apagando só as letras, sem levar junto a arte em volta.",
                 "Nova opção \"Preservar a arte\", também no servidor. Ligada, as falas sobre o desenho ficam no original. Desligada (experimental), são traduzidas, mas o desenho atrás pode sair borrado.",
