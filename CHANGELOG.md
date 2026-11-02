@@ -4,7 +4,24 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 
 ## Em teste
 
+Nada por enquanto.
+
+## 0.6.0
+
+- **Fala sobre o desenho:** mais falas escritas sobre a arte são traduzidas, limpando só as letras. A opção "Preservar a arte" (também no modo Servidor) decide o que fazer com as demais.
+- **Webtoon:** janelas de sistema dos webtoons de jogo e falas em manchas pretas saem traduzidas, com letra parecida com a original.
+- **Balões:** mais limpos e completos, sem sobra de letra, sem fala pela metade em inglês e sem duas falas misturadas.
+- **O que fica desenhado:** sons, gritos que se leem igual, logotipos, títulos e créditos.
+- **Português:** nomes e termos iguais no capítulo todo, gênero certo e menos letras lidas erradas.
+- **Letreiramento:** letra maior nos balões estreitos, hífen quando precisa e símbolos sem quadradinho.
+- **Servidor:** instalação mais curta (a IA escolhida já vem com o modelo certo) e Ollama como IA de reserva.
+- **App:** tela "O que há de novo", mostrada depois de cada atualização.
+
+Detalhes técnicos de cada mudança no [CHANGELOG](https://github.com/delkrusty/Mangalate/blob/main/CHANGELOG.md#060).
+
 ### Servidor
+- O instalador não pergunta mais o modelo de Groq, Gemini e do segundo modelo do Groq: cada um tem um só, e quem escolhia a IA esperava a chave logo depois. Ollama, OpenRouter e "Outro provedor" continuam perguntando, porque lá o modelo é escolha de quem instala.
+- Os 5 testes do instalador que falhavam no Windows passam. A leitura da área de transferência não decodificava a saída do PowerShell e quebrava; agora lê em UTF-8 e aceita saída vazia. Os testes também deixaram de ler a área de transferência do PC que os roda, que pode ter uma chave de verdade.
 - O Ollama agora traduz de verdade. Com o `gpt-oss:20b`, todo pedido passava de 45 s (só carregar o modelo na primeira página levava 51 s, e o modelo pensava longamente antes de responder). O servidor desistia, deixava o Ollama em pausa e tentava de novo, sem traduzir nenhuma página. Agora uma IA no próprio PC tem até 2 minutos por pedido, e o `gpt-oss` no Ollama recebe o mesmo pedido de raciocínio curto que já recebia no Groq (de 21 s para 9,5 s num pedido de teste). Em 6 páginas num PC com Radeon RX 6600, as 6 saíram traduzidas pelo Ollama, com 6 a 28 s de tradução por página (43 s na primeira), mas com mais erros que o Groq: em 35 falas, 2 com o sentido invertido, 3 com gênero errado e 3 literais demais. Com o raciocínio completo, nas mesmas páginas, 2 de 6 ficaram no original (o modelo gastou a resposta pensando e a devolveu vazia) e as outras levaram de 55 a 98 s; uma das inversões sumiu, os outros erros ficaram. As IAs da internet continuam com 45 s. O guia e o instalador avisam que o `gemma3:4b`, mais leve, erra o sentido com frequência.
 - O Ollama virou a 3ª opção. No instalador, ele aparece logo depois de Groq e Gemini. No rodízio, fica de reserva, como o segundo modelo do Groq: só traduz quando as IAs da internet estão no limite ou quando é a única configurada. Antes, com Groq, Gemini e Ollama juntos, 1 página a cada 3 ia para ele. O instalador também confere, no próprio PC, se o Ollama está aberto e se o modelo digitado foi baixado (um nome errado deixava o Ollama 1 hora em pausa). O guia de IAs e o README agora dizem qual modelo usar pela memória do PC, que o Ollama usa a placa de vídeo (inclusive as AMD RX 6000 que o motor não usa) e o que fazer no Linux quando o Docker não alcança o Ollama.
 

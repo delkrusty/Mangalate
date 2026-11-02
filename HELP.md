@@ -31,7 +31,7 @@ Ligue **Traduzir capítulos ao baixar** antes de baixar e espere a tradução te
 - **Servidor ocupado (HTTP 429):** espere a página atual terminar.
 - **Erro do servidor (HTTP 502):** se a mensagem disser que o limite grátis de todas as IAs acabou, espere ou acrescente outra IA rodando `py setup.py`. Nos outros casos, veja os logs no PC.
 - **Celular não conecta:** use o IP do PC, não `localhost`. Os dois precisam estar no mesmo Wi-Fi. Permita o Docker no firewall só em redes privadas.
-- **Sobrou texto em inglês:** pode ser texto sobre o desenho, que o servidor deixa no original de propósito. Se for dentro de um balão, mande um print do original e do resultado.
+- **Sobrou texto em inglês:** se for sobre o desenho, pode ser o "Preservar a arte" deixando no original de propósito. Se for dentro de um balão, mande um print do original e do resultado.
 - **Texto pequeno:** falas longas em balões pequenos precisam de letra menor. Deixe o ajuste de fonte em zero e use zoom.
 - **Página não aparece traduzida offline:** confira se a tradução terminou e se você está com os mesmos ajustes usados ao baixar.
 

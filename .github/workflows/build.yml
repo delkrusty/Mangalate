@@ -95,13 +95,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="build-${{ github.run_number }}"
           VERSION=$(sed -n 's/^ *versionName = "\(.*\)"/\1/p' app/build.gradle.kts | head -1)
-          # Release notes: the CHANGELOG section of this version, plus the download hint.
-          awk -v v="$VERSION" '/^## /{p = index($0, "## " v) == 1; next} p' CHANGELOG.md > notes.md
-          printf '\nBaixe **Mangalate-arm64-v8a.apk** para celulares atuais ou **Mangalate-universal.apk**. Commit %s.\n' "${GITHUB_SHA::7}" >> notes.md
+          TAG="v$VERSION"
+          # One release per version: a push that does not raise versionName publishes nothing.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "A release $TAG já existe. Suba versionName para publicar uma nova."
+            exit 0
+          fi
+          # Release notes: the summary of this version in the CHANGELOG (up to its first ###), plus the download hint.
+          awk -v v="$VERSION" '/^## /{p = index($0, "## " v) == 1; next} /^### /{if (p) exit} p' CHANGELOG.md > notes.md
+          printf '\nBaixe **Mangalate-arm64-v8a.apk** para celulares atuais ou **Mangalate-universal.apk**.\n' >> notes.md
           gh release create "$TAG" dist/*.apk \
             --target "$GITHUB_SHA" \
-            --title "Mangalate $VERSION (build ${{ github.run_number }})" \
+            --title "Mangalate $VERSION" \
             --notes-file notes.md \
             --latest

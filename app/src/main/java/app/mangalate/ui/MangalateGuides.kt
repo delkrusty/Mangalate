@@ -7,82 +7,61 @@ internal object MangalateGuides {
     val help = listOf(
         GuideArticle(
             "Começar a ler e traduzir",
-            "Abra um capítulo da biblioteca, toque no centro e depois em 文A. Escolha o idioma do texto visível " +
-                "e Português (Brasil), não o país de origem do mangá. No celular funciona sem servidor depois de preparar idiomas. " +
-                "Servidor exige endereço e chave Mangalate. Toque novamente em 文A para ver o original.",
+            "Abra um capítulo, toque no centro e depois em 文A. Escolha o idioma do texto que aparece nos balões " +
+                "(não o país do mangá) e Português (Brasil). Toque em 文A de novo para ver o original.",
         ),
         GuideArticle(
-            "Preparar tradução offline",
-            "Mais › Tradução (Mangalate) › No celular › Preparar idiomas. Na primeira vez, fique conectado até concluir " +
-                "o download. Depois pode traduzir sem internet. Inglês nos balões significa escolher Inglês como idioma original. " +
-                "Letras estilizadas e japonês vertical podem exigir o servidor.",
+            "Modo No celular",
+            "Mais › Tradução (Mangalate) › No celular › Preparar idiomas. Na primeira vez, fique conectado até o " +
+                "download terminar; depois funciona offline. Letra estilizada e japonês vertical traduzem melhor no " +
+                "servidor.",
         ),
         GuideArticle(
-            "Instalar Docker e encontrar a chave Mangalate",
-            "Abra o manual do servidor pelo botão Como montar. Instale Docker e Python e rode python setup.py dentro " +
-                "da pasta server do projeto. O assistente pergunta qual IA vai traduzir, CPU ou GPU e gera sua senha. " +
-                "A chave Mangalate fica em server/secrets/mangalate_key.txt. Copie o conteúdo, não o nome do arquivo, " +
-                "para a Chave Mangalate no app. Ela não é a chave da API de IA.",
+            "Montar o servidor",
+            "Toque em Como montar para abrir o manual. Instale Docker e Python e rode py setup.py na pasta " +
+                "server. O instalador pergunta a placa, a IA e a chave da IA, e no fim mostra a Chave Mangalate, que " +
+                "vai no app. As duas chaves são diferentes: a da IA nunca vai no celular.",
         ),
         GuideArticle(
             "Servidor + IA",
             "O servidor no seu computador lê o texto, apaga o original e escreve a tradução. Só o texto das falas " +
-                "vai para a IA escolhida no instalador, com a sua própria chave (BYOK). Groq e Gemini têm cota grátis e, se você configurar os dois, " +
-                "um assume sozinho quando o outro atinge o limite. O Ollama roda a IA no próprio computador, sem internet; como erra mais, ele fica de reserva " +
-                "e só traduz quando as outras estão no limite ou quando é a única. " +
-                "Mangalate não cobra nem recebe comissão. A chave da IA fica só em server/secrets/provider_key.txt; " +
-                "nunca cole essa chave no celular.",
+                "vai para a IA, com a sua própria chave (BYOK). Groq e Gemini têm cota grátis e se revezam; o Ollama " +
+                "roda no próprio computador e fica de reserva. O Mangalate não cobra nada.",
         ),
         GuideArticle(
             "Conectar o celular ao computador",
-            "Use a mesma rede Wi-Fi. No instalador, permita rede local. No Windows, ipconfig mostra o IPv4 do PC. " +
-                "No app informe http://IP-DO-PC:5003, a chave Mangalate e toque Testar conexão. " +
-                "localhost no celular aponta ao próprio celular, não ao PC. Não abra a porta no roteador. " +
-                "Para servidor na internet, use HTTPS com domínio e firewall.",
+            "Use a mesma rede Wi-Fi. No Windows, ipconfig mostra o IPv4 do PC. No app, informe " +
+                "http://IP-DO-PC:5003 e a Chave Mangalate e toque em Testar conexão. localhost no celular é o próprio " +
+                "celular. Não abra a porta no roteador.",
         ),
         GuideArticle(
-            "Conectou, mas ainda não traduz",
-            "O teste de conexão não garante que os modelos já foram baixados. No PC rode python check.py --warmup " +
-                "na pasta server e abra a página de teste gerada. A primeira tradução prepara modelos. " +
-                "No BYOK, confira chave, nome do modelo, saldo e limite de gastos na conta do provedor. " +
-                "Veja docker compose --profile cpu logs --tail=80 (ou gpu). Não envie logs que contenham chaves.",
+            "Conectou, mas não traduz",
+            "Na primeira página o servidor ainda baixa modelos. No PC, rode py check.py --warmup na pasta server " +
+                "e veja docker compose logs --tail=80. Se o limite grátis das IAs acabou, espere ou acrescente outra " +
+                "IA com py setup.py. Não envie logs com chaves.",
         ),
         GuideArticle(
-            "Google Colab e capítulos offline",
-            "O notebook oficial do projeto trabalha interativamente com um capítulo ZIP/CBZ e gera um CBZ e um pacote " +
-                "de revisão para baixar. Ele não abre túnel nem mantém servidor ligado. GPU e continuidade da sessão não são garantidas. " +
-                "Para leitura ao vivo no app, use Docker ou sua própria máquina na nuvem. Confira o manual para importar arquivos locais.",
+            "Ler offline e Downloads",
+            "Ligue Traduzir capítulos ao baixar e espere a tradução terminar; falhas aparecem na fila de " +
+                "Downloads. Mudar idioma, modo ou servidor pode exigir traduzir de novo.",
         ),
         GuideArticle(
-            "Downloads para ler traduzido offline",
-            "Ligue Traduzir capítulos ao baixar e espere o download e a tradução terminarem. Confira falhas na fila de Downloads. " +
-                "O servidor precisa estar acessível durante a preparação, não durante a leitura das páginas já salvas. " +
-                "Mudanças no idioma ou no modo podem exigir nova tradução. O CBZ gerado no Colab também pode ser lido como arquivo local.",
-        ),
-        GuideArticle(
-            "Balão, painel, limpeza e revisão",
-            "A limpeza local mantém a base aprovada da 0.5.0. O servidor usa OCR, máscara e reconstrução; texto sobre arte " +
-                "é ignorado por padrão por uma heurística que pode falhar. O pacote BYOK inclui original, tradução e texto reconhecido " +
-                "para revisão. Nenhuma IA garante acabamento de scan humano em toda página. Compare contornos, rostos, balão e ordem " +
-                "dos painéis. Resultados com enquadramento alterado ou mudança global excessiva são bloqueados.",
-        ),
-        GuideArticle(
-            "Fonte pequena ou palavras cortadas",
-            "No celular, a fonte se adapta ao balão e usa divisão silábica em português. No servidor, palavras são preservadas " +
-                "inteiras por padrão para não aplicar hifenização inglesa ao português. Use zoom e compare com o original. " +
-                "Traduções longas podem exigir revisão manual. Não aumente a fonte até invadir a arte.",
+            "Balão, arte e revisão",
+            "O texto é escrito dentro do balão, com hífen em português quando precisa. Com Preservar a arte " +
+                "ligado, parte do texto sobre o desenho fica no original para não estragar a arte. Nenhuma tradução " +
+                "automática é perfeita: compare com o original.",
         ),
         GuideArticle(
             "Biblioteca, extensões e arquivos locais",
-            "O Mangalate não fornece mangás. Use conteúdo próprio ou autorizado e extensões confiáveis. Configure a pasta " +
-                "de armazenamento em Dados e armazenamento. Arquivos locais devem seguir a estrutura manga/título/capítulo.cbz " +
-                "dentro dessa pasta; atualize a fonte Local para encontrar o capítulo. Verifique os direitos de uso.",
+            "O Mangalate não fornece mangás. Use conteúdo próprio ou autorizado e extensões confiáveis. Arquivos " +
+                "locais ficam em manga/título/capítulo.cbz na pasta de armazenamento; atualize a fonte Local para " +
+                "encontrá-los.",
         ),
         GuideArticle(
-            "Backup, armazenamento e problemas",
-            "Faça backup em Configurações › Dados e armazenamento antes de trocar de aparelho ou desinstalar. Limpar cache " +
-                "remove traduções temporárias, não a biblioteca. Desinstalar pode apagar traduções salvas. " +
-                "Ao relatar um problema, informe versão, modo, idiomas e prints do original e resultado sem senhas.",
+            "Backup e problemas",
+            "Faça backup em Configurações › Dados e armazenamento antes de trocar de aparelho. Limpar o cache " +
+                "apaga traduções temporárias, não a biblioteca. Ao relatar um problema, mande versão, modo, idiomas e " +
+                "prints do original e do resultado, sem chaves.",
         ),
     )
     val privacy = listOf(
