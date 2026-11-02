@@ -182,6 +182,27 @@ def page_context():
     return _PAGE_CONTEXT.get()
 
 
+DRAWN_KINDS = ("efeito_sonoro", "creditos", "logo")
+
+
+def _left_as_speech(region):
+    """Speech left as drawn: not a sound, credit, logo or scanned mark, with a letter or digit,
+    and not an answer equal to the source (a name, an "OH..")."""
+    import re
+    background = getattr(region, "mangalate_background", None) or {}
+    return (background.get("kind") not in (None, *DRAWN_KINDS) and not background.get("devolvida_igual")
+            and bool(re.search(r"[^\W_]", str(getattr(region, "text", "")))))
+
+
+def review_counts(ctx):
+    """What on the translated page is worth a look, for the app: speech left as drawn and
+    speech translated over the art. Sounds, credits, logos and drawn marks stay on purpose."""
+    preserved = sum(_left_as_speech(r) for r in getattr(ctx, "mangalate_preserved", None) or [])
+    over_art = sum(bool((getattr(r, "mangalate_background", None) or {}).get("sobre_arte"))
+                   for r in getattr(ctx, "text_regions", None) or [])
+    return {"preserved": preserved, "over_art": over_art}
+
+
 def _learned():
     terms = _LEARNED_TERMS.get()
     if terms is None:

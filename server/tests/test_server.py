@@ -18,7 +18,7 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from gateway import create_app, profile_config, inspect_result, apply_speed
+from gateway import create_app, profile_config, inspect_result, apply_speed, review_headers
 from setup import configure
 from hardware import detect
 from core import create_core
@@ -282,6 +282,51 @@ class ServerTest(unittest.TestCase):
                                  files={"image": ("page.png", png(), "image/png")}, data={"config": "{}"})
             self.assertEqual(result.status_code, 200, result.text if result.status_code != 200 else "")
             self.assertEqual(result.headers["x-mangalate-review"], "required")
+
+    def test_review_header_reports_what_the_worker_counted(self):
+        cases = (({"X-Mangalate-Preserved": "2", "X-Mangalate-Over-Art": "0"}, "required", "2"),
+                 ({"X-Mangalate-Preserved": "0", "X-Mangalate-Over-Art": "1"}, "required", "0"),
+                 ({"X-Mangalate-Preserved": "0", "X-Mangalate-Over-Art": "0"}, "none", "0"),
+                 ({"X-Mangalate-Preserved": "x; evil", "X-Mangalate-Over-Art": "0"}, "required", None),
+                 ({}, "required", None))  # an older worker that does not count
+        for worker, review, preserved in cases:
+            with self.subTest(worker=worker):
+                handler = lambda request, h=worker: httpx.Response(200, content=png(), headers=h)
+                with self.client(handler) as client:
+                    result = client.post("/translate/with-form/image", headers=self.headers(),
+                                         files={"image": ("page.png", png(), "image/png")}, data={"config": "{}"})
+                self.assertEqual(result.headers["x-mangalate-review"], review)
+                self.assertEqual(result.headers.get("x-mangalate-preserved"), preserved)
+
+    def test_review_header_rejects_digits_that_are_not_ascii(self):
+        self.assertEqual(review_headers({"X-Mangalate-Preserved": "²", "X-Mangalate-Over-Art": "0"}),
+                         {"X-Mangalate-Review": "required"})
+
+    def test_worker_counts_speech_left_as_drawn_but_not_sounds_or_credits(self):
+        def region(text="WAIT!", **background):
+            return SimpleNamespace(text=text, mangalate_background=background)
+        class Engine:
+            async def translate(self, image, config):
+                return SimpleNamespace(
+                    result=image,
+                    text_regions=[region(kind="tracos", sobre_arte=True), region(kind="interior")],
+                    mangalate_preserved=[region(kind="art"), region(kind="art"), region(kind="efeito_sonoro"),
+                                         region(kind="creditos"), region(kind="logo"), SimpleNamespace(),
+                                         region("‥ ●", kind="interior"),
+                                         region(kind="interior", devolvida_igual=True)])
+        with TestClient(create_core(Engine())) as client:
+            response = client.post("/translate/with-form/image", files={"image": ("page.png", png())})
+        self.assertEqual(response.headers["x-mangalate-preserved"], "2")
+        self.assertEqual(response.headers["x-mangalate-over-art"], "1")
+
+    def test_a_failed_count_keeps_the_translated_page(self):
+        class Engine:
+            async def translate(self, image, config):
+                return SimpleNamespace(result=image, mangalate_preserved=[SimpleNamespace(mangalate_background="?")])
+        with TestClient(create_core(Engine())) as client:
+            response = client.post("/translate/with-form/image", files={"image": ("page.png", png())})
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("x-mangalate-preserved", response.headers)
 
     def test_art_choice_reaches_the_worker_and_defaults_to_preserve(self):
         sent = []

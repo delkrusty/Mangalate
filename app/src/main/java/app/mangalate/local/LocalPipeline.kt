@@ -4,7 +4,6 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import app.mangalate.translate.MangalateSettings
-import app.mangalate.translate.TranslateMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
@@ -12,7 +11,7 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 
 /**
- * Pipeline que roda sem servidor: OCR/IA → tradução → limpeza → diagramação.
+ * Pipeline que roda sem servidor: OCR → tradução → limpeza → diagramação.
  */
 object LocalPipeline {
 
@@ -29,32 +28,23 @@ object LocalPipeline {
         val page = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
             ?: throw IOException("Formato de imagem não suportado")
         try {
-            val regions = when (s.mode) {
-                TranslateMode.GEMINI -> GeminiClient.detectAndTranslate(page, s)
-                else -> {
-                    val found = stage("reconhecimento do texto (OCR)") {
-                        OnDeviceOcr.detect(page, s.sourceLanguage)
-                    }.filter { OfflineText.keep(it.original, s.sourceLanguage) }
-                    if (found.isEmpty()) {
-                        emptyList()
-                    } else {
-                        val texts = found.map { it.original }
-                        val translated = if (s.mode == TranslateMode.DEEPL) {
-                            DeepLClient.translate(s.deeplKey, texts, s.sourceLanguage, s.targetLanguage)
-                        } else {
-                            try {
-                                stage("tradução no celular; confira os idiomas em Configurações > Mangalate") {
-                                    OnDeviceTranslate.translate(texts, s.sourceLanguage, s.targetLanguage) {
-                                        status("Baixando o tradutor (só na primeira vez)…")
-                                    }
-                                }
-                            } finally {
-                                status(null)
-                            }
+            val found = stage("reconhecimento do texto (OCR)") {
+                OnDeviceOcr.detect(page, s.sourceLanguage)
+            }.filter { OfflineText.keep(it.original, s.sourceLanguage) }
+            val regions = if (found.isEmpty()) {
+                emptyList()
+            } else {
+                val texts = found.map { it.original }
+                val translated = try {
+                    stage("tradução no celular; confira os idiomas em Configurações > Mangalate") {
+                        OnDeviceTranslate.translate(texts, s.sourceLanguage, s.targetLanguage) {
+                            status("Baixando o tradutor (só na primeira vez)…")
                         }
-                        found.zip(translated) { r, t -> r.copy(translation = OfflineText.tidy(t, r.original)) }
                     }
+                } finally {
+                    status(null)
                 }
+                found.zip(translated) { r, t -> r.copy(translation = OfflineText.tidy(t, r.original)) }
             }
             val kept = regions.filter { OfflineText.keep(it.original, s.sourceLanguage) }
             if (kept.isEmpty()) return@withContext bytes

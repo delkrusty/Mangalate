@@ -49,6 +49,12 @@ object MangalateTranslator {
     private const val ENDPOINT = "/translate/with-form/image"
     private const val BUSY_RETRIES = 40
 
+    // Opções que saíram do app: chaves do Gemini e do DeepL e ajustes que o servidor ignorava.
+    private val RETIRED_KEYS = listOf(
+        "gemini_key", "gemini_model", "gemini_fast", "deepl_key",
+        "engine", "quality", "typeset", "mask_dilation",
+    )
+
     @Volatile
     private var prefs: SharedPreferences? = null
 
@@ -73,11 +79,9 @@ object MangalateTranslator {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val inFlight = ConcurrentHashMap<String, Deferred<ByteArray>>()
 
-    // Páginas traduzidas ao mesmo tempo, por modo (o Gemini grátis tem limite por minuto).
+    // Páginas traduzidas ao mesmo tempo, por modo.
     private val semaphores = mapOf(
         TranslateMode.ON_DEVICE to Semaphore(2),
-        TranslateMode.GEMINI to Semaphore(3),
-        TranslateMode.DEEPL to Semaphore(3),
         // O servidor traduz 2 páginas ao mesmo tempo (uma usa a IA enquanto a outra limpa).
         TranslateMode.SERVER to Semaphore(2),
     )
@@ -103,6 +107,7 @@ object MangalateTranslator {
             if (prefs != null) return
             val p = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             prefs = p
+            p.edit().apply { RETIRED_KEYS.forEach(::remove) }.apply()
             _settings.value = read(p)
             _enabled.value = p.getBoolean("enabled", false) && _settings.value.isConfigured
         }
@@ -111,18 +116,11 @@ object MangalateTranslator {
     private fun read(p: SharedPreferences) = MangalateSettings(
         mode = TranslateMode.fromName(p.getString("mode", null)),
         sourceLanguage = SourceLanguage.fromName(p.getString("source_lang", null)),
-        geminiKey = p.getString("gemini_key", "") ?: "",
-        geminiModel = p.getString("gemini_model", null) ?: MangalateSettings.DEFAULT_GEMINI_MODEL,
         setupDone = p.getBoolean("setup_done", false),
-        geminiFast = p.getBoolean("gemini_fast", true),
-        deeplKey = p.getString("deepl_key", "") ?: "",
         translateOnDownload = p.getBoolean("translate_on_download", false),
         serverUrl = p.getString("server_url", "") ?: "",
         accessKey = p.getString("access_key", "") ?: "",
         targetLanguage = TargetLanguage.fromCode(p.getString("target_lang", null)),
-        engine = TranslatorEngine.fromId(p.getString("engine", null)),
-        quality = QualityProfile.fromName(p.getString("quality", null)),
-        typeset = TypesetMode.fromName(p.getString("typeset", null)),
         // A opção antiga "Só traduzir texto dentro de balões", se ligada, vira "Preservar a arte".
         preserveArtText = when {
             p.contains("preserve_art_text") -> p.getBoolean("preserve_art_text", false)
@@ -130,8 +128,7 @@ object MangalateTranslator {
             else -> null
         },
         uppercase = p.getBoolean("uppercase", false),
-        fontSizeOffset = p.getInt("font_size_offset", 0),
-        maskDilation = p.getInt("mask_dilation", 0),
+        fontSizeOffset = p.getInt("font_size_offset", 0).coerceIn(MangalateSettings.FONT_OFFSETS),
     )
 
     fun updateSettings(context: Context, transform: (MangalateSettings) -> MangalateSettings) {
@@ -141,25 +138,17 @@ object MangalateTranslator {
         prefs?.edit()
             ?.putString("mode", new.mode.name)
             ?.putString("source_lang", new.sourceLanguage.name)
-            ?.putString("gemini_key", new.geminiKey)
-            ?.putString("gemini_model", new.geminiModel)
             ?.putBoolean("setup_done", new.setupDone)
-            ?.putBoolean("gemini_fast", new.geminiFast)
-            ?.putString("deepl_key", new.deeplKey)
             ?.putBoolean("translate_on_download", new.translateOnDownload)
             ?.putString("server_url", new.serverUrl)
             ?.putString("access_key", new.accessKey)
             ?.putString("target_lang", new.targetLanguage.code)
-            ?.putString("engine", new.engine.id)
-            ?.putString("quality", new.quality.name)
-            ?.putString("typeset", new.typeset.name)
             ?.also { editor ->
                 new.preserveArtText?.let { editor.putBoolean("preserve_art_text", it) }
                     ?: editor.remove("preserve_art_text")
             }
             ?.putBoolean("uppercase", new.uppercase)
-            ?.putInt("font_size_offset", new.fontSizeOffset)
-            ?.putInt("mask_dilation", new.maskDilation)
+            ?.putInt("font_size_offset", new.fontSizeOffset.coerceIn(MangalateSettings.FONT_OFFSETS))
             ?.apply()
         if (!new.isConfigured) setEnabled(context, false)
     }
@@ -387,6 +376,28 @@ object MangalateTranslator {
                     }
                     text.trim().toIntOrNull()
                         ?: throw IOException("Esse endereço não respondeu como servidor Mangalate. Confira a URL e a porta 5003.")
+                }
+        }
+    }
+
+    /**
+     * Qual tradução o servidor usa, lida do `/v1/info`: "byok" (a IA escolhida no instalador)
+     * ou "basic" (tradutor offline). Só para mostrar; o app não muda isso.
+     */
+    suspend fun serverEdition(s: MangalateSettings): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val request = Request.Builder()
+                .url(s.normalizedUrl + "/v1/info")
+                .apply { authHeaders(s).forEach { (k, v) -> header(k, v) } }
+                .build()
+            client.newBuilder()
+                .callTimeout(20, TimeUnit.SECONDS)
+                .build()
+                .newCall(request)
+                .execute()
+                .use { response ->
+                    if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
+                    org.json.JSONObject(response.body.string()).getString("edition")
                 }
         }
     }

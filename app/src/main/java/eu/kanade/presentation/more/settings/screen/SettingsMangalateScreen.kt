@@ -28,15 +28,11 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -65,16 +61,11 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import app.mangalate.translate.MangalateSettings
 import app.mangalate.translate.MangalateTranslator
-import app.mangalate.local.GeminiClient
-import app.mangalate.local.DeepLClient
 import app.mangalate.local.OnDeviceOcr
 import app.mangalate.local.OnDeviceTranslate
-import app.mangalate.translate.QualityProfile
 import app.mangalate.translate.SourceLanguage
 import app.mangalate.translate.TranslateMode
 import app.mangalate.translate.TargetLanguage
-import app.mangalate.translate.TranslatorEngine
-import app.mangalate.translate.TypesetMode
 import eu.kanade.presentation.components.AppBar
 import eu.kanade.presentation.util.LocalBackPress
 import eu.kanade.presentation.util.Screen
@@ -85,7 +76,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import mihon.icons.materialsymbols.MaterialSymbols
 import mihon.icons.materialsymbols.rounded.AutoAwesome
-import mihon.icons.materialsymbols.rounded.Brush as BrushIcon
 import mihon.icons.materialsymbols.rounded.Dns
 import mihon.icons.materialsymbols.rounded.Language
 import mihon.icons.materialsymbols.rounded.Translate
@@ -200,10 +190,6 @@ private fun HeroCard(
                     Text(
                         text = if (settings.isConfigured) {
                             settings.summary
-                        } else if (settings.mode == TranslateMode.GEMINI) {
-                            "Cole sua chave do Gemini abaixo"
-                        } else if (settings.mode == TranslateMode.DEEPL) {
-                            "Cole sua chave da API do DeepL abaixo"
                         } else {
                             "Informe o endereço do servidor"
                         },
@@ -280,7 +266,7 @@ private fun SectionCard(
 private sealed interface TestState {
     data object Idle : TestState
     data object Running : TestState
-    data class Ok(val queue: Int) : TestState
+    data class Ok(val queue: Int, val edition: String? = null) : TestState
     data class Fail(val message: String) : TestState
 }
 
@@ -354,7 +340,7 @@ private fun ServerSection(
                     scope.launch {
                         val current = MangalateTranslator.settings.value
                         test = MangalateTranslator.testConnection(current).fold(
-                            onSuccess = { TestState.Ok(it) },
+                            onSuccess = { TestState.Ok(it, MangalateTranslator.serverEdition(current).getOrNull()) },
                             onFailure = { TestState.Fail(it.message ?: it.javaClass.simpleName) },
                         )
                     }
@@ -379,7 +365,8 @@ private fun ServerSection(
             Surface(shape = RoundedCornerShape(14.dp), color = bg, modifier = Modifier.fillMaxWidth()) {
                 Text(
                     text = when (val t = test) {
-                        is TestState.Ok -> "Conectado. Páginas na fila do servidor: ${t.queue}"
+                        is TestState.Ok -> "Conectado. Páginas na fila do servidor: ${t.queue}" +
+                            editionLabel(t.edition)?.let { "\nTradução do servidor: $it" }.orEmpty()
                         is TestState.Fail -> "Falhou: ${t.message}"
                         else -> ""
                     },
@@ -440,112 +427,6 @@ private fun LanguageSection(
 }
 
 @Composable
-private fun EngineSection(
-    settings: MangalateSettings,
-    onChange: ((MangalateSettings) -> MangalateSettings) -> Unit,
-) {
-    SectionCard(
-        icon = MaterialSymbols.Rounded.AutoAwesome,
-        title = "Motor de tradução",
-        subtitle = "As chaves de API ficam no servidor, nunca no celular",
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            TranslatorEngine.entries.forEach { engine ->
-                val selected = settings.engine == engine
-                val border by animateColorAsState(
-                    if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
-                    label = "engineBorder",
-                )
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = if (selected) {
-                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
-                    } else {
-                        MaterialTheme.colorScheme.surfaceContainerHigh
-                    },
-                    border = BorderStroke(1.5.dp, border),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .clickable { onChange { it.copy(engine = engine) } },
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        RadioButton(selected = selected, onClick = { onChange { it.copy(engine = engine) } })
-                        Column(Modifier.weight(1f)) {
-                            Text(engine.label, style = MaterialTheme.typography.titleSmall)
-                            Text(
-                                engine.description,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                        if (!engine.needsKey) {
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = MaterialTheme.colorScheme.tertiaryContainer,
-                            ) {
-                                Text(
-                                    "sem chave",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onTertiaryContainer,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun QualitySection(
-    settings: MangalateSettings,
-    onChange: ((MangalateSettings) -> MangalateSettings) -> Unit,
-) {
-    SectionCard(
-        icon = MaterialSymbols.Rounded.BrushIcon,
-        title = "Limpeza e reconstrução",
-        subtitle = "Como os balões sujos são detectados e restaurados",
-    ) {
-        val profiles = QualityProfile.entries
-        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-            profiles.forEachIndexed { index, profile ->
-                SegmentedButton(
-                    selected = settings.quality == profile,
-                    onClick = { onChange { it.copy(quality = profile) } },
-                    shape = SegmentedButtonDefaults.itemShape(index = index, count = profiles.size),
-                ) {
-                    Text(profile.label)
-                }
-            }
-        }
-        Text(
-            settings.quality.description,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        HorizontalDivider()
-        Text("Margem da máscara: ${signed(settings.maskDilation)} px", style = MaterialTheme.typography.bodyMedium)
-        Text(
-            "Aumente se sobrarem restos de letras; diminua se a limpeza estiver comendo a arte.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Slider(
-            value = settings.maskDilation.toFloat(),
-            onValueChange = { v -> onChange { it.copy(maskDilation = v.toInt()) } },
-            valueRange = -20f..30f,
-            steps = 9,
-        )
-    }
-}
-
-@Composable
 private fun TypesetSection(
     settings: MangalateSettings,
     onChange: ((MangalateSettings) -> MangalateSettings) -> Unit,
@@ -555,35 +436,12 @@ private fun TypesetSection(
         title = "Tipografia",
         subtitle = "Encaixe do texto traduzido no balão",
     ) {
-        if (settings.mode == TranslateMode.SERVER) {
-            val modes = TypesetMode.entries
-            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                modes.forEachIndexed { index, mode ->
-                    SegmentedButton(
-                        selected = settings.typeset == mode,
-                        onClick = { onChange { it.copy(typeset = mode) } },
-                        shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size),
-                    ) {
-                        Text(mode.label, maxLines = 1)
-                    }
-                }
-            }
-            Text(
-                when (settings.typeset) {
-                    TypesetMode.AUTO -> "Diagramação de mangá para idiomas latinos, clássica para os demais."
-                    TypesetMode.MANGA -> "Quebra de linha e tamanho calculados para preencher o balão."
-                    TypesetMode.CLASSIC -> "Mantém a área e a direção do texto original."
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
         Text("Ajuste do tamanho da fonte: ${signed(settings.fontSizeOffset)}", style = MaterialTheme.typography.bodyMedium)
         Slider(
             value = settings.fontSizeOffset.toFloat(),
             onValueChange = { v -> onChange { it.copy(fontSizeOffset = v.toInt()) } },
-            valueRange = -10f..10f,
-            steps = 19,
+            valueRange = MangalateSettings.FONT_OFFSETS.first.toFloat()..MangalateSettings.FONT_OFFSETS.last.toFloat(),
+            steps = MangalateSettings.FONT_OFFSETS.count() - 2,
         )
         SwitchRow(
             title = "Letras maiúsculas",
@@ -652,6 +510,13 @@ private fun SwitchRow(
         }
         Switch(checked = checked, onCheckedChange = onChecked)
     }
+}
+
+/** Só para mostrar: a tradução é escolhida no instalador do servidor, não no app. */
+private fun editionLabel(edition: String?): String? = when (edition) {
+    "byok" -> "a IA escolhida no instalador (Groq, Gemini, OpenRouter ou Ollama)"
+    "basic" -> "tradutor offline do servidor (sem IA)"
+    else -> null
 }
 
 private fun signed(v: Int) = if (v > 0) "+$v" else "$v"
@@ -736,227 +601,6 @@ private fun ChoiceCard(
 }
 
 @Composable
-private fun GeminiSection(
-    settings: MangalateSettings,
-    onChange: ((MangalateSettings) -> MangalateSettings) -> Unit,
-) {
-    val scope = rememberCoroutineScope()
-    val uriHandler = LocalUriHandler.current
-    val context = LocalContext.current
-    var key by remember { mutableStateOf(settings.geminiKey) }
-    var test by remember { mutableStateOf<TestState>(TestState.Idle) }
-
-    fun save(value: String) {
-        key = value.trim()
-        test = TestState.Idle
-        onChange { it.copy(geminiKey = value.trim()) }
-    }
-
-    SectionCard(
-        icon = MaterialSymbols.Rounded.Translate,
-        title = "Chave grátis do Gemini",
-        subtitle = "Leva 1 minuto e é feito uma única vez",
-    ) {
-        StepRow(1, "Toque em Pegar chave grátis e entre com sua conta Google.")
-        StepRow(2, "Toque em Criar chave de API e depois em copiar.")
-        StepRow(3, "Volte aqui e toque em Colar.")
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(onClick = { uriHandler.openUri("https://aistudio.google.com/apikey") }) {
-                Text("Pegar chave grátis")
-            }
-            FilledTonalButton(
-                onClick = {
-                    val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
-                        as android.content.ClipboardManager
-                    cm.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()?.let(::save)
-                },
-            ) { Text("Colar") }
-        }
-        OutlinedTextField(
-            value = key,
-            onValueChange = ::save,
-            label = { Text("Chave do Gemini") },
-            placeholder = { Text("AIza…") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedButton(
-            enabled = key.isNotBlank() && test != TestState.Running,
-            onClick = {
-                test = TestState.Running
-                scope.launch {
-                    test = GeminiClient.testKey(key, settings.effectiveGeminiModel).fold(
-                        onSuccess = { TestState.Ok(0) },
-                        onFailure = { TestState.Fail(it.message ?: it.javaClass.simpleName) },
-                    )
-                }
-            },
-        ) {
-            if (test == TestState.Running) {
-                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                Spacer(Modifier.width(8.dp))
-            }
-            Text("Testar chave")
-        }
-        AnimatedVisibility(visible = test is TestState.Ok || test is TestState.Fail) {
-            val ok = test is TestState.Ok
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = if (ok) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.errorContainer,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(
-                    text = when (val t = test) {
-                        is TestState.Ok -> "Tudo certo. Pode abrir um capítulo e tocar em 文A."
-                        is TestState.Fail -> t.message
-                        else -> ""
-                    },
-                    modifier = Modifier.padding(12.dp),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-        }
-        Text("Velocidade", style = MaterialTheme.typography.labelLarge)
-        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-            SegmentedButton(
-                selected = settings.geminiFast,
-                onClick = { onChange { it.copy(geminiFast = true) } },
-                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-            ) { Text("Rápido") }
-            SegmentedButton(
-                selected = !settings.geminiFast,
-                onClick = { onChange { it.copy(geminiFast = false) } },
-                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-            ) { Text("Melhor qualidade") }
-        }
-        Text(
-            if (settings.geminiFast) {
-                "Usa o Gemini Flash-Lite: responde bem mais rápido e cabe melhor no limite grátis."
-            } else {
-                "Usa o Gemini Flash: tradução um pouco melhor, mas cada página demora mais."
-            },
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            "A faixa grátis do Gemini tem limite por minuto; se aparecer aviso de limite, espere um pouco. " +
-                "Páginas já traduzidas ficam salvas e não gastam de novo.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-@Composable
-private fun StepRow(n: Int, text: String) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            modifier = Modifier
-                .size(26.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primary),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text("$n", color = MaterialTheme.colorScheme.onPrimary, style = MaterialTheme.typography.labelLarge)
-        }
-        Spacer(Modifier.width(12.dp))
-        Text(text, style = MaterialTheme.typography.bodyMedium)
-    }
-}
-
-@Composable
-private fun DeepLSection(
-    settings: MangalateSettings,
-    onChange: ((MangalateSettings) -> MangalateSettings) -> Unit,
-) {
-    val context = LocalContext.current
-    val uriHandler = LocalUriHandler.current
-    val scope = rememberCoroutineScope()
-    var key by remember { mutableStateOf(settings.deeplKey) }
-    var running by remember { mutableStateOf(false) }
-    var message by remember { mutableStateOf<String?>(null) }
-    var success by remember { mutableStateOf(false) }
-
-    fun save(value: String) {
-        key = value.trim()
-        message = null
-        onChange { it.copy(deeplKey = key) }
-    }
-
-    SectionCard(
-        icon = MaterialSymbols.Rounded.Translate,
-        title = "Chave da API do DeepL",
-        subtitle = "Tradução online, sem montar servidor",
-    ) {
-        Text("Use uma chave DeepL API Free ou API Pro. A conta do tradutor web não substitui a API.")
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            OutlinedButton(onClick = { uriHandler.openUri("https://www.deepl.com/your-account/keys") }) {
-                Text("Obter chave")
-            }
-            FilledTonalButton(
-                enabled = !running,
-                onClick = {
-                    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
-                        as android.content.ClipboardManager
-                    clipboard.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()?.let(::save)
-                },
-            ) { Text("Colar") }
-        }
-        OutlinedTextField(
-            value = key,
-            onValueChange = ::save,
-            enabled = !running,
-            label = { Text("Chave DeepL API") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Button(
-            enabled = key.isNotBlank() && !running,
-            onClick = {
-                val testedKey = key
-                running = true
-                message = null
-                scope.launch {
-                    try {
-                        val result = withTimeout(180_000) { DeepLClient.testTranslation(testedKey) }
-                        val quota = DeepLClient.usage(testedKey).getOrNull()
-                        success = true
-                        message = "Tradução confirmada: Hello → $result." +
-                            if (quota != null) " Uso: ${quota.first} de ${quota.second} caracteres." else ""
-                    } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-                        success = false
-                        message = "O teste do DeepL demorou demais. Confira a conexão e tente novamente."
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        success = false
-                        message = e.message ?: "Não foi possível testar o DeepL."
-                    } finally {
-                        running = false
-                    }
-                }
-            },
-        ) {
-            if (running) {
-                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                Spacer(Modifier.width(8.dp))
-            }
-            Text("Testar tradução")
-        }
-        TestMessage(message, success)
-        Text(
-            "O teste envia apenas a palavra Hello. Ao ler, o OCR funciona no celular e somente o texto " +
-                "reconhecido é enviado ao DeepL. A chave fica nas configurações privadas deste app.",
-            style = MaterialTheme.typography.bodySmall,
-        )
-    }
-}
-
-@Composable
 private fun LocalPreparationSection(settings: MangalateSettings) {
     val scope = rememberCoroutineScope()
     var running by remember { mutableStateOf(false) }
@@ -966,15 +610,11 @@ private fun LocalPreparationSection(settings: MangalateSettings) {
     var success by remember { mutableStateOf(false) }
     SectionCard(
         icon = MaterialSymbols.Rounded.Language,
-        title = if (settings.mode == TranslateMode.ON_DEVICE) "Preparar tradução no celular" else "Testar reconhecimento do texto",
+        title = "Preparar tradução no celular",
         subtitle = "${settings.sourceLanguage.label} → ${settings.targetLanguage.label}",
     ) {
         Text(
-            if (settings.mode == TranslateMode.ON_DEVICE) {
-                "Antes da primeira leitura, conecte à internet e toque abaixo. Depois de baixar os idiomas, pode traduzir offline."
-            } else {
-                "Este teste verifica o OCR usado pelo DeepL, sem enviar imagem ou consumir sua cota."
-            },
+            "Antes da primeira leitura, conecte à internet e toque abaixo. Depois de baixar os idiomas, pode traduzir offline.",
         )
         Button(
             enabled = !running,
@@ -989,18 +629,12 @@ private fun LocalPreparationSection(settings: MangalateSettings) {
                             withContext(Dispatchers.Default) {
                                 OnDeviceOcr.verify(selected.sourceLanguage)
                             }
-                            if (selected.mode == TranslateMode.ON_DEVICE) {
-                                stage = "download dos idiomas"
-                                message = "Baixando ou verificando os idiomas. Aguarde com internet…"
-                                OnDeviceTranslate.prepare(selected.sourceLanguage, selected.targetLanguage)
-                            }
+                            stage = "download dos idiomas"
+                            message = "Baixando ou verificando os idiomas. Aguarde com internet…"
+                            OnDeviceTranslate.prepare(selected.sourceLanguage, selected.targetLanguage)
                         }
                         success = true
-                        message = if (selected.mode == TranslateMode.ON_DEVICE) {
-                            "OCR e idiomas prontos. Pode abrir um capítulo e tocar em 文A, inclusive offline."
-                        } else {
-                            "Reconhecimento do texto funcionando. Teste também sua chave do DeepL acima."
-                        }
+                        message = "OCR e idiomas prontos. Pode abrir um capítulo e tocar em 文A, inclusive offline."
                     } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
                         success = false
                         message = "O $stage demorou demais. Confira a conexão e tente novamente."
@@ -1019,7 +653,7 @@ private fun LocalPreparationSection(settings: MangalateSettings) {
                 CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                 Spacer(Modifier.width(8.dp))
             }
-            Text(if (settings.mode == TranslateMode.ON_DEVICE) "Preparar idiomas" else "Testar OCR")
+            Text("Preparar idiomas")
         }
         TestMessage(message, success)
     }

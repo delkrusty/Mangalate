@@ -2,7 +2,6 @@ package app.mangalate.local
 
 import app.mangalate.translate.MangalateSettings
 import app.mangalate.translate.TranslateMode
-import app.mangalate.translate.TranslatorEngine
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 
@@ -26,9 +25,8 @@ class ServerEditionsTest {
     }
 
     @Test
-    fun freshServerDefaultsNeverSelectAPaidTranslationProvider() {
-        assertEquals(TranslatorEngine.OFFLINE, MangalateSettings().engine)
-        assertEquals(TranslatorEngine.OFFLINE, TranslatorEngine.fromId(null))
+    fun theAppNeverChoosesTheServersTranslator() {
+        assertFalse(MangalateSettings(mode = TranslateMode.SERVER).toServerConfig().contains("\"translator\":\""))
         assertTrue(MangalateSettings(mode = TranslateMode.SERVER).cacheSignature().startsWith("server-scan-v2|"))
     }
 
