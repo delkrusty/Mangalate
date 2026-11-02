@@ -216,6 +216,16 @@ class CapitalsTest(unittest.TestCase):
         self.assertTrue(engine_compat.is_credit("THE BEGINNING AFTER™END"))
         self.assertFalse(engine_compat.is_credit("THE END"))
 
+    def test_chapter_heading_stays_as_drawn(self):
+        # One Piece 1161 p3: the chapter title, once read whole, was lettered at about half the size
+        # of its capitals.  A heading stays in its own lettering.
+        self.assertTrue(engine_compat.is_credit("Chapter 12: A LONG WAY HOME"))
+        self.assertTrue(engine_compat.is_credit("EPISODE 3 - THE STORM"))
+        self.assertTrue(engine_compat.is_credit("Ch. 40"))
+        self.assertFalse(engine_compat.is_credit("THE NEXT CHAPTER STARTS TODAY."))
+        self.assertFalse(engine_compat.is_credit("IN CHAPTER 2 HE DIES?!"))
+        self.assertFalse(engine_compat.is_credit("CHAPTER?"))
+
 
 class PromptTest(unittest.TestCase):
     def tearDown(self):

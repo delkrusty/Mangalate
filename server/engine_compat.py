@@ -413,7 +413,8 @@ def is_credit(text):
     TBATE new p84 "THE BEGINNING AFTER™END"; TBATE 236 p27 the "thunderscans"
     watermark was translated; TBATE 240 p68 "Original Art by: YOYO" became "Arte original por: YOY".
     A chapter subtitle read with its staff ("By ... Translation: ... Lettering: ...", One Piece
-    1153 p1) would otherwise be cleaned and written over as one paragraph.
+    1153 p1) would otherwise be cleaned and written over as one paragraph.  A chapter heading
+    ("Chapter 1161: ...", One Piece 1161 p3) came out at about half the size of its capitals.
     """
     import re
     global CREDIT
@@ -422,6 +423,7 @@ def is_credit(text):
                             r"|by\s*:|\b(?:tl|pr|ts|qc|raws?|editor|proofreader|typesetter|translator|cleaner|redrawer)\s*:"
                             r"|\b(?:translation|lettering|letterer|illustrations?)\s*:"
                             r"|\btapa\w*\W{0,3}origin"
+                            r"|^\W*(?:chapter|episode|ch\.|ep\.)\s*\d+\b"
                             r"|read (?:the |this |more |latest )?chapters? (?:at|on)|support us|our (?:web)?site",
                             re.I)
     return bool(CREDIT.search(str(text or "")))
@@ -591,7 +593,7 @@ def scanned_sounds(regions, bubbles, rows=None):
     when the OCR kept one word (Grand Blue p23: "ASS- / HOLE..." read as "ASS").
     Returns (kept regions, regions left as art).
     """
-    from quality import reads_as_speech
+    from quality import reads_as_speech, spaced_words
     if not bubbles:
         return regions, []
     rows = list(rows or [1] * len(bubbles))
@@ -601,10 +603,12 @@ def scanned_sounds(regions, bubbles, rows=None):
         cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
         found = [k for k, b in enumerate(bubbles) if b[0] <= cx <= b[2] and b[1] <= cy <= b[3]]
         text = getattr(region, "text", "")
-        if found and not reads_as_speech(text, several_rows=rows[found[0]] >= 2):
+        if found and not reads_as_speech(text, several_rows=rows[found[0]] >= 2, joined=True):
             region.mangalate_background = {"kind": "efeito_sonoro"}
             drawn.append(region)
         else:
+            if found and isinstance(text, str):
+                region.text = spaced_words(text)  # the AI reads "THIS IS", not "THISIS"
             kept.append(region)
     if drawn:
         print(f"Bubble scan: {len(drawn)} kept as art: {[getattr(r, 'text', '') for r in drawn]}", flush=True)
@@ -953,7 +957,7 @@ def repair_textlines(original_detect):
         # Small white bubbles the detector did not see at all.
         scanned = []
         if image is not None:
-            from quality import bubble_text_lines
+            from quality import bubble_text_lines, scanned_line
             try:
                 scanned = bubble_text_lines(np.asarray(image), [_box(line.pts) for line in textlines])
             except Exception as exc:  # never lose a page over this
@@ -964,12 +968,10 @@ def repair_textlines(original_detect):
             mask_raw = np.asarray(mask_raw).copy()
             for bubble, rows, letters in scanned:
                 mask_raw[cv2.dilate(letters.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0] = 255
-                for x0, y0, x1, y1 in rows:
-                    if x1 - x0 < y1 - y0:  # a one-letter row ("I") stays a horizontal line
-                        pad = (y1 - y0 - (x1 - x0)) // 2 + 1
-                        x0, x1 = max(bubble[0], x0 - pad), min(bubble[2], x1 + pad)
-                    changes.append(("bubble", None, (x0, y0, x1, y1)))
-                    repaired.append(((x0, y0, x1, y1), None))
+                for row in rows:
+                    line = scanned_line(row, bubble)
+                    changes.append(("bubble", None, line))
+                    repaired.append((line, None))
             print(f"Bubble scan: {len(scanned)} bubble(s) at {ctx.mangalate_scanned}", flush=True)
         if not changes:
             return result

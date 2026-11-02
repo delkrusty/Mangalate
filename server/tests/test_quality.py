@@ -1164,6 +1164,88 @@ class LineRepairTest(unittest.TestCase):
         self.assertTrue(fitted[1] <= y0 and fitted[3] >= y1, fitted)
         self.assertLess(fitted[3] - fitted[1], (y1 - y0) + 4)  # still one line, not two
 
+    def test_lone_line_in_larger_letters_is_fitted(self):
+        # Webtoon p26 and p36: "HOWEVER..." and "NO," alone in a caption, in letters larger than the
+        # page's paragraphs.  The boxes stopped short of the last letters; one line of ink taller than
+        # the page's usual line was taken for two and never fitted, and the OCR dropped both lines.
+        gray, mask, ink = self.lettered(["THE KI", "RESTRAINER", "FUNCTIONED."])
+        for text, scale in (("HOWEVER...", 1.5), ("NO,", 3.0)):
+            page, lone = gray.copy(), np.full_like(gray, 255)
+            (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, 3)
+            cv2.putText(lone, text, (60, 300), cv2.FONT_HERSHEY_SIMPLEX, scale, 0, 3)
+            big = np.vstack([page, np.full((120, page.shape[1]), 255, np.uint8)])
+            big[200:320] = np.minimum(big[200:320], lone[200:320])
+            rows = np.flatnonzero((big[200:] < 128).any(axis=1)) + 200
+            cols = np.flatnonzero((big[200:] < 128).any(axis=0))
+            x0, y0, x1, y1 = int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1
+            clipped = (x0 + 3, y0 + 1, x1 - (x1 - x0) // 6, y1 - 4)  # misses the end and a row of the letters
+            boxes = list(ink) + [clipped]
+            repaired, changes = repair_lines(np.where(big < 128, 255, 0).astype(np.uint8), boxes, big)
+            fitted = repaired[3][0]
+            # The tail of the comma below the letters may stay out: the OCR reads the line without it.
+            self.assertTrue(fitted[0] <= x0 and fitted[2] >= x1 and fitted[1] <= y0 and fitted[3] >= y1 - 6, (text, fitted))
+            self.assertEqual([kind for kind, _, _ in changes], ["fit"], text)
+
+    def test_small_line_touching_a_logo_is_not_fitted_as_a_large_line(self):
+        # Webtoon credits p42: a line of small letters with a logo beside its end, reaching below
+        # it, made one run of ink as tall as a line of large letters; the box grew over the logo and
+        # the cleaning ate a corner of it.  Letters much shorter than the run are not one large line.
+        gray, mask, ink = self.lettered(["THE KI", "RESTRAINER", "FUNCTIONED."])
+        big = np.vstack([gray, np.full((120, gray.shape[1]), 255, np.uint8)])
+        cv2.putText(big, "MADE BY STUDIO", (40, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.7, 0, 2)
+        rows = np.flatnonzero((big[200:] < 128).any(axis=1)) + 200
+        cols = np.flatnonzero((big[200:] < 128).any(axis=0))
+        x0, y0, x1, y1 = int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1
+        big[y0 + 8:y1 + 20, x1 + 3:x1 + 40] = 0  # the logo beside the last letter, reaching below the line
+        box = (x0 + 3, y0 - 1, x1 + 10, y1 + 8)  # the line, and a strip of the logo
+        repaired, changes = repair_lines(np.where(big < 128, 255, 0).astype(np.uint8), list(ink) + [box], big)
+        self.assertEqual(repaired[3][0], box)  # never grown down and across over the logo
+
+    def test_small_line_beside_a_solid_symbol_is_not_fitted_as_a_large_line(self):
+        # The same with a solid symbol (a heart) in the box: it outweighs the letters by ink, but most
+        # pieces of the run are the small letters.
+        gray, mask, ink = self.lettered(["THE KI", "RESTRAINER", "FUNCTIONED."])
+        big = np.vstack([gray, np.full((120, gray.shape[1]), 255, np.uint8)])
+        cv2.putText(big, "I LOVE YOU", (60, 260), cv2.FONT_HERSHEY_SIMPLEX, 0.7, 0, 2)
+        rows = np.flatnonzero((big[230:300] < 128).any(axis=1)) + 230
+        cols = np.flatnonzero((big[230:300] < 128).any(axis=0))
+        x0, y0, x1, y1 = int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1
+        mid = (y0 + y1) // 2
+        cv2.circle(big, (x1 + 24, mid), 18, 0, -1)  # taller than the letters, with paper above and below
+        box = (x0 + 2, mid - 20, x1 + 30, mid + 20)  # the line and most of the symbol
+        repaired, changes = repair_lines(np.where(big < 128, 255, 0).astype(np.uint8), list(ink) + [box], big)
+        self.assertEqual(repaired[3][0], box)
+
+    def test_large_line_is_not_widened_over_a_drawing_beside_it(self):
+        # Manga p32: "ANYHOW," in larger letters, with a small face drawn just left of the line and
+        # reaching above and below it.  The wider letter spacing of large letters took the face into
+        # the box; a piece without paper above and below the line is not a letter.
+        gray, mask, ink = self.lettered(["THE KI", "RESTRAINER", "FUNCTIONED."])
+        big = np.vstack([gray, np.full((120, gray.shape[1]), 255, np.uint8)])
+        cv2.putText(big, "ANYHOW,", (120, 300), cv2.FONT_HERSHEY_SIMPLEX, 1.5, 0, 3)
+        rows = np.flatnonzero((big[200:] < 128).any(axis=1)) + 200
+        cols = np.flatnonzero((big[200:] < 128).any(axis=0))
+        x0, y0, x1, y1 = int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1
+        cv2.ellipse(big, (x0 - 22, (y0 + y1) // 2), (12, (y1 - y0) // 2 + 14), 0, 0, 360, 0, -1)  # the face
+        clipped = (x0 + 3, y0 + 1, x1 - (x1 - x0) // 6, y1 - 4)
+        repaired, changes = repair_lines(np.where(big < 128, 255, 0).astype(np.uint8), list(ink) + [clipped], big)
+        fitted = repaired[3][0]
+        self.assertTrue(fitted[2] >= x1 - 8 and fitted[3] >= y1 - 6, fitted)  # the line is still fitted
+        self.assertGreater(fitted[0], x0 - 10, fitted)  # but never over the face
+
+    def test_two_large_lines_in_one_box_are_not_fitted_as_one(self):
+        # The neighbour: two lines of large letters with a gap between them stay apart, never one box.
+        gray = np.full((300, 420), 255, np.uint8)
+        cv2.putText(gray, "SMALL ONE", (60, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.9, 0, 2)
+        cv2.putText(gray, "SMALL TWO", (60, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.9, 0, 2)
+        cv2.putText(gray, "BIG", (60, 170), cv2.FONT_HERSHEY_SIMPLEX, 1.5, 0, 3)
+        cv2.putText(gray, "TWO", (60, 230), cv2.FONT_HERSHEY_SIMPLEX, 1.5, 0, 3)
+        mask = np.where(gray < 128, 255, 0).astype(np.uint8)
+        small = [(58, 20, 220, 44), (58, 50, 220, 74)]
+        repaired, changes = repair_lines(mask, small + [(60, 140, 160, 232)], gray)
+        for box, _ in repaired:
+            self.assertLess(box[3] - box[1], 80, box)  # never one box over both large lines
+
     def test_box_clipping_a_line_that_touches_the_one_above_is_fitted(self):
         # Manga teste p15: tight leading joined the last line to the one above through a stray
         # mark; the box, 3 px short of the letters, was never fitted and the OCR read "DP".
@@ -1476,6 +1558,98 @@ class LineRepairTest(unittest.TestCase):
         found = [b for b, source in repair_lines(mask, boxes, page, rebuild=True)[0] if source is None]
         self.assertEqual(len(found), 1, found)  # the line under it, not the far one
         self.assertGreater(found[0][1], boxes[-1][3] - 2)
+
+    def test_line_on_paper_the_detector_missed_whole_is_found_under_its_neighbour(self):
+        # Webtoon p3: "I DIDN'T / THINK THAT..." in a caption with no balloon; only the first line
+        # had mask and box, and the second stayed in English.  The row of letters right under it,
+        # longer than it, is its next line, read to its first and last letters.
+        gray, _, ink = self.lettered(["I SAID", "THAT IS NOT IT..."], step=26)
+        mask = np.zeros_like(gray)
+        x0, y0, x1, y1 = ink[0]
+        mask[y0:y1, x0:x1] = 255
+        repaired, _ = repair_lines(mask, [(x0 - 1, y0 - 1, x1 + 1, y1 + 1)], gray, rebuild=True)
+        found = [b for b, source in repaired if source is None]
+        self.assertEqual(len(found), 1, found)
+        line = ink[1]
+        self.assertTrue(found[0][0] <= line[0] + 1 and found[0][2] >= line[2] - 1
+                        and abs(found[0][1] - line[1]) <= 3 and abs(found[0][3] - line[3]) <= 3, (found, line))
+
+    def test_far_or_smaller_letters_under_a_line_on_paper_are_not_its_lines(self):
+        # A speech two lines down is another one; a line of small print under a title is not its line.
+        gray, _, ink = self.lettered(["I SAID", "", "THAT IS NOT IT..."], step=26)
+        mask = np.zeros_like(gray)
+        x0, y0, x1, y1 = ink[0]
+        mask[y0:y1, x0:x1] = 255
+        boxes = [(x0 - 1, y0 - 1, x1 + 1, y1 + 1)]
+        self.assertEqual([b for b, source in repair_lines(mask, boxes, gray, rebuild=True)[0] if source is None], [])
+        cv2.putText(gray, "PRINTED IN THE CITY", (x0 - 20, y1 + 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, 0, 1)
+        self.assertEqual([b for b, source in repair_lines(mask, boxes, gray, rebuild=True)[0] if source is None], [])
+
+    @staticmethod
+    def shout(big, first=None, last=None):
+        """A page of small speech and a shout in letters near twice its size, one word a line.
+
+        The detector mask holds every line; only "HEAD" has a box.  ``first`` and ``last`` draw
+        something else in place of the first and the last word.  Returns (gray, mask, boxes, ink)."""
+        gray = np.full((560, 420), 255, np.uint8)
+        boxes, ink = [], []
+        for i, text in enumerate(["WE WENT", "HOME AT", "NIGHT."]):  # the page's speech sets the line height
+            (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+            cv2.putText(gray, text, (40, 40 + 26 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.7, 0, 2)
+            boxes.append((39, 40 + 26 * i - h - 1, 41 + w, 40 + 26 * i + 3))
+        for i, text in enumerate(big):
+            alone = np.full_like(gray, 255)
+            (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.6, 4)
+            y = 200 + 56 * i
+            if i == 0 and first is not None:
+                first(alone, y)
+            elif i == len(big) - 1 and last is not None:
+                last(alone, y)
+            else:
+                cv2.putText(alone, text, (210 - w // 2, y), cv2.FONT_HERSHEY_SIMPLEX, 1.6, 0, 4)
+            rows, cols = np.flatnonzero((alone < 128).any(axis=1)), np.flatnonzero((alone < 128).any(axis=0))
+            ink.append((int(cols[0]), int(rows[0]), int(cols[-1]) + 1, int(rows[-1]) + 1))
+            gray = np.minimum(gray, alone)
+        mask = np.where(gray < 128, 255, 0).astype(np.uint8)
+        x0, y0, x1, y1 = ink[1]
+        return gray, mask, boxes + [(x0 - 1, y0 - 1, x1 + 1, y1 + 1)], ink
+
+    def test_lines_of_a_shout_in_larger_letters_around_its_one_box_are_found(self):
+        # Grand Blue 106 p25: "MY / BRAIN / CAN'T / KEEP / UP / WITH..." in letters a half taller
+        # than the page's speech, and boxes only in the middle.  The mask of "MY", taller than two
+        # of the page's lines, was taken for a staircase and dropped; "UP", under a line found in
+        # the mask too, was near no box, and the shout lost its first and last lines.
+        gray, mask, boxes, ink = self.shout(["MY", "HEAD", "IS", "OK"])
+        found = sorted((b for b, source in repair_lines(mask, boxes, gray, rebuild=True)[0] if source is None),
+                       key=lambda b: b[1])
+        self.assertEqual(len(found), 3, found)
+        for box, line in zip(found, [ink[0], ink[2], ink[3]]):
+            self.assertTrue(box[0] <= line[0] + 1 and box[2] >= line[2] - 1 and abs(box[1] - line[1]) <= 3
+                            and abs(box[3] - line[3]) <= 3, (box, line))
+
+    def test_a_drawn_head_or_one_glyph_by_a_shout_is_not_one_of_its_lines(self):
+        # Grand Blue 106 p49: a small head drawn in the mask, as tall as a large line; One Piece 1161
+        # p4: one kana under a line of a sound.  A line found this way holds two letters or more.
+        def head(page, y):
+            cv2.circle(page, (210, y - 18), 20, 0, 3)
+            page[y - 26:y - 20, 200:204] = 0
+            page[y - 26:y - 20, 216:220] = 0
+        def bar(page, y):
+            page[y - 36:y, 200:236] = 0
+        gray, mask, boxes, ink = self.shout(["MY", "HEAD", "IS", "OK"], first=head, last=bar)
+        found = [b for b, source in repair_lines(mask, boxes, gray, rebuild=True)[0] if source is None]
+        self.assertEqual(len(found), 1, found)  # "IS" only
+        self.assertTrue(abs(found[0][1] - ink[2][1]) <= 3, (found, ink))
+
+    def test_letters_of_another_size_by_a_line_just_added_are_not_chained_to_it(self):
+        # A sound effect in much bigger letters right under the shout is not one of its lines.
+        def sound(page, y):
+            cv2.putText(page, "BAM", (150, y + 30), cv2.FONT_HERSHEY_SIMPLEX, 2.6, 0, 6)
+        gray, mask, boxes, ink = self.shout(["MY", "HEAD", "IS", "OK"], last=sound)
+        found = sorted((b for b, source in repair_lines(mask, boxes, gray, rebuild=True)[0] if source is None),
+                       key=lambda b: b[1])
+        self.assertEqual(len(found), 2, found)  # "MY" and "IS"
+        self.assertTrue(abs(found[1][1] - ink[2][1]) <= 3, (found, ink))
 
     @staticmethod
     def blob(page, boxes):
@@ -2140,6 +2314,13 @@ class GoldStandardTextTest(unittest.TestCase):
                              ("I CANNOT ALLOW THIS", "Isso é inaceitável."), ("HELLO", "Olá.")):
             self.assertFalse(quality.lost_negation(source, text), source)
 
+    def test_a_bare_no_is_a_negation(self):
+        for source, text in (("NO,", "Ora,"), ("OH NO!", "Ah!"), ("NO, ME!!", "Eu!!")):
+            self.assertTrue(quality.lost_negation(source, text), source)
+        for source, text in (("NO,", "Não,"), ("OH NO!", "Ah, não!"), ("NO. 1 IN CLASS", "O nº 1 da turma"),
+                             ("NOAH!", "Noah!"), ("YES!", "Sim!")):
+            self.assertFalse(quality.lost_negation(source, text), source)
+
     def test_stacked_orphan_lines_are_a_paragraph(self):
         h = 20
         para = [(100, 100 + i * 24, 180 + (i % 2) * 10, 120 + i * 24) for i in range(4)]
@@ -2334,6 +2515,36 @@ class BubbleScanTest(unittest.TestCase):
     def test_bubble_with_a_detected_box_is_skipped(self):
         self.assertEqual(quality.bubble_text_lines(self.page(), [(320, 310, 380, 340)]), [])
 
+    def test_comma_at_the_end_of_a_short_row_is_part_of_it(self):
+        # Webtoon p36: "NO," read without its comma came back as one CJK glyph and was dropped.
+        page = self.page(text="NO,")
+        # The letters' own ink, measured on the page: Pillow's subpixel placement varies by platform.
+        ink = np.argwhere(page[300:350, 300:400].min(axis=-1) < 128) if page.ndim == 3 else np.argwhere(page[300:350, 300:400] < 128)
+        right, bottom = 300 + int(ink[:, 1].max()) + 1, 300 + int(ink[:, 0].max()) + 1
+        rows = quality.bubble_text_lines(page, [])[0][1]
+        self.assertGreaterEqual(rows[0][2], right - 1, rows)
+        self.assertGreaterEqual(rows[0][3], bottom - 1, rows)
+
+    def test_one_word_and_a_comma_reads_as_speech(self):
+        for text in ("NO,", "YES,"):
+            self.assertTrue(quality.reads_as_speech(text), text)
+        for text in ("NO", "BAM,", "REEE,", ","):
+            self.assertFalse(quality.reads_as_speech(text), text)
+
+    def test_a_scanned_row_is_read_with_paper_around_it_inside_its_bubble(self):
+        # Webtoon p36: flush with its ink, "NO," was read as one symbol and stayed in English.
+        bubble = (100, 100, 300, 200)
+        self.assertEqual(quality.scanned_line((150, 130, 230, 170), bubble), (148, 128, 232, 172))
+        self.assertEqual(quality.scanned_line((120, 100, 280, 200), bubble), (115, 100, 285, 200))
+        self.assertEqual(quality.scanned_line((140, 120, 160, 180), bubble), (116, 117, 184, 183))  # "I"
+
+    def test_a_dot_far_from_the_row_is_not_its_punctuation(self):
+        img = self.page(text="NO")
+        rows = quality.bubble_text_lines(img, [])[0][1]
+        x1, y1 = rows[0][2], rows[0][3]
+        img[y1 - 4:y1, x1 + 20:x1 + 24] = 0
+        self.assertEqual(quality.bubble_text_lines(img, [])[0][1], rows)
+
     def test_jagged_burst_and_empty_bubble_are_skipped(self):
         self.assertEqual(quality.bubble_text_lines(self.page(shape="burst"), []), [])
         self.assertEqual(quality.bubble_text_lines(self.page(text=""), []), [])
@@ -2343,6 +2554,20 @@ class BubbleScanTest(unittest.TestCase):
             self.assertTrue(quality.reads_as_speech(text), text)
         for text in ("GRAB", "REEE", "", "ZZZT!"):
             self.assertFalse(quality.reads_as_speech(text), text)
+
+    def test_reads_as_speech_with_words_run_together(self):
+        # Webtoon p41: "THIS IS..." in a condensed font came back as "THISIS" and stayed in English as a sound.
+        for text in ("THISIS", "ISTHAT", "ITSTHAT"):
+            self.assertTrue(quality.reads_as_speech(text, joined=True), text)
+            self.assertFalse(quality.reads_as_speech(text), text)  # only the bubble scan reads it so
+        # Sounds that split into two dictionary pieces without a small word of speech, repeated
+        # syllables and names stay drawn.
+        for text in ("BADUMP", "AHAHA", "SHUDDER", "KABLAM", "HEHE", "NONO", "NOAH"):
+            self.assertFalse(quality.reads_as_speech(text, joined=True), text)
+        self.assertEqual(quality.spaced_words("THISIS..."), "THIS IS...")
+        # More than one way to split, a contraction, a name and a longer line stay as read.
+        for text in ("INEVER", "YOU'RE!", "NOAH!", "ISAW MYOLD"):
+            self.assertEqual(quality.spaced_words(text), text)
 
     def test_hook_adds_scanned_lines_and_paints_mask(self):
         import asyncio
