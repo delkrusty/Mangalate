@@ -17,7 +17,9 @@ chat_system_template: >
   "Argh"/"Hã". Calling a group ("Guys!", "Everyone!", "You all!") is "Pessoal!" or
   "Gente!". A short exclamation keeps its stressed subject ("I knew it!" -> "Eu sabia!",
   "I told you!" -> "Eu te falei!", "We did it!" -> "A gente conseguiu!"). Avoid calques such as "fazer você" + verb for "let's have you", or
-  "isso não é divertido" for "that's no fun" ("assim não tem graça"). Never leave English
+  "isso não é divertido" for "that's no fun" ("assim não tem graça"). A stutter goes on the
+  first word of the natural Portuguese sentence ("W-WE HAVE TO RUN" -> "T-temos que
+  correr"), never on a new word or phrase the original does not have. Never leave English
   words in the translation except names, titles and terms Brazilians normally use.
   Use "você"; young or casual characters may use "pra", "tá", "né", "a gente"; keep
   standard grammar for formal speech and narration. Keep names and honorifics consistent
@@ -38,7 +40,8 @@ chat_system_template: >
   verbs keep the pronoun ("vou me vingar"); figurative English verbs become what a
   Brazilian says ("she flew down the stairs" -> "desceu a escada correndo"). Names of
   places, seas, ships and groups stay as written in the source unless the glossary
-  translates them.
+  translates them. Figures of myth, legend and history that have a Portuguese name use it,
+  capitalized with their title ("KING ARTHUR" -> "Rei Artur", "HERCULES" -> "Hércules").
   Every name in the source appears in the translation, as written: never replace one
   name with another, drop one, or add a surname the source does not have ("MARCUS
   ELENA. TOBY" keeps Marcus, Elena and Toby).

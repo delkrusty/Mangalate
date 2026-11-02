@@ -140,6 +140,21 @@ class ServerTest(unittest.TestCase):
         self.assertEqual([r.text for r in ctx.mangalate_preserved], ["WAIT, WHAT?"])
         self.assertTrue(ctx.mangalate_preserved[0].mangalate_background["devolvida_igual"])
 
+    def test_a_drawn_mark_read_as_symbols_stays_as_drawn(self):
+        # Manhwa antigo p7: the dots of a drawn "!!!!" were read "‥ ●"; the AI answered "..."
+        # and the cleaning cut off the bottom of one "!".  No letter, a drawing symbol: art.
+        async def engine(self, config, ctx):
+            for region, answer in zip(ctx.text_regions, ("...", "...?!", "Oi!")):
+                region.translation = answer
+            return list(ctx.text_regions)
+        regions = [SimpleNamespace(text=text, translation="", mangalate_background={"kind": "interior"})
+                   for text in ("‥ ●", "...?!", "HI ★")]
+        ctx = SimpleNamespace(text_regions=list(regions), mangalate_preserved=[])
+        with patch.dict("os.environ", {"MANGALATE_LEGACY_QUALITY": "false"}):
+            result = asyncio.run(validate_page_translations(engine)(None, None, ctx))
+        self.assertEqual([r.text for r in result], ["...?!", "HI ★"])  # punctuation and speech stay
+        self.assertEqual([r.text for r in ctx.mangalate_preserved], ["‥ ●"])
+
     def test_byok_provider_without_usage_and_truncated_output(self):
         response = SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content="<|1|>Olá!"), finish_reason="stop")],
