@@ -5,6 +5,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -289,8 +290,17 @@ class TranslateWithPoolTest(unittest.TestCase):
 
 
 class InstallerTest(unittest.TestCase):
+    def setUp(self):
+        # Never the real clipboard of the PC running the tests (it may hold a real key).
+        import setup
+        patches = [mock.patch.object(setup, "WINDOWS", False),
+                   mock.patch.object(setup, "read_clipboard", lambda: self.fail("read the real clipboard"))]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
     def test_menu_builds_ordered_providers_with_default_models(self):
-        answers = iter(["1", "", "s", "2", "", "n"])
+        answers = iter(["1", "s", "2", "n"])
         keys = iter([GROQ["key"], GEMINI["key"]])
         providers = choose_providers(ask=lambda prompt: next(answers), secret=lambda prompt: next(keys))
         self.assertEqual(providers, [GROQ, GEMINI])
@@ -321,7 +331,7 @@ class InstallerTest(unittest.TestCase):
     def test_second_groq_model_reuses_the_groq_key(self):
         names = list(PRESETS)
         picks = f"1,{names.index('groq-2') + 1}"
-        answers = iter([picks, "", "", "n"])
+        answers = iter([picks, "n"])
         keys = iter([GROQ["key"]])
         providers = choose_providers(ask=lambda prompt: next(answers), secret=lambda prompt: next(keys))
         self.assertEqual([p["name"] for p in providers], ["groq", "groq-2"])
@@ -329,7 +339,7 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(providers[1]["model"], "openai/gpt-oss-20b")
 
     def test_bad_paste_or_half_typed_key_is_retried(self):
-        answers = iter(["1", "", "n"])
+        answers = iter(["1", "n"])
         keys = iter(["\x16", "abcdefghijklmnopqrstuvwxhgdf", GROQ["key"]])
         providers = choose_providers(ask=lambda prompt: next(answers), secret=lambda prompt: next(keys))
         self.assertEqual(providers[0]["key"], GROQ["key"])
@@ -345,6 +355,17 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(key, GROQ["key"])
         self.assertIn("não precisa colar", prompts[0])
 
+    def test_a_provider_with_one_model_goes_straight_to_the_key(self):
+        prompts = []
+        answers = iter(["1", "n"])
+        keys = iter([GROQ["key"]])
+
+        def ask(prompt):
+            prompts.append(prompt)
+            return next(answers)
+        choose_providers(ask=ask, secret=lambda prompt: next(keys))
+        self.assertFalse([p for p in prompts if "Modelo" in p])
+
     def test_yes_no_insists_on_a_clear_answer(self):
         from setup import yes_no
         answers = iter(["h", "S"])
@@ -352,10 +373,10 @@ class InstallerTest(unittest.TestCase):
         self.assertFalse(yes_no("?", ask=lambda prompt: ""))
 
     def test_enter_picks_groq_and_comma_list_still_works(self):
-        answers = iter(["", "", "n"])
+        answers = iter(["", "n"])
         keys = iter([GROQ["key"]])
         self.assertEqual(choose_providers(ask=lambda prompt: next(answers), secret=lambda prompt: next(keys)), [GROQ])
-        answers = iter(["1,2", "", "", "n"])
+        answers = iter(["1,2", "n"])
         keys = iter([GROQ["key"], GEMINI["key"]])
         self.assertEqual(choose_providers(ask=lambda prompt: next(answers), secret=lambda prompt: next(keys)),
                          [GROQ, GEMINI])

@@ -34,10 +34,9 @@ Na pasta `server`, rode `py setup.py`:
 3. **Substituir a configuração** (se já existir): `s`.
 4. **Velocidade:** Enter. O padrão é Rápido em CPU, cerca de 3 vezes mais rápido e com limpeza praticamente igual nos testes, e Qualidade com placa NVIDIA.
 5. **Qual IA:** `1` para Groq.
-6. **Modelo:** Enter para usar o recomendado.
-7. **Chave:** copie a chave no site (botão Copiar ou Ctrl+C), volte ao PowerShell e **só aperte Enter**: no Windows o instalador lê a chave copiada. Deve aparecer "Chave recebida: … caracteres".
-8. **Tem chave de outra IA para usar como reserva?** `s`, escolha `2` (Gemini) e repita os passos 6 e 7. Se tiver o Ollama instalado, responda `s` de novo e escolha `3` (veja [Ollama](#ollama-experimental)). Quando acabar, responda `n`.
-9. **Iniciar agora:** `s`. Depois teste uma página com `py check.py --warmup`.
+6. **Chave:** copie a chave no site (botão Copiar ou Ctrl+C), volte ao PowerShell e **só aperte Enter**: no Windows o instalador lê a chave copiada. Deve aparecer "Chave recebida: … caracteres".
+7. **Tem chave de outra IA para usar como reserva?** `s`, escolha `2` (Gemini) e repita o passo 6. Se tiver o Ollama instalado, responda `s` de novo e escolha `3` (veja [Ollama](#ollama-experimental)). Quando acabar, responda `n`.
+8. **Iniciar agora:** `s`. Depois teste uma página com `py check.py --warmup`.
 
 No celular nada muda: o endereço e a Chave Mangalate continuam os mesmos. Para trocar ou acrescentar uma IA, rode `py setup.py` de novo.
 
