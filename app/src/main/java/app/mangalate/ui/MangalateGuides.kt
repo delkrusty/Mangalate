@@ -8,7 +8,8 @@ internal object MangalateGuides {
         GuideArticle(
             "Começar a ler e traduzir",
             "Abra um capítulo, toque no centro e depois em 文A. Escolha o idioma do texto que aparece nos balões " +
-                "(não o país do mangá) e Português (Brasil). Toque em 文A de novo para ver o original.",
+                "(não o país do mangá) e Português (Brasil). Toque em 文A de novo para ver o original. Segure o dedo na " +
+                "página para ver o original só dela, refazer a tradução ou, no modo No celular, trocar o idioma da obra.",
         ),
         GuideArticle(
             "Modo No celular",
@@ -43,13 +44,14 @@ internal object MangalateGuides {
         GuideArticle(
             "Ler offline e Downloads",
             "Ligue Traduzir capítulos ao baixar e espere a tradução terminar; falhas aparecem na fila de " +
-                "Downloads. Mudar idioma, modo ou servidor pode exigir traduzir de novo.",
+                "Downloads. Mudar idioma, modo ou servidor pode exigir traduzir de novo; para refazer, segure o dedo na " +
+                "página e toque em Refazer capítulo.",
         ),
         GuideArticle(
             "Balão, arte e revisão",
             "O texto é escrito dentro do balão, com hífen em português quando precisa. Com Preservar a arte " +
                 "ligado, parte do texto sobre o desenho fica no original para não estragar a arte. Nenhuma tradução " +
-                "automática é perfeita: compare com o original.",
+                "automática é perfeita: segure o dedo na página e toque em Ver original para comparar.",
         ),
         GuideArticle(
             "Biblioteca, extensões e arquivos locais",

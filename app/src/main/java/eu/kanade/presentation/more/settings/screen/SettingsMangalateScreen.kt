@@ -394,7 +394,13 @@ private fun LanguageSection(
         title = "Idiomas",
     ) {
         if (settings.mode != TranslateMode.SERVER) {
-            Text("O mangá está em", style = MaterialTheme.typography.labelLarge)
+            // Mangalate: cada obra guarda o seu idioma (sugerido pela extensão); este é o padrão.
+            Text("Idioma padrão das obras", style = MaterialTheme.typography.labelLarge)
+            Text(
+                "Cada obra usa o idioma da extensão ou o que você escolher segurando o dedo na página.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),

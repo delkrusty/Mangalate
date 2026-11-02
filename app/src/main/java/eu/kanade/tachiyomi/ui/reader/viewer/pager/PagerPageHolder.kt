@@ -97,7 +97,7 @@ class PagerPageHolder(
             launch(Dispatchers.IO) {
                 loader.loadPage(page)
             }
-            combine(page.statusFlow, app.mangalate.translate.MangalateTranslator.enabled) { state, _ -> state }
+            combine(page.statusFlow, app.mangalate.translate.MangalateReaderPages.refreshOf(page)) { state, _ -> state }
                 .collectLatest { state ->
                 when (state) {
                     Page.State.Queue -> setQueued()
@@ -153,13 +153,7 @@ class PagerPageHolder(
         try {
             val buffer = withContext(Dispatchers.IO) { streamFn().use { Buffer().readFrom(it) } }
             // Mangalate: troca a página pela versão traduzida (com fallback para a original)
-            val translated = app.mangalate.translate.MangalateTranslator.maybeTranslate(
-                context,
-                buffer,
-                app.mangalate.translate.MangalateWork.of(page),
-            ) {
-                app.mangalate.translate.MangalateNeighbors.of(page)
-            }
+            val translated = app.mangalate.translate.MangalateReaderPages.maybeTranslate(context, buffer, page)
             // Splitting, merging and sampling the background decode the image, which is CPU work
             val (source, isAnimated, background) = withContext(Dispatchers.Default) {
                 val source = process(item, translated)

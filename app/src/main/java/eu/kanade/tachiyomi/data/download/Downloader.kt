@@ -498,6 +498,8 @@ class Downloader(
                 tmpDir,
                 download.chapter.name,
                 download.manga.title,
+                download.manga.id,
+                download.source.lang,
             )
 
             createComicInfoFile(

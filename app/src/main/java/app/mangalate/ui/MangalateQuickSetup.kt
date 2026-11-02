@@ -27,6 +27,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -36,6 +39,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import app.mangalate.translate.MangalateTranslator
+import app.mangalate.translate.MangalateWork
 import app.mangalate.translate.SourceLanguage
 import app.mangalate.translate.TargetLanguage
 import app.mangalate.translate.TranslateMode
@@ -51,10 +55,13 @@ import mihon.icons.materialsymbols.rounded.Translate
 fun MangalateQuickSetupDialog(
     onDismiss: () -> Unit,
     onStart: () -> Unit,
+    mangaId: Long? = null,
 ) {
     val context = LocalContext.current
     val uriHandler = LocalUriHandler.current
     val settings by MangalateTranslator.settings.collectAsState()
+    // O idioma vale para esta obra (sugerido pela extensão) e vira o padrão das próximas.
+    var workLanguage by remember(mangaId) { mutableStateOf(MangalateWork.language(context, mangaId)) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -69,8 +76,12 @@ fun MangalateQuickSetupDialog(
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     SourceLanguage.entries.forEach { lang ->
                         FilterChip(
-                            selected = settings.sourceLanguage == lang,
-                            onClick = { MangalateTranslator.updateSettings(context) { it.copy(sourceLanguage = lang) } },
+                            selected = workLanguage == lang,
+                            onClick = {
+                                workLanguage = lang
+                                mangaId?.let { MangalateWork.setLanguage(context, it, lang) }
+                                MangalateTranslator.updateSettings(context) { it.copy(sourceLanguage = lang) }
+                            },
                             label = { Text(lang.label) },
                         )
                     }

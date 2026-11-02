@@ -1,6 +1,7 @@
 package eu.kanade.presentation.reader
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
@@ -31,47 +32,52 @@ fun ReaderPageActionsDialog(
     onSetAsCover: () -> Unit,
     onShare: (Boolean) -> Unit,
     onSave: () -> Unit,
+    // Mangalate: ações de tradução abaixo das do Mihon.
+    extraContent: @Composable () -> Unit = {},
 ) {
     var showSetCoverDialog by remember { mutableStateOf(false) }
 
     AdaptiveSheet(onDismissRequest = onDismissRequest) {
-        Row(
-            modifier = Modifier.padding(vertical = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(MaterialTheme.padding.small),
-        ) {
-            ActionButton(
-                modifier = Modifier.weight(1f),
-                title = stringResource(MR.strings.set_as_cover),
-                icon = MaterialSymbols.Rounded.Photo,
-                onClick = { showSetCoverDialog = true },
-            )
-            ActionButton(
-                modifier = Modifier.weight(1f),
-                title = stringResource(MR.strings.action_copy_to_clipboard),
-                icon = MaterialSymbols.Rounded.ContentCopy,
-                onClick = {
-                    onShare(true)
-                    onDismissRequest()
-                },
-            )
-            ActionButton(
-                modifier = Modifier.weight(1f),
-                title = stringResource(MR.strings.action_share),
-                icon = MaterialSymbols.Rounded.Share,
-                onClick = {
-                    onShare(false)
-                    onDismissRequest()
-                },
-            )
-            ActionButton(
-                modifier = Modifier.weight(1f),
-                title = stringResource(MR.strings.action_save),
-                icon = MaterialSymbols.Rounded.Save,
-                onClick = {
-                    onSave()
-                    onDismissRequest()
-                },
-            )
+        Column {
+            Row(
+                modifier = Modifier.padding(vertical = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(MaterialTheme.padding.small),
+            ) {
+                ActionButton(
+                    modifier = Modifier.weight(1f),
+                    title = stringResource(MR.strings.set_as_cover),
+                    icon = MaterialSymbols.Rounded.Photo,
+                    onClick = { showSetCoverDialog = true },
+                )
+                ActionButton(
+                    modifier = Modifier.weight(1f),
+                    title = stringResource(MR.strings.action_copy_to_clipboard),
+                    icon = MaterialSymbols.Rounded.ContentCopy,
+                    onClick = {
+                        onShare(true)
+                        onDismissRequest()
+                    },
+                )
+                ActionButton(
+                    modifier = Modifier.weight(1f),
+                    title = stringResource(MR.strings.action_share),
+                    icon = MaterialSymbols.Rounded.Share,
+                    onClick = {
+                        onShare(false)
+                        onDismissRequest()
+                    },
+                )
+                ActionButton(
+                    modifier = Modifier.weight(1f),
+                    title = stringResource(MR.strings.action_save),
+                    icon = MaterialSymbols.Rounded.Save,
+                    onClick = {
+                        onSave()
+                        onDismissRequest()
+                    },
+                )
+            }
+            extraContent()
         }
     }
 

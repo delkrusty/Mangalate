@@ -309,6 +309,7 @@ class ReaderActivity : BaseActivity() {
                     showMangalateSetup = false
                     applyMangalateEnabled(true)
                 },
+                mangaId = state.manga?.id,
             )
         }
 
@@ -360,11 +361,13 @@ class ReaderActivity : BaseActivity() {
                 )
             }
             is ReaderViewModel.Dialog.PageActions -> {
+                val page = (state.dialog as ReaderViewModel.Dialog.PageActions).page
                 ReaderPageActionsDialog(
                     onDismissRequest = onDismissRequest,
                     onSetAsCover = viewModel::setAsCover,
                     onShare = viewModel::shareImage,
                     onSave = viewModel::saveImage,
+                    extraContent = { app.mangalate.ui.MangalatePageActions(page, onDismissRequest) },
                 )
             }
             null -> {}
