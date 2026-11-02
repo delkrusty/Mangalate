@@ -81,6 +81,14 @@ class SettingsStoreTest {
     }
 
     @Test
+    fun `adiantar o proximo capitulo vem desligado e fica salvo`() {
+        assertFalse(MangalateSettings().prefetchNextChapter)
+        val p = FakePrefs(mutableMapOf())
+        MangalateSettingsStore.write(p, MangalateSettings(prefetchNextChapter = true), Reverse)
+        assertTrue(MangalateSettingsStore.read(p, Reverse).prefetchNextChapter)
+    }
+
+    @Test
     fun `instalacao nova fica com os padroes`() {
         val s = MangalateSettingsStore.read(FakePrefs(mutableMapOf()), Reverse)
         assertEquals(MangalateSettings(), s)

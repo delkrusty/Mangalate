@@ -220,7 +220,12 @@ class ReaderActivity : BaseActivity() {
                 .collectLatest { (enabled, chapter, page) ->
                     if (!enabled || chapter == null || page < 1) return@collectLatest
                     kotlinx.coroutines.delay(300)
-                    app.mangalate.translate.MangalatePrefetcher.prefetch(this@ReaderActivity, chapter, page - 1)
+                    app.mangalate.translate.MangalatePrefetcher.prefetch(
+                        this@ReaderActivity,
+                        chapter,
+                        page - 1,
+                        viewModel.state.value.viewerChapters?.nextChapter,
+                    )
                 }
         }
 

@@ -87,6 +87,7 @@ object MangalateSettingsStore {
         put("source_lang", s.sourceLanguage.name)
         put("setup_done", s.setupDone)
         put("translate_on_download", s.translateOnDownload)
+        put("prefetch_next_chapter", s.prefetchNextChapter)
         put("server_url", s.serverUrl)
         put("target_lang", s.targetLanguage.code)
         s.preserveArtText?.let { put("preserve_art_text", it) }
@@ -101,6 +102,7 @@ object MangalateSettingsStore {
             sourceLanguage = SourceLanguage.fromName(o.optString("source_lang", "")),
             setupDone = o.optBoolean("setup_done", false),
             translateOnDownload = o.optBoolean("translate_on_download", false),
+            prefetchNextChapter = o.optBoolean("prefetch_next_chapter", false),
             serverUrl = o.optString("server_url", ""),
             targetLanguage = TargetLanguage.fromCode(o.optString("target_lang", "")),
             preserveArtText = if (o.has("preserve_art_text")) o.optBoolean("preserve_art_text") else null,

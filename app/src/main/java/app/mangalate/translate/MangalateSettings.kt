@@ -83,6 +83,8 @@ data class MangalateSettings(
     val mode: TranslateMode = TranslateMode.ON_DEVICE,
     val sourceLanguage: SourceLanguage = SourceLanguage.JA,
     val translateOnDownload: Boolean = false,
+    /** Traduz o capítulo seguinte perto do fim do atual, só no Wi-Fi e carregando. */
+    val prefetchNextChapter: Boolean = false,
     val setupDone: Boolean = false,
     val serverUrl: String = "",
     val accessKey: String = "",

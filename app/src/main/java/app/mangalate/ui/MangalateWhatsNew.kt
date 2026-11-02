@@ -20,6 +20,7 @@ internal object MangalateWhatsNew {
                 "Quando uma fala fica no original, um selo no canto avisa, e um toque mostra o original da página para comparar.",
                 "No modo Servidor, segure o dedo na página para corrigir como sai o nome de um personagem na obra inteira, ou para guardar a página no computador e conferir depois.",
                 "Para ligar o servidor, leia o QR code que aparece no computador: o endereço e a chave entram sozinhos.",
+                "Nova opção para adiantar o próximo capítulo: perto do fim de um, o seguinte já vai sendo traduzido, só no Wi-Fi e com o celular carregando.",
                 "A chave do servidor fica guardada de forma protegida no celular.",
             ),
         ),

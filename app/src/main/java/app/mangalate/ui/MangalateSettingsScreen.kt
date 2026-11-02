@@ -726,6 +726,13 @@ private fun OfflineSection(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        SwitchRow(
+            title = "Adiantar o próximo capítulo",
+            subtitle = "Perto do fim de um capítulo, o seguinte já começa a ser traduzido. " +
+                "Só no Wi-Fi e com o celular carregando.",
+            checked = settings.prefetchNextChapter,
+            onChecked = { v -> onChange { it.copy(prefetchNextChapter = v) } },
+        )
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 "${Formatter.formatShortFileSize(context, size)} de páginas traduzidas guardadas",
