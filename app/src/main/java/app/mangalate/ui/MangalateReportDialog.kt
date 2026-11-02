@@ -1,6 +1,6 @@
 package app.mangalate.ui
 
-import android.widget.Toast
+import android.content.ActivityNotFoundException
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,14 +18,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import app.mangalate.translate.MangalateServerLoop
+import app.mangalate.translate.MangalateReport
 import eu.kanade.tachiyomi.ui.reader.model.ReaderPage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 /**
- * "Reportar esta página": manda o original e a tradução para a pasta `relatorios` do
- * servidor, no computador, para conferir depois. Nada vai para a internet.
+ * "Reportar esta página": junta o original e a tradução num pacote e abre o e-mail para o
+ * Mangalate. A pessoa vê o e-mail pronto e só ele envia.
  */
 @Composable
 fun MangalateReportDialog(page: ReaderPage, onDismissRequest: () -> Unit) {
@@ -41,8 +41,8 @@ fun MangalateReportDialog(page: ReaderPage, onDismissRequest: () -> Unit) {
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "O original e a tradução desta página vão para a pasta relatorios do servidor, no seu " +
-                        "computador. Nada é enviado para a internet.",
+                    "O original e a tradução desta página vão num e-mail para ${MangalateReport.ADDRESS}, " +
+                        "para corrigir o Mangalate. Você confere o e-mail antes de enviar.",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 OutlinedTextField(
@@ -63,18 +63,19 @@ fun MangalateReportDialog(page: ReaderPage, onDismissRequest: () -> Unit) {
                     error = null
                     scope.launch {
                         try {
-                            val folder = MangalateServerLoop.report(context, page, note)
-                            Toast.makeText(context, "Página salva no computador: relatorios/$folder", Toast.LENGTH_LONG).show()
+                            context.startActivity(MangalateReport.prepare(context, page, note))
                             onDismissRequest()
+                        } catch (e: ActivityNotFoundException) {
+                            error = "Nenhum app de e-mail encontrado no celular."
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Throwable) {
-                            error = e.message ?: "Não foi possível enviar."
+                            error = e.message ?: "Não foi possível montar o relatório."
                         }
                         sending = false
                     }
                 },
-            ) { Text(if (sending) "Enviando…" else "Enviar") }
+            ) { Text(if (sending) "Preparando…" else "Abrir e-mail") }
         },
         dismissButton = { TextButton(enabled = !sending, onClick = onDismissRequest) { Text("Cancelar") } },
     )

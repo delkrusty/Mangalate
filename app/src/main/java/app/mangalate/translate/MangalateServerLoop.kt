@@ -1,12 +1,9 @@
 package app.mangalate.translate
 
-import android.content.Context
-import eu.kanade.tachiyomi.ui.reader.model.ReaderPage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.MultipartBody
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
@@ -16,7 +13,7 @@ import java.util.concurrent.TimeUnit
 
 /**
  * O que a pessoa corrige ou aponta no leitor e vai para o servidor: o glossário da obra
- * (nomes e termos) e o "Reportar esta página", que fica salvo no computador.
+ * (nomes e termos). O "Reportar esta página" vai por e-mail, em [MangalateReport].
  */
 object MangalateServerLoop {
 
@@ -80,35 +77,5 @@ object MangalateServerLoop {
             item.optString("target"),
             item.optString("gender").takeIf { it == "m" || it == "f" },
         ).takeIf { it.source.isNotBlank() }
-    }
-
-    /**
-     * Manda o original e a tradução desta página, com a nota opcional, para a pasta de
-     * relatórios no computador do servidor. Retorna o nome da pasta criada lá. A tradução vem só
-     * da que ficou guardada: reportar nunca traduz de novo nem gasta a cota das IAs, e uma página
-     * que falhou vai só com o original.
-     */
-    suspend fun report(context: Context, page: ReaderPage, note: String): String = withContext(Dispatchers.IO) {
-        val s = MangalateTranslator.settings.value
-        val stream = page.stream ?: throw IOException("A página ainda não carregou.")
-        val original = stream().use { it.readBytes() }
-        val translated = MangalateTranslator.cached(
-            context,
-            original,
-            sourceLanguage = MangalateWork.language(context, MangalateWork.mangaIdOf(page)),
-        )
-        val body = MultipartBody.Builder()
-            .setType(MultipartBody.FORM)
-            .addFormDataPart("original", "original", original.toRequestBody("application/octet-stream".toMediaType()))
-            .apply {
-                translated?.let {
-                    addFormDataPart("traduzida", "traduzida", it.toRequestBody("application/octet-stream".toMediaType()))
-                }
-            }
-            .apply { MangalateWork.of(page)?.let { addFormDataPart("work", it.toJson()) } }
-            .apply { if (note.isNotBlank()) addFormDataPart("nota", note.take(500)) }
-            .build()
-        val request = Request.Builder().url(s.normalizedUrl + "/v1/report").post(body)
-        JSONObject(call(s, request)).optString("pasta")
     }
 }

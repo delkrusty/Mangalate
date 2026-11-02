@@ -2,6 +2,18 @@
 
 As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://github.com/mihonapp/mihon/blob/main/CHANGELOG.md).
 
+## 0.7.1
+
+- **Reportar página:** agora em todos os modos e por e-mail. O app monta a página original, a tradução e uma nota e abre o e-mail já pronto para quem cuida do Mangalate.
+
+Detalhes técnicos de cada mudança no [CHANGELOG](https://github.com/delkrusty/Mangalate/blob/main/CHANGELOG.md#071).
+
+### App
+- "Reportar página" agora vale nos dois modos e vai por e-mail: o app monta um `.zip` com o original, a tradução guardada (se houver) e um `info.json` (obra, capítulo, página, nota, modo, idiomas e versão do app, sem chave nem endereço do servidor) e abre o app de e-mail já endereçado a mangalate.report@gmail.com. Assim qualquer pessoa pode mandar uma página errada, não só quem tem o servidor. A rota `/v1/report` do servidor continua lá, mas o app deixou de usá-la.
+
+### Testes
+- `ReportZipTest.kt`: arquivos do pacote, página sem tradução e nenhum campo de chave ou endereço.
+
 ## 0.7.0
 
 - **Leitor:** segurar o dedo na página mostra o original, refaz a página ou o capítulo e, no modo Servidor, corrige nomes da obra ou reporta a página para o PC.
