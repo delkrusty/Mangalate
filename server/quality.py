@@ -1549,6 +1549,125 @@ def letter_height(image, lines):
     return float(np.median(heights)) if heights else None
 
 
+
+# A system window of a game webtoon (status, skill, quest): light letters on a vivid colour,
+# translucent (the drawing shows through it, its light changes across it), in a frame of light
+# straight lines.  Its margin fits no flat plane, so it read as art and stayed in English, or,
+# on white paper, as a bubble with no outline, lettered by the engine past the frame (Manhwa
+# teste p36-p64).
+WINDOW_SATURATION = 120   # median saturation (0-255) around the letters: a vivid colour
+WINDOW_HUE = 12           # hue distance (OpenCV 0-180) still counted as the window's own colour...
+WINDOW_HUE_SHARE = 0.8    # ...on this share of the margin of the lines, the drawing showing through
+WINDOW_LIGHTER = 60       # the letters (and the frame) are this much lighter (grey) than the window...
+WINDOW_LETTERS = 0.05     # ...the letters on at least this share of the line boxes
+WINDOW_FRAME_LIGHT = 190  # a pixel of the frame is at least this light (grey)
+WINDOW_FRAME_SHARE = 0.6  # share of a row (a column) along the text that is frame: a long straight line
+WINDOW_FRAME_REACH = 6.0  # the frame is searched this many line heights from the text
+WINDOW_FRAME_THIN = 0.35  # the light line of the frame is at most this thick (line heights; 1-9 px drawn)...
+WINDOW_FRAME_PAST = 3     # ...and the rows (px) right past it...
+WINDOW_FRAME_BEYOND = 30  # ...still have this median saturation (0-255): the window's edge, not paper
+
+
+def system_window(image, lines):
+    """The system window around ``lines``: {"rect", "fg", "body", "letters"}, or None.
+
+    ``rect`` is the inside of the frame (x0, y0, x1, y1, inclusive), ``fg`` the colour of the
+    letters, ``body`` the colour of the window around them and ``letters`` the height of their
+    capitals (px).  A window needs all of it: a vivid colour of one hue around the lines,
+    letters lighter than it and a thin light straight line on each of the four sides of the text,
+    with colour past it.
+    """
+    quads = [np.asarray(q, np.float32).reshape(4, 2) for q in ([] if lines is None else lines)]
+    img = np.asarray(image)
+    if not quads or img.ndim != 3:
+        return None
+    img = np.ascontiguousarray(img[:, :, :3])
+    h, w = img.shape[:2]
+    line_height = float(np.median([np.ptp(q[:, 1]) for q in quads]))
+    if line_height < 4:
+        return None
+    x0 = int(np.clip(np.floor(min(q[:, 0].min() for q in quads)), 0, w - 1))
+    y0 = int(np.clip(np.floor(min(q[:, 1].min() for q in quads)), 0, h - 1))
+    x1 = int(np.clip(np.ceil(max(q[:, 0].max() for q in quads)), 0, w - 1))
+    y1 = int(np.clip(np.ceil(max(q[:, 1].max() for q in quads)), 0, h - 1))
+    inked = np.zeros((h, w), np.uint8)
+    for q in quads:
+        cv2.fillPoly(inked, [np.round(q).astype(np.int32)], 1)
+    pad = max(3, int(round(line_height / 2)))
+    ring = (cv2.dilate(inked, np.ones((2 * pad + 1, 2 * pad + 1), np.uint8)) > 0) & (inked == 0)
+    if ring.sum() < 4 * pad:
+        return None
+    hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+    saturation = hsv[..., 1][ring].astype(int)
+    if np.median(saturation) < WINDOW_SATURATION:
+        return None
+    hue = hsv[..., 0][ring].astype(float)
+    vivid = saturation >= WINDOW_SATURATION
+    angle = hue[vivid] * np.pi / 90  # the hue circle (0-180): a red window is near both ends
+    own = (np.degrees(np.arctan2(np.sin(angle).mean(), np.cos(angle).mean())) / 2) % 180
+    distance = np.abs(hue - own)
+    distance = np.minimum(distance, 180 - distance)
+    if np.mean((distance <= WINDOW_HUE) & (saturation >= WINDOW_SATURATION / 2)) < WINDOW_HUE_SHARE:
+        return None
+    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY).astype(int)
+    ground = float(np.median(gray[ring]))
+    light = (inked > 0) & (gray >= ground + WINDOW_LIGHTER)
+    if light.sum() < WINDOW_LETTERS * (inked > 0).sum():
+        return None
+    # The frame: on each side the first row (column) along the text that is light almost all the way,
+    # a thin line with colour past it.  A vivid caption box or bubble on paper has the paper there,
+    # light all the way out.
+    frame = gray >= max(WINDOW_FRAME_LIGHT, ground + WINDOW_LIGHTER)
+    vivid_map = hsv[..., 1].astype(int)
+    reach = int(round(WINDOW_FRAME_REACH * line_height))
+    thin = max(2, int(round(WINDOW_FRAME_THIN * line_height)))
+    far = reach + thin + WINDOW_FRAME_PAST
+
+    def first(lit, colour):
+        """Rows of ``lit`` and ``colour`` run outward from the text."""
+        profile = lit.mean(axis=1)
+        hits = np.nonzero(profile[:reach] >= WINDOW_FRAME_SHARE)[0]
+        if not len(hits):
+            return None
+        end = int(hits[0])
+        while end < len(profile) and profile[end] >= WINDOW_FRAME_SHARE:
+            end += 1
+        past = colour[end:end + WINDOW_FRAME_PAST]
+        if end - hits[0] > thin or len(past) < WINDOW_FRAME_PAST or np.median(past) < WINDOW_FRAME_BEYOND:
+            return None
+        return int(hits[0]) + 1
+    above, below = slice(max(0, y0 - far), y0), slice(y1 + 1, y1 + 1 + far)
+    before, after = slice(max(0, x0 - far), x0), slice(x1 + 1, x1 + 1 + far)
+    across, along = slice(x0, x1 + 1), slice(y0, y1 + 1)
+    top = first(frame[above, across][::-1], vivid_map[above, across][::-1])
+    bottom = first(frame[below, across], vivid_map[below, across])
+    left = first(frame[along, before][:, ::-1].T, vivid_map[along, before][:, ::-1].T)
+    right = first(frame[along, after].T, vivid_map[along, after].T)
+    if None in (top, bottom, left, right):
+        return None
+    core = light & (gray >= np.median(gray[light]))  # the inside of the strokes, not their soft edge
+    letters = letter_height(np.where(light, 0, 255).astype(np.uint8), quads)
+    return {"rect": (x0 - left + 1, y0 - top + 1, x1 + right - 1, y1 + bottom - 1),
+            "fg": tuple(int(c) for c in np.median(img[core], axis=0)),
+            "body": tuple(int(c) for c in np.median(img[ring], axis=0)),
+            "letters": letters if letters else line_height}
+
+
+def square_brackets(translation, source):
+    """``translation`` with the [ ] of ``source``.
+
+    The engine writes [ ] as 【 】, and a source wholly in brackets (a system window) came back
+    from the AI without them (Manhwa teste p50).
+    """
+    if not isinstance(translation, str) or not re.search(r"[\[\]]", source or ""):
+        return translation
+    translation = translation.replace("【", "[").replace("】", "]")
+    source = source.strip()
+    if source.startswith("[") and source.endswith("]") and translation.strip() and not re.search(r"[\[\]]", translation):
+        translation = f"[{translation.strip()}]"
+    return translation
+
+
 def line_symbols(image, lines):
     """Pixels of a symbol drawn at the end of a line of speech, to be left out of the cleaning.
 

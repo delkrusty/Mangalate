@@ -836,3 +836,73 @@ class BlockRoomTest(unittest.TestCase):
         cv2.fillPoly(hull, [cv2.convexHull(region.lines.reshape(-1, 2).astype(np.int32))], (255, 255, 255))
         alone = lettering.plan_shaped(hull, region.xyxy, [], self.TEXT, FONT, self.LINE, 8)
         self.assertEqual(self.plan(region)["size"], alone["size"])
+
+
+class SystemWindowLayoutTest(unittest.TestCase):
+    """A system window ("janela", quality.system_window) is lettered inside its frame.
+
+    Manhwa teste p50, p64: on white paper the window passed as a bubble with no outline, and the
+    translation went to the engine's drawing, one line in Arial past the frame (off the page).
+    """
+    TRANSLATION = "[O ajudante está preparando um golpe especial!]"
+
+    def letter(self):
+        import types
+        from unittest import mock
+        import quality
+        from engine_compat import bubble_layout
+        from test_quality import system_window
+        image, _, quads, _ = system_window(behind="paper", icons=True)
+        window = quality.system_window(image, quads)
+        quads = quads[1:]  # the buttons left the region (engine_compat.drop_window_buttons)
+        clean = image.copy()
+        for q in quads:  # the letters cleaned
+            (a, b), (c, d) = np.min(q, axis=0), np.max(q, axis=0)
+            clean[b:d + 1, a:c + 1] = window["body"]
+        calls = []
+        rendering = types.SimpleNamespace(
+            resize_regions_to_font_size=lambda img, regions, *a: [np.zeros((1, 4, 2), np.int64) for _ in regions],
+            render=lambda img, region, *a: calls.append("engine") or img, fg_bg_compare=lambda fg, bg: (fg, bg))
+        text_render = types.SimpleNamespace(
+            calc_horizontal=lambda size, text, w, h, lang, hyphenate: char_layout(text)(size, w, h),
+            put_text_horizontal=lambda *a: None)
+        bubble_layout(rendering, text_render)
+        lines = np.array(quads)
+        region = types.SimpleNamespace(
+            xyxy=(int(lines[..., 0].min()), int(lines[..., 1].min()), int(lines[..., 0].max()), int(lines[..., 1].max())),
+            lines=lines, font_size=30, direction="h", horizontal=True, target_lang="PTB",
+            text="[THE HELPER IS PREPARING AN ULTIMATE SKILL!]", mangalate_background={"kind": "janela"},
+            mangalate_window=window, get_translation_for_rendering=lambda: self.TRANSLATION,
+            get_font_colors=lambda: ((0, 0, 0), (255, 255, 255)))
+        with mock.patch.object(lettering, "window_font", lambda: FONT):
+            rendering.resize_regions_to_font_size(clean, [region], None, 0, -1)
+        out = rendering.render(clean.copy(), region, None, False, None, False)
+        self.assertEqual(calls, [])  # never the engine's drawing
+        return clean, out, region, window
+
+    def test_translation_is_lettered_inside_the_frame_like_the_original(self):
+        clean, out, region, window = self.letter()
+        plan = region.mangalate_shaped
+        self.assertIsNotNone(plan)
+        # In capitals, as the original window.
+        self.assertEqual(" ".join(plan["lines"]), "[O AJUDANTE ESTÁ PREPARANDO UM GOLPE ESPECIAL!]")
+        # The capitals as tall as the original ones.
+        capitals = plan["size"] * lettering.capital_share(FONT)
+        self.assertTrue(0.85 * window["letters"] <= capitals <= 1.05 * window["letters"], (capitals, window))
+        changed = np.argwhere((out != clean).any(axis=2))
+        rx0, ry0, rx1, ry1 = window["rect"]
+        self.assertGreater(len(changed), 500)
+        self.assertTrue(changed[:, 1].min() >= rx0 and changed[:, 1].max() <= rx1, window)
+        self.assertTrue(changed[:, 0].min() >= ry0 and changed[:, 0].max() <= ry1, window)
+        # Never over the buttons in its corner.
+        self.assertFalse(((changed[:, 0] >= 118) & (changed[:, 0] <= 147) & (changed[:, 1] >= 532)
+                          & (changed[:, 1] <= 598)).any())
+
+    def test_translation_takes_the_colour_of_the_letters_without_an_outline(self):
+        clean, out, region, window = self.letter()
+        changed = (out != clean).any(axis=2)
+        grey = cv2.cvtColor(out, cv2.COLOR_RGB2GRAY).astype(int)
+        before = cv2.cvtColor(clean, cv2.COLOR_RGB2GRAY).astype(int)
+        self.assertTrue((grey[changed] >= before[changed] - 3).all())  # nothing darker: no outline
+        core = out[changed][grey[changed] >= np.percentile(grey[changed], 90)]
+        self.assertLessEqual(np.abs(np.median(core, axis=0) - np.asarray(window["fg"])).max(), 12)

@@ -399,3 +399,16 @@ class ReserveWaitTest(unittest.TestCase):
         pool.resting.update({"groq": 3600.0, "gemini": 3600.0})
         self.assertEqual(asyncio.run(pool.run(lambda p: asyncio.sleep(0, p["name"]))), "groq-2")
         self.assertEqual(slept, [])
+
+
+class SystemWindowBracketsTest(unittest.TestCase):
+    def test_square_brackets_of_the_original_are_kept(self):
+        # The engine always writes [ ] as 【 】 (its forced replacement rules): the system
+        # windows of a game webtoon came out with brackets they never had.
+        from quality import square_brackets
+        self.assertEqual(square_brackets("【O ajudante está preparando um especial!】", "[THE HELPER IS PREPARING!]"),
+                         "[O ajudante está preparando um especial!]")
+        self.assertEqual(square_brackets("【Nota】 do autor", "AUTHOR'S NOTE"), "【Nota】 do autor")
+        # A window wholly in brackets keeps them when the AI left them out; brackets inside are not added.
+        self.assertEqual(square_brackets("O ajudante venceu!", "[THE HELPER WON!]"), "[O ajudante venceu!]")
+        self.assertEqual(square_brackets("Ele disse sim", "HE SAID [YES]"), "Ele disse sim")

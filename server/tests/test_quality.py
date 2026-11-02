@@ -3332,3 +3332,133 @@ class ThroughLineTest(unittest.TestCase):
         # A line that stops among the letters may be part of them: nothing to draw back.
         image, mask, _, _, box = self.page(outline=False, border_end=175)
         self.assertEqual(quality.through_lines(image, mask, box, 18), [])
+
+
+def system_window(behind="art", colour=(30, 110, 230), frame=True, letters=(250, 250, 250), icons=False):
+    """A system window of a game webtoon: light letters on a vivid, translucent colour in a light frame.
+
+    The drawing shows through it and the light changes across it, so its margin fits no flat
+    plane (the window read as art and stayed in English).  Returns (image, text mask, line
+    quads, frame); with ``icons`` the window has its buttons in the top right corner, read by
+    the OCR as one more line ("曰回").
+    """
+    image = noisy_art((700, 420)) if behind == "art" else page(size=(700, 420))
+    x0, y0, x1, y1 = 80, 110, 620, 320
+    ramp = np.linspace(0.75, 1.15, x1 - x0)[None, :, None]
+    body = np.clip(np.asarray(colour, float) * ramp, 0, 255)
+    image[y0:y1, x0:x1] = (0.8 * body + 0.2 * image[y0:y1, x0:x1]).astype(np.uint8)
+    if frame:  # a double light line, as drawn
+        cv2.rectangle(image, (x0, y0), (x1, y1), (200, 235, 255), 2)
+        cv2.rectangle(image, (x0 + 6, y0 + 6), (x1 - 6, y1 - 6), (200, 235, 255), 2)
+    mask = np.zeros(image.shape[:2], np.uint8)
+    quads = []
+    for text, x, y in (("[THE HELPER IS PREPARING", 120, 195), ("AN ULTIMATE SKILL!]", 175, 250)):
+        (w, h), base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.1, 3)
+        cv2.putText(image, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1.1, letters, 3, cv2.LINE_AA)
+        cv2.putText(mask, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1.1, 255, 3)
+        quads.append(quad(x - 2, y - h - 3, x + w + 2, y + base))
+    if icons:
+        for k in range(3):
+            cv2.rectangle(image, (540 + 18 * k, 126), (553 + 18 * k, 139), letters, 2)
+        quads.insert(0, quad(536, 122, 594, 143))
+    return image, mask, quads, (x0, y0, x1, y1)
+
+
+class SystemWindowTest(unittest.TestCase):
+    """The blue system windows of a game webtoon: art in classify_region, translated as "janela"."""
+
+    def test_window_over_the_drawing_is_found_with_its_frame_and_letters(self):
+        image, mask, quads, (x0, y0, x1, y1) = system_window()
+        self.assertEqual(classify_region(image, mask, quads)["kind"], "art")  # the defect
+        window = quality.system_window(image, quads)
+        self.assertIsNotNone(window)
+        rx0, ry0, rx1, ry1 = window["rect"]
+        # Inside the inner line of the frame, and around the text.
+        self.assertTrue(x0 + 6 < rx0 <= x0 + 10 and x1 - 10 <= rx1 < x1 - 6, window)
+        self.assertTrue(y0 + 6 < ry0 <= y0 + 10 and y1 - 10 <= ry1 < y1 - 6, window)
+        self.assertGreaterEqual(min(window["fg"]), 225)  # white letters
+        self.assertGreater(window["body"][2], window["body"][0] + 80)  # on blue
+        self.assertTrue(20 <= window["letters"] <= 30, window)  # the capitals of the Hershey font at 1.1
+
+    def test_window_on_white_paper_is_found(self):
+        image, mask, quads, _ = system_window(behind="paper")
+        self.assertIsNotNone(quality.system_window(image, quads))
+
+    def test_red_window_is_found_across_the_end_of_the_hue_circle(self):
+        image, mask, quads, _ = system_window(colour=(225, 30, 60))
+        self.assertIsNotNone(quality.system_window(image, quads))
+
+    def test_neighbours_are_no_window(self):
+        # A vivid sky with white letters and no frame stays art; a black narration box with a white
+        # frame, dark letters on a blue box and a white bubble keep their own path.
+        for kwargs in ({"frame": False}, {"colour": (25, 25, 25)}, {"letters": (10, 20, 40)}):
+            image, mask, quads, _ = system_window(**kwargs)
+            self.assertIsNone(quality.system_window(image, quads), kwargs)
+        image = page()
+        bubble(image, (200, 150), (150, 90), (255, 255, 255))
+        write(image, "NO WAY!", (140, 160), (0, 0, 0))
+        self.assertIsNone(quality.system_window(image, [quad(138, 135, 262, 166)]))
+
+    def test_coloured_bubbles_on_paper_are_no_window(self):
+        # A vivid caption box and a vivid bubble with white letters on paper: the paper around them
+        # is light all the way, not a thin line of a frame with the window's colour past it.
+        for shape in ("box", "bubble"):
+            image = page(size=(700, 420))
+            if shape == "box":
+                cv2.rectangle(image, (150, 120), (550, 300), (120, 40, 170), -1)
+            else:
+                cv2.ellipse(image, (350, 210), (240, 120), 0, 0, 360, (220, 30, 40), -1)
+            write(image, "MEANWHILE, IN", (230, 200), (250, 250, 250))
+            write(image, "THE CAPITAL...", (230, 250), (250, 250, 250))
+            quads = [quad(225, 170, 470, 206), quad(225, 220, 470, 256)]
+            self.assertIsNone(quality.system_window(image, quads), shape)
+
+    def run_merge(self, image, mask, quads, texts):
+        import asyncio
+        from types import SimpleNamespace
+        from engine_compat import classify_regions
+        region = SimpleNamespace(lines=np.array(quads), texts=list(texts), text=" ".join(texts))
+        async def merge(self, config, ctx):
+            return [region]
+        ctx = SimpleNamespace(img_rgb=image, mask_raw=mask)
+        config = SimpleNamespace(ocr=SimpleNamespace(ignore_bubble=8))
+        return asyncio.run(classify_regions(merge)(None, config, ctx)), ctx
+
+    def test_window_is_kept_for_translation_without_its_buttons(self):
+        image, mask, quads, _ = system_window(icons=True)
+        texts = ["曰回", "[THE HELPER IS PREPARING", "AN ULTIMATE SKILL!]"]
+        kept, ctx = self.run_merge(image, mask, quads, texts)
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(ctx.mangalate_preserved, [])
+        region = kept[0]
+        self.assertEqual(region.mangalate_background["kind"], "janela")
+        # The buttons are part of the window, not of the speech: neither translated nor cleaned.
+        self.assertEqual(region.text, "[THE HELPER IS PREPARING AN ULTIMATE SKILL!]")
+        self.assertEqual(len(region.lines), 2)
+
+    def test_a_line_of_exclamation_marks_stays_with_the_speech(self):
+        from types import SimpleNamespace
+        from engine_compat import drop_window_buttons
+        quads = [quad(536, 122, 594, 143), quad(120, 170, 500, 200), quad(270, 220, 330, 250)]
+        region = SimpleNamespace(lines=np.array(quads), texts=["曰回", "[THE HELPER IS HERE", "!!]"])
+        drop_window_buttons(region)
+        self.assertEqual(region.texts, ["[THE HELPER IS HERE", "!!]"])
+        region = SimpleNamespace(lines=np.array(quads), texts=["曰回", "[THE HELPER IS HERE", "!!"])
+        drop_window_buttons(region)
+        self.assertEqual(region.text, "[THE HELPER IS HERE !!")
+
+    def test_window_cleaning_stays_inside_its_frame(self):
+        from types import SimpleNamespace
+        image, mask, quads, (x0, y0, x1, y1) = system_window()
+        window = quality.system_window(image, quads)
+        raw = np.zeros_like(mask)
+        raw[y0 - 10:y1 + 10, x0 - 10:x1 + 10] = 255  # a mask that runs over the frame
+        lines = np.array(quads)
+        region = SimpleNamespace(lines=lines, xyxy=(int(lines[..., 0].min()), int(lines[..., 1].min()),
+                                                    int(lines[..., 0].max()), int(lines[..., 1].max())),
+                                 font_size=30, mangalate_background={"kind": "janela"}, mangalate_window=window)
+        cleaned = BackgroundTest.refine_mask(image, raw, [region])
+        rx0, ry0, rx1, ry1 = window["rect"]
+        self.assertTrue(cleaned[200, 300])  # the letters
+        self.assertFalse(cleaned[:ry0, :].any() or cleaned[ry1 + 1:, :].any())  # the frame and the drawing
+        self.assertFalse(cleaned[:, :rx0].any() or cleaned[:, rx1 + 1:].any())
