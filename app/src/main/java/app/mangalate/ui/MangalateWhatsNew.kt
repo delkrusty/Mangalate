@@ -11,15 +11,13 @@ internal data class WhatsNewRelease(val version: String?, val items: List<String
 internal object MangalateWhatsNew {
     val releases = listOf(
         WhatsNewRelease(
-            null,
+            "0.7.0",
             listOf(
-                "As configurações de tradução ficaram mais curtas: saíram opções que não mudavam nada, e as páginas já traduzidas continuam salvas.",
-                "No modo No celular, cada obra guarda o seu idioma: o Mangalate já sugere o da fonte, sem trocar a configuração entre mangá e manhwa.",
-                "Segure o dedo na página para ver o original só dela ou para refazer a tradução da página ou do capítulo.",
-                "Quando uma página fica sem tradução, o aviso no canto do leitor diz o motivo, e um toque tenta de novo.",
-                "Quando uma fala fica no original, um selo no canto avisa, e um toque mostra o original da página para comparar.",
-                "No modo Servidor, segure o dedo na página para corrigir como sai o nome de um personagem na obra inteira, ou para guardar a página no computador e conferir depois.",
-                "Para ligar o servidor, leia o QR code que aparece no computador: o endereço e a chave entram sozinhos.",
+                "Segure o dedo na página para ver o original, refazer a tradução da página ou do capítulo e, no modo Servidor, corrigir nomes da obra ou guardar a página no computador.",
+                "Quando uma página fica sem tradução, o aviso diz o motivo e um toque tenta de novo. Um selo avisa quando alguma fala ficou no original.",
+                "No modo No celular, cada obra guarda o seu idioma.",
+                "Configurações mais curtas, com a chave do servidor protegida e ligação ao servidor por QR code.",
+                "Nova opção para adiantar o próximo capítulo, só no Wi-Fi e com o celular carregando.",
             ),
         ),
         WhatsNewRelease(

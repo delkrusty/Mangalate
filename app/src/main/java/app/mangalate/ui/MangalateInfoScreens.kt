@@ -45,7 +45,6 @@ import androidx.compose.ui.unit.dp
 import cafe.adriel.voyager.navigator.LocalNavigator
 import cafe.adriel.voyager.navigator.currentOrThrow
 import eu.kanade.presentation.components.AppBar
-import eu.kanade.presentation.more.settings.screen.SettingsMangalateScreen
 import eu.kanade.presentation.more.settings.screen.about.OpenSourceLicensesScreen
 import eu.kanade.presentation.more.settings.widget.TextPreferenceWidget
 import eu.kanade.presentation.util.LocalBackPress
@@ -354,7 +353,7 @@ private fun MangalateGuideContent(page: MangalateInfoPage) {
                         title = "Abrir configurações de tradução",
                         subtitle = "Modos, idiomas, servidor e preparação offline",
                         icon = MaterialSymbols.Rounded.Translate,
-                        onPreferenceClick = { navigator.push(SettingsMangalateScreen()) },
+                        onPreferenceClick = { navigator.push(MangalateSettingsScreen()) },
                     )
                 }
             }

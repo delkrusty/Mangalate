@@ -10,12 +10,15 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -25,6 +28,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import app.mangalate.local.LocalPipeline
 import okio.Buffer
+import org.json.JSONObject
 import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
@@ -46,12 +50,8 @@ object MangalateTranslator {
     private const val MAX_CACHE_BYTES = 600L * 1024 * 1024
     private const val ENDPOINT = "/translate/with-form/image"
     private const val BUSY_RETRIES = 40
-
-    // Opções que saíram do app: chaves do Gemini e do DeepL e ajustes que o servidor ignorava.
-    private val RETIRED_KEYS = listOf(
-        "gemini_key", "gemini_model", "gemini_fast", "deepl_key",
-        "engine", "quality", "typeset", "mask_dilation",
-    )
+    private const val DEFAULT_SERVER_PAGES = 2
+    private const val CAPACITY_TTL_MS = 10 * 60 * 1000L
 
     @Volatile
     private var prefs: SharedPreferences? = null
@@ -77,12 +77,18 @@ object MangalateTranslator {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val inFlight = ConcurrentHashMap<String, Deferred<ByteArray>>()
 
-    // Páginas traduzidas ao mesmo tempo, por modo.
-    private val semaphores = mapOf(
-        TranslateMode.ON_DEVICE to Semaphore(2),
-        // O servidor traduz 2 páginas ao mesmo tempo (uma usa a IA enquanto a outra limpa).
-        TranslateMode.SERVER to Semaphore(2),
-    )
+    // Páginas traduzidas ao mesmo tempo no celular.
+    private val onDeviceSlots = Semaphore(2)
+
+    /**
+     * Páginas mandadas ao servidor ao mesmo tempo: o que ele diz aceitar no `/v1/info`
+     * (MANGALATE_PAGES_AT_ONCE, de 1 a 4). Servidor antigo, sem o campo, fica com 2.
+     */
+    private val serverSlots = ConcurrentHashMap<Int, Semaphore>()
+
+    @Volatile
+    private var serverCapacity: Triple<String, Int, Long>? = null
+    private val capacityLock = Mutex()
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -105,49 +111,16 @@ object MangalateTranslator {
             if (prefs != null) return
             val p = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             prefs = p
-            p.edit().apply { RETIRED_KEYS.forEach(::remove) }.apply()
-            _settings.value = read(p)
+            _settings.value = MangalateSettingsStore.read(p)
             _enabled.value = p.getBoolean("enabled", false) && _settings.value.isConfigured
         }
     }
-
-    private fun read(p: SharedPreferences) = MangalateSettings(
-        mode = TranslateMode.fromName(p.getString("mode", null)),
-        sourceLanguage = SourceLanguage.fromName(p.getString("source_lang", null)),
-        setupDone = p.getBoolean("setup_done", false),
-        translateOnDownload = p.getBoolean("translate_on_download", false),
-        serverUrl = p.getString("server_url", "") ?: "",
-        accessKey = p.getString("access_key", "") ?: "",
-        targetLanguage = TargetLanguage.fromCode(p.getString("target_lang", null)),
-        // A opção antiga "Só traduzir texto dentro de balões", se ligada, vira "Preservar a arte".
-        preserveArtText = when {
-            p.contains("preserve_art_text") -> p.getBoolean("preserve_art_text", false)
-            p.getBoolean("ignore_outside_bubbles", false) -> true
-            else -> null
-        },
-        uppercase = p.getBoolean("uppercase", false),
-        fontSizeOffset = p.getInt("font_size_offset", 0).coerceIn(MangalateSettings.FONT_OFFSETS),
-    )
 
     fun updateSettings(context: Context, transform: (MangalateSettings) -> MangalateSettings) {
         init(context)
         val new = transform(_settings.value)
         _settings.value = new
-        prefs?.edit()
-            ?.putString("mode", new.mode.name)
-            ?.putString("source_lang", new.sourceLanguage.name)
-            ?.putBoolean("setup_done", new.setupDone)
-            ?.putBoolean("translate_on_download", new.translateOnDownload)
-            ?.putString("server_url", new.serverUrl)
-            ?.putString("access_key", new.accessKey)
-            ?.putString("target_lang", new.targetLanguage.code)
-            ?.also { editor ->
-                new.preserveArtText?.let { editor.putBoolean("preserve_art_text", it) }
-                    ?: editor.remove("preserve_art_text")
-            }
-            ?.putBoolean("uppercase", new.uppercase)
-            ?.putInt("font_size_offset", new.fontSizeOffset.coerceIn(MangalateSettings.FONT_OFFSETS))
-            ?.apply()
+        prefs?.let { MangalateSettingsStore.write(it, new) }
         if (!new.isConfigured) setEnabled(context, false)
     }
 
@@ -248,7 +221,7 @@ object MangalateTranslator {
         val deferred = inFlight.getOrPut(key) {
             scope.async {
                 try {
-                    semaphores.getValue(s.mode).withPermit {
+                    slots(s).withPermit {
                         _activeJobs.update { it + 1 }
                         try {
                             val (result, review) = when (s.mode) {
@@ -287,7 +260,24 @@ object MangalateTranslator {
         return result
     }
 
-    private fun request(
+    /** Vagas para esta página: no servidor, o que ele aceita por vez, relido a cada 10 minutos. */
+    private suspend fun slots(s: MangalateSettings): Semaphore {
+        if (s.mode != TranslateMode.SERVER) return onDeviceSlots
+        // Uma releitura por vez. Se a capacidade muda, as páginas já em andamento seguram vagas do
+        // semáforo antigo, então por pouco tempo podem ir mais páginas que o novo limite; o servidor
+        // responde 429 às que sobram e o app espera a vez.
+        val pages = capacityLock.withLock {
+            val now = System.currentTimeMillis()
+            serverCapacity?.takeIf { it.first == s.normalizedUrl && now - it.third < CAPACITY_TTL_MS }?.second
+                ?: serverInfo(s).getOrNull()
+                    ?.optInt("pages_at_once", DEFAULT_SERVER_PAGES)
+                    .let { (it ?: DEFAULT_SERVER_PAGES).coerceIn(1, 4) }
+                    .also { serverCapacity = Triple(s.normalizedUrl, it, now) }
+        }
+        return serverSlots.getOrPut(pages) { Semaphore(pages) }
+    }
+
+    private suspend fun request(
         s: MangalateSettings,
         config: String,
         image: ByteArray,
@@ -315,21 +305,27 @@ object MangalateTranslator {
             .post(body)
             .apply { authHeaders(s).forEach { (k, v) -> header(k, v) } }
             .build()
-        // Servidor antigo (uma página por vez) responde 429 à segunda: espera a vez em vez de falhar.
+        // Servidor ocupado (outro celular, ou o lote no PC) responde 429: espera a vez sem
+        // prender uma thread, em vez de falhar.
         var attempt = 0
         while (true) {
-            client.newCall(request).execute().use { response ->
-                if (response.code == 429 && attempt < BUSY_RETRIES) {
-                    attempt++
-                    val wait = response.header("Retry-After")?.toLongOrNull()?.coerceIn(1, 10) ?: 3
-                    Thread.sleep(wait * 1000)
-                    return@use
+            var result: Pair<ByteArray, PageReview?>? = null
+            val wait = withContext(Dispatchers.IO) {
+                client.newCall(request).execute().use { response ->
+                    if (response.code == 429 && attempt < BUSY_RETRIES) {
+                        response.header("Retry-After")?.toLongOrNull()?.coerceIn(1, 10) ?: 3
+                    } else {
+                        result = readResponse(response) to PageReview.of(
+                            response.header("X-Mangalate-Preserved"),
+                            response.header("X-Mangalate-Over-Art"),
+                        )
+                        0L
+                    }
                 }
-                return readResponse(response) to PageReview.of(
-                    response.header("X-Mangalate-Preserved"),
-                    response.header("X-Mangalate-Over-Art"),
-                )
             }
+            result?.let { return it }
+            attempt++
+            delay(wait * 1000)
         }
     }
 
@@ -406,11 +402,8 @@ object MangalateTranslator {
         }
     }
 
-    /**
-     * Qual tradução o servidor usa, lida do `/v1/info`: "byok" (a IA escolhida no instalador)
-     * ou "basic" (tradutor offline). Só para mostrar; o app não muda isso.
-     */
-    suspend fun serverEdition(s: MangalateSettings): Result<String> = withContext(Dispatchers.IO) {
+    /** O `/v1/info` do servidor: edição, IA e quantas páginas ele aceita por vez. */
+    private suspend fun serverInfo(s: MangalateSettings): Result<JSONObject> = withContext(Dispatchers.IO) {
         runCatching {
             val request = Request.Builder()
                 .url(s.normalizedUrl + "/v1/info")
@@ -423,10 +416,17 @@ object MangalateTranslator {
                 .execute()
                 .use { response ->
                     if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
-                    org.json.JSONObject(response.body.string()).getString("edition")
+                    JSONObject(response.body.string())
                 }
         }
     }
+
+    /**
+     * Qual tradução o servidor usa, lida do `/v1/info`: "byok" (a IA escolhida no instalador)
+     * ou "basic" (tradutor offline). Só para mostrar; o app não muda isso.
+     */
+    suspend fun serverEdition(s: MangalateSettings): Result<String> =
+        serverInfo(s).mapCatching { it.getString("edition") }
 
     // region Cache
 

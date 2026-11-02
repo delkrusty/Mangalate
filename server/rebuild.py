@@ -21,7 +21,8 @@ IMAGES = {
 # Files whose copy inside the running server must equal the one in this folder.
 CHECKED = {"colab/batch.py": "/mangalate/batch.py", "engine_compat.py": "/mangalate/engine_compat.py",
            "providers.py": "/mangalate/providers.py", "seams.py": "/mangalate/seams.py",
-           "quality.py": "/mangalate/quality.py",
+           "quality.py": "/mangalate/quality.py", "quality_text.py": "/mangalate/quality_text.py",
+           "quality_words.py": "/mangalate/quality_words.py", "quality_translation.py": "/mangalate/quality_translation.py",
            "lettering.py": "/mangalate/lettering.py", "memory.py": "/mangalate/memory.py", "speed.py": "/mangalate/speed.py",
            "core.py": "/mangalate/core.py", "words/hyph_pt_BR/hyph_pt_BR.dic": "/mangalate/words/hyph_pt_BR/hyph_pt_BR.dic"}
 

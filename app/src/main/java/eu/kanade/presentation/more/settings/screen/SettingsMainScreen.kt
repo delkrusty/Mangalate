@@ -176,7 +176,7 @@ object SettingsMainScreen : Screen() {
             titleRes = MR.strings.pref_category_mangalate,
             subtitleRes = MR.strings.pref_mangalate_summary,
             icon = MaterialSymbols.Rounded.Translate,
-            screen = SettingsMangalateScreen(),
+            screen = app.mangalate.ui.MangalateSettingsScreen(),
         ),
         Item(
             titleRes = MR.strings.pref_category_appearance,

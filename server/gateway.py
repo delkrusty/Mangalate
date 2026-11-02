@@ -242,7 +242,9 @@ def create_app(key=None, upstream=None, profile=None, transport=None, reports=No
     async def info(request: Request):
         authorize(request)
         return {"edition": profile, "translator": profile_config(profile, {})["translator"]["translator"],
-                "warmed": app.state.warmed, "review_required": True}
+                "warmed": app.state.warmed, "review_required": True,
+                # The app sends this many pages at once instead of guessing.
+                "pages_at_once": pages_at_once()}
 
     @app.post("/queue-size")
     async def queue(request: Request):

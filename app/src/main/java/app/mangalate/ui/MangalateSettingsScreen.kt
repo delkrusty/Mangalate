@@ -1,4 +1,4 @@
-package eu.kanade.presentation.more.settings.screen
+package app.mangalate.ui
 
 import android.text.format.Formatter
 import androidx.compose.animation.AnimatedVisibility
@@ -87,7 +87,7 @@ private const val SERVER_GUIDE_URL = "https://github.com/delkrusty/Mangalate/blo
 /**
  * Tela de configurações do Mangalate (Configurações › Mangalate).
  */
-class SettingsMangalateScreen : Screen() {
+class MangalateSettingsScreen : Screen() {
 
     @Composable
     override fun Content() {
@@ -725,6 +725,13 @@ private fun OfflineSection(
                 "da tradução. Se você mudar o idioma ou o modo depois, as páginas são traduzidas de novo na leitura.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        SwitchRow(
+            title = "Adiantar o próximo capítulo",
+            subtitle = "Perto do fim de um capítulo, o seguinte já começa a ser traduzido. " +
+                "Só no Wi-Fi e com o celular carregando.",
+            checked = settings.prefetchNextChapter,
+            onChecked = { v -> onChange { it.copy(prefetchNextChapter = v) } },
         )
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(

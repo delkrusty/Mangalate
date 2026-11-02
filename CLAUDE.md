@@ -14,7 +14,7 @@ Leitor de mangá para Android baseado no Mihon que traduz as páginas e escreve 
 - `gateway.py` recebe o app na porta 5003 e confere a Chave Mangalate; `worker.py` e `core.py` rodam o motor.
 - O motor é o manga-image-translator (GPL-3.0), numa versão fixa, rodando como serviço separado. As correções do Mangalate entram por fora:
   - `engine_compat.py` (GPL-3.0): ganchos no motor, como detecção, reparo de linhas, releitura do OCR, junção de blocos e chamada do letreiramento.
-  - `quality.py`: separa balão de arte pelo fundo, corrige letras trocadas pelo OCR (lista de palavras em `words/`), descarta duplicatas, separa colunas e confere negação e gênero.
+  - `quality.py`: separa balão de arte pelo fundo, descarta duplicatas e separa colunas. As etapas de texto ficam ao lado e são reexportadas por ele: `quality_words.py` corrige letras trocadas pelo OCR (lista de palavras em `words/`), `quality_translation.py` confere fala, negação e gênero, e `quality_text.py` cuida de espaços e agrupamento de linhas.
   - `lettering.py`: encaixa o texto no formato do balão, com a fonte em `fonts/`.
   - `providers.py`: IAs BYOK com rodízio e pausas por limite.
   - `memory.py`: glossário e contexto por obra.

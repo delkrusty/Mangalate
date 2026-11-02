@@ -260,6 +260,11 @@ class ServerTest(unittest.TestCase):
             self.assertEqual(client.get("/healthz").status_code, 200)
             self.assertEqual(client.get("/results/list", headers=self.headers()).status_code, 404)
 
+    def test_info_tells_the_app_how_many_pages_to_send_at_once(self):
+        for env, expected in (("3", 3), ("9", 4), ("x", 2)):
+            with patch.dict("os.environ", {"MANGALATE_PAGES_AT_ONCE": env}), self.client() as client:
+                self.assertEqual(client.get("/v1/info", headers=self.headers()).json()["pages_at_once"], expected)
+
     def test_profile_cannot_be_overridden_by_old_app_paid_engine_or_file_paths(self):
         config = profile_config("basic", {"translator": {"translator": "gemini", "gpt_config": "/etc/passwd", "target_lang": "PTB"}})
         self.assertEqual(config["translator"]["translator"], "nllb")
