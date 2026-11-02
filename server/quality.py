@@ -1789,6 +1789,8 @@ ORPHAN_COVERED = 0.2  # mask pixels already under a box above this share are not
 ORPHAN_EDGE = 1 / 3   # read on the middle of the line: its top and bottom may lie under a loose box
 NEAR_LINES = 1.6      # an orphan line must sit this many line heights from a known one
 ORPHAN_MIN = 0.5      # an orphan line is at least this many line heights tall
+ORPHAN_LETTERS = 2    # a larger or chained orphan line holds this many letters of its height (a drawn head, one kana: one)
+ORPHAN_ALIKE = 0.3    # a chained orphan line is this close in height (share) to the added line it joins
 SMALL_LINE = 0.3      # smaller orphans, from this many line heights, may still be a paragraph of small lettering
 SMALL_LINE_PX = 8     # never below this height in pixels
 SMALL_LINE_WIDTH = 1.5  # and their ink is this many times wider than tall: a lone letter is not a line
@@ -1797,6 +1799,11 @@ FIT_OVERLAP = 0.5     # boxes sharing this many line heights of rows are cut aga
 FIT_TALL = 2.0       # boxes are cut again only when one of them is this many line heights tall
 FIT_VALLEY = 0.12     # a row with less ink than this share of a line's usual row is a gap between lines
 FIT_GAP = 0.3         # a box grows over letters at most this far (line heights) from its own
+FIT_LARGE = 4.0       # a run of ink with no gap between rows up to this many line heights is one line of larger letters
+FIT_FILL = 0.7        # ...when its letters stand at least this share of the height of its ink (median by ink)
+FIT_MARK = 0.02       # a piece of ink under this share of that height squared (pixels) is a dot or a comma, not a letter
+FIT_FILL_ANY = 0.5    # ...and the median piece, by count, at least this share (small letters beside a solid symbol fail)
+FIT_TAIL = 0.4        # widening a line of larger letters, paper this share of its height below it
 
 
 def _box(points):
@@ -1836,6 +1843,14 @@ def _covered(box, others):
         if min(x1, ox1) - max(x0, ox0) > 0.3 * (x1 - x0):
             rows[max(0, oy0 - y0):max(0, min(y1, oy1) - y0)] = True
     return float(rows.mean())
+
+
+def _letters(gray, box):
+    """How many dark pieces in ``box`` of the page stand at least half its height: its letters."""
+    x0, y0, x1, y1 = box
+    dark = (gray[max(0, y0):y1, max(0, x0):x1] < INK_LEVEL).astype(np.uint8)
+    count, _, stats, _ = cv2.connectedComponentsWithStats(dark, connectivity=8)
+    return int(sum(stats[k][3] >= FIT_FILL_ANY * (y1 - y0) for k in range(1, count)))
 
 
 def _near(box, others, height):
@@ -2047,8 +2062,15 @@ def repair_lines(mask, boxes, gray=None, rebuild=False):
         middle[bh - int(bh * ORPHAN_EDGE):] = False
         if not middle.any() or known[y:y + bh, x:x + bw][middle].mean() > ORPHAN_COVERED:
             continue
+        cols = np.flatnonzero(pixels.any(axis=0))
         if bh > SPLIT_FACTOR * height:
             boxes_here = stair_lines(pixels, x, y, height)
+            whole = (x + int(cols[0]), y, x + int(cols[-1]) + 1, y + bh)
+            if not boxes_here and gray is not None and _letters(gray, whole) >= ORPHAN_LETTERS \
+                    and _large_line(gray, [(y, y + bh)], whole[0], whole[2], height):
+                # One line of larger letters, not a staircase (Grand Blue 106 p25: "MY" over a
+                # shout in letters a half taller than the page's speech was lost).
+                boxes_here = [whole]
         else:
             cols = np.flatnonzero(pixels.any(axis=0))
             boxes_here = [(x + int(cols[0]), y, x + int(cols[-1]) + 1, y + bh)]
@@ -2058,6 +2080,21 @@ def repair_lines(mask, boxes, gray=None, rebuild=False):
             changes.append(("added", None, boxes_here))
         elif len(boxes_here) == 1:
             lonely.extend(boxes_here)
+    # A line of letters of the same size near one just added goes on the same speech (Grand Blue
+    # 106 p25: "UP / WITH..." under "KEEP", itself found here, stayed in English).  Letters of
+    # another size beside it (a sound effect) are not its lines.
+    added = [box for kind, _, boxes_here in changes if kind == "added" for box in boxes_here]
+    def alike(box):
+        return any(_near(box, [b], height) and abs((box[3] - box[1]) - (b[3] - b[1])) <= ORPHAN_ALIKE * (b[3] - b[1])
+                   for b in added)
+    while gray is not None:
+        joined = [b for b in lonely if alike(b) and _letters(gray, b) >= ORPHAN_LETTERS]
+        if not joined:
+            break
+        lonely = [b for b in lonely if b not in joined]
+        added += joined
+        result.extend((box, None) for box in joined)
+        changes.append(("added", None, joined))
     paragraph = paragraph_lines(lonely, height)
     # Grand Blue 102 p39: the page height came from big shouting, so small lines are
     # measured on their own height, each size in turn.
@@ -2068,9 +2105,10 @@ def repair_lines(mask, boxes, gray=None, rebuild=False):
         changes.append(("added", None, paragraph))
     if gray is not None and rebuild:
         # Edge lines first, then the rows of a haloed speech the detector left out whole, then
-        # the letters its boxes left out at their ends.
+        # the same next to a line on paper, then the letters its boxes left out at their ends.
         for kind, find in (("edge", lambda boxes: edge_lines(ink, gray, boxes, height)),
                            ("halo", lambda boxes: halo_rows(gray, boxes)),
+                           ("paper", lambda boxes: paper_rows(gray, boxes)),
                            ("halo", lambda boxes: halo_sides(gray, boxes))):
             edges = []
             for box in find([b for b, _ in result]):
@@ -2206,6 +2244,7 @@ HALO_ROWS = 2      # lines looked for in the halo above and below a speech, each
 HALO_MARGIN = 0.5  # the drawing beside a line (from 0.3 to 1.3 line heights past it) is at most this share paper
 HALO_HOLES = 3     # a letter beside a line encloses at most this many holes (a B two); a small face more
 HALO_MARK = 0.2    # a period at a line's end is at least this many line heights across; tone dots are smaller
+PAPER_WORD = 0.5   # on paper, the next word of a row found by paper_rows is at most this many line heights off
 
 
 def halo_rows(gray, boxes):
@@ -2238,7 +2277,45 @@ def halo_rows(gray, boxes):
     return found
 
 
-def halo_sides(gray, boxes):
+def paper_rows(gray, boxes):
+    """Lines right above or below a line on paper that the detector left out whole: no box, no mask.
+
+    Webtoon p3: "I DIDN'T / THINK THAT..." in a caption with no balloon; the detector marked only
+    the first line, the speech was read "I DIDN'T", and "THINK THAT..." stayed in English.  A row
+    of letters of the line's height, within half a line of it and over or under it, is its next
+    line, as halo_rows finds them over the drawing.  One row each way: a speech further off is
+    another one.  The row grows to its letters past the window (a longer line under a short one).
+    """
+    known = np.zeros(gray.shape, bool)
+    for x0, y0, x1, y1 in boxes:
+        known[max(0, y0):y1, max(0, x0):x1] = True
+    found = []
+    for line in boxes:
+        lh = line[3] - line[1]
+        if lh <= 0 or line[2] - line[0] <= lh or _over_drawing(gray, line, lh):
+            continue
+        for up in (True, False):
+            box = _halo_row(gray, known, line, up)
+            if box is None or _covered(box, list(boxes) + found) > 0.3:
+                continue
+            found.append(box)
+            known[box[1]:box[3], box[0]:box[2]] = True
+    while found:  # halo_sides looks two line heights past each end: again from the new ends
+        rows = list(boxes) + found
+        sides = halo_sides(gray, rows, range(len(boxes), len(rows)))
+        before = list(found)
+        for side in sides:
+            for k, row in enumerate(rows[len(boxes):]):
+                if (row[1], row[3]) == (side[1], side[3]) and side[2] >= row[0] and side[0] <= row[2]:
+                    b = found[k]
+                    found[k] = (min(b[0], side[0]), b[1], max(b[2], side[2]), b[3])
+                    break
+        if found == before:
+            break
+    return found
+
+
+def halo_sides(gray, boxes, rows=None):
     """The rest of a line written over the drawing with a light halo, beside its box: letters in
     the halo with the tops and bottoms of the line's own, one after the other from its ends.
 
@@ -2246,14 +2323,18 @@ def halo_sides(gray, boxes):
     Grand Blue 106 p27: the "KE" of "LOOK LIKE" stayed in English.  fit_lines grows a box only
     over a mask that holds its line alone, and over the drawing the mask is one blob over the
     lines of the speech.  The eyes and mouth of a small face drawn in a white outline beside a
-    line are not letters of its row.
+    line are not letters of its row.  ``rows``: the indexes of rows found on paper (paper_rows),
+    the only ones looked at then.
     """
     found = []
     gh, gw = gray.shape
     nothing = np.zeros(gray.shape, bool)
     for i, (x0, y0, x1, y1) in enumerate(boxes):
         lh = y1 - y0
-        if lh <= 0 or x1 - x0 <= lh or not _over_drawing(gray, (x0, y0, x1, y1), lh):
+        if rows is not None:
+            if i not in rows or lh <= 0 or x1 - x0 <= lh:
+                continue
+        elif lh <= 0 or x1 - x0 <= lh or not _over_drawing(gray, (x0, y0, x1, y1), lh):
             continue
         row = [b for j, b in enumerate(boxes) if j != i and min(y1, b[3]) - max(y0, b[1]) > 0.5 * lh]
         lo = max([b[2] for b in row if b[2] <= x0] + [0])
@@ -2268,9 +2349,12 @@ def halo_sides(gray, boxes):
         align = EDGE_ALIGN * lh
         letters = [b for b in letters if abs(b[1] - top) <= align and abs(b[3] - bottom) <= align
                    and _holes(gray, b) <= HALO_HOLES]
+        # On paper a mark is no wider than a word gap: a wavy stroke of the drawing beside a row
+        # (One Piece 1161 p7) is not its punctuation.
         marks = [b for b in marks if b[1] >= top - align and b[3] <= bottom + align
-                 and max(b[2] - b[0], b[3] - b[1]) >= HALO_MARK * lh]
-        gap = max(3, int(round(lh * FIT_GAP)))
+                 and max(b[2] - b[0], b[3] - b[1]) >= HALO_MARK * lh
+                 and (rows is None or b[2] - b[0] <= PAPER_WORD * lh)]
+        gap = max(3, int(round(lh * (FIT_GAP if rows is None else PAPER_WORD))))
         nx0, nx1 = x0, x1
         for pieces in (letters, marks):  # letters first, then a period or an apostrophe at the ends
             for b in sorted(pieces, key=lambda b: b[0]):
@@ -2525,6 +2609,41 @@ def _valley_runs(counts, r0, r1):
     return [(r0 + a, r0 + b) for a, b in _runs(valley, gap=0)]
 
 
+def _paper_row(gray, y, x0, x1):
+    """True when row ``y`` of the page is light paper from x0 to x1 (no letter, no dark ground)."""
+    return 0 <= y < gray.shape[0] and bool((gray[y, x0:x1] >= PAPER_LIGHT).all())
+
+
+def _large_line(gray, runs, x0, x1, height):
+    """True when ``runs`` is one line of larger letters between columns x0 and x1 of the page.
+
+    Measured on the letters of the page, with paper right above and below them: the mask can be
+    one blob over several lines, and on a dark ground every row is dark.  The letters stand about
+    the whole height of their ink: small letters beside a taller drawing (a credits line touching
+    a logo) or two lines of smaller letters are not one large line.
+    """
+    if len(runs) != 1:
+        return False
+    r0, r1 = runs[0]
+    if r1 - r0 > FIT_LARGE * height or not _paper_row(gray, r0 - 2, x0, x1) or not _paper_row(gray, r1 + 1, x0, x1):
+        return False
+    letters = gray[r0:r1, x0:x1] < INK_LEVEL
+    if len(_valley_runs(letters.sum(axis=1), 0, r1 - r0)) != 1:
+        return False
+    rows = np.flatnonzero(letters.any(axis=1))
+    span = int(rows[-1] - rows[0] + 1) if len(rows) else 0
+    # The height of the letter at half the ink, so the dots of "?!" and "..." weigh little; a comma
+    # or a speck under a share of the span squared (pixels) does not count at all.
+    n, _, stats, _ = cv2.connectedComponentsWithStats(letters.astype(np.uint8), connectivity=8)
+    pieces = sorted((int(stats[k][3]), int(stats[k][4])) for k in range(1, n) if stats[k][4] >= FIT_MARK * span * span)
+    if not pieces:
+        return False
+    weight = np.cumsum([area for _, area in pieces])
+    # ...and most pieces are letters of about that height: not small letters beside one solid symbol.
+    return (pieces[int(np.searchsorted(weight, weight[-1] / 2))][0] >= FIT_FILL * span
+            and pieces[len(pieces) // 2][0] >= FIT_FILL_ANY * span)
+
+
 def fit_lines(ink, items, height, changes, gray=None, valley=False):
     """Fit line boxes to the lettering of the detector mask before OCR.
 
@@ -2588,8 +2707,11 @@ def fit_lines(ink, items, height, changes, gray=None, valley=False):
             box, source = items[i]
             x0, y0, x1, y1 = box
             runs = _line_runs(ink, box, height) if x1 - x0 > y1 - y0 else []
+            # A run with no row of near-empty ink inside is one line, even taller than the page's usual
+            # line: "HOWEVER..." or "NO," alone in a caption, in larger letters (webtoon p26, p36).
+            large = gray is not None and _large_line(gray, runs, x0, x1, height)
             cut = False
-            if valley and len(runs) == 1 and runs[0][1] - runs[0][0] > SPLIT_CHECK * height:
+            if valley and not large and len(runs) == 1 and runs[0][1] - runs[0][0] > SPLIT_CHECK * height:
                 # Lines with tight leading touch through a stray dot or the tip of a letter: cut
                 # where the ink nearly stops, and keep the line that holds the box.  A box 11 px
                 # tall over letters 14 px tall, joined to the line above, read "DP".
@@ -2598,19 +2720,27 @@ def fit_lines(ink, items, height, changes, gray=None, valley=False):
                 if pieces:
                     runs, cut = [max(pieces, key=lambda p: min(p[1], y1) - max(p[0], y0))], True
             # Only a run one line tall: a taller one is several lines, left to the split above.
-            if len(runs) != 1 or runs[0][1] - runs[0][0] > SPLIT_CHECK * height:
+            if len(runs) != 1 or runs[0][1] - runs[0][0] > SPLIT_CHECK * height and not large:
                 out.append(items[i])
                 continue
             r0, r1 = runs[0]
             others = [b for j, b in enumerate(boxes) if j != i]
             # Even a row of the letters left outside the box makes the OCR drop the line.
             tall = r0 < y0 or r1 > y1
-            nx0, nx1 = _ink_span(ink, x0, x1, r0, r1, height, others)
             if gray is not None:
                 lo = max([b[2] for b in others if min(r1, b[3]) - max(r0, b[1]) > 0.5 * (r1 - r0) and b[2] <= x0] + [0])
                 hi = min([b[0] for b in others if min(r1, b[3]) - max(r0, b[1]) > 0.5 * (r1 - r0) and b[0] >= x1]
                          + [ink.shape[1]])
-                nx0, nx1 = _glyph_span(gray, nx0, nx1, r0, r1, height, lo, hi)
+            for line in ((max(height, r1 - r0), height) if large else (height,)):  # larger letters, wider spacing
+                nx0, nx1 = _ink_span(ink, x0, x1, r0, r1, line, others)
+                if gray is not None:
+                    nx0, nx1 = _glyph_span(gray, nx0, nx1, r0, r1, line, lo, hi)
+                # Larger letters have paper right above them and a little below them (the tail of a
+                # comma) to the ends of the line: a drawing that runs past the line (a face beside
+                # "ANYHOW,") falls back to the usual spacing.
+                if not large or (_paper_row(gray, r0 - 2, nx0, nx1)
+                                 and _paper_row(gray, r1 + int(FIT_TAIL * (r1 - r0)), nx0, nx1)):
+                    break
             wide = x0 - nx0 >= FIT_SIDE * height or nx1 - x1 >= FIT_SIDE * height
             if not (tall or wide):
                 out.append(items[i])
@@ -3037,6 +3167,33 @@ SCAN_INK_SHARE = (0.01, 0.25)
 SCAN_CENTRE = (0.25, 0.3)  # text block centre within this share of the bubble width / height
 
 
+ROW_MARK_GAP = 0.5   # a comma or a period this many letter heights past a scanned row's end is its own
+ROW_MARK_DROP = 0.6  # ...and reaching at most this many letter heights under the row (a comma's tail)
+
+
+def _row_marks(row, comps, med):
+    """A scanned row grown over the punctuation at its ends: commas, periods, dots.
+
+    Webtoon p36: "NO," alone in a caption was read without its comma and the OCR, on the two
+    letters alone, read "名" (0.16) and dropped the line; with the comma it reads "NO," (0.72).
+    A mark stands from the middle of the row down to a comma's tail under it.
+    """
+    x0, y0, x1, y1 = row
+    marks = [c for c in comps if c[3] < 0.5 * med]
+    grown = True
+    while grown:
+        grown = False
+        for cx0, cy0, w, h, _ in marks:
+            cx1, cy1 = cx0 + w, cy0 + h
+            if cx0 >= x0 and cx1 <= x1 and cy0 >= y0 and cy1 <= y1:
+                continue
+            if max(x0 - cx1, cx0 - x1) <= ROW_MARK_GAP * med \
+                    and cy0 >= y0 + 0.3 * (y1 - y0) and cy1 <= y1 + ROW_MARK_DROP * med:
+                x0, y0, x1, y1 = min(x0, cx0), min(y0, cy0), max(x1, cx1), max(y1, cy1)
+                grown = True
+    return x0, y0, x1, y1
+
+
 def _text_rows(ink):
     """Line boxes when ``ink`` looks like rows of letters, else None.
 
@@ -3085,7 +3242,7 @@ def _text_rows(ink):
     if len(kept) != 1 or (len(kept) < len(blocks) and max(n for _, n in kept[0]) < 3):
         return None
     blocks = kept
-    out = [box for box, _ in blocks[0]]
+    out = [_row_marks(box, comps, med) for box, _ in blocks[0]]
     # Punctuation under the last row ("SORRY / ...") is a row of its own: lettering, not a drawn sound.
     x0, _, x1, y1 = out[-1]
     dots = [c for c in comps if c[3] < 0.5 * med and x0 <= c[0] and c[0] + c[2] <= x1 and 0 <= c[1] - y1 <= 1.2 * med]
@@ -3098,6 +3255,24 @@ def _text_rows(ink):
 SCAN_SPLIT = 15           # disc (px) that cuts a bubble off a light background it leaks into
 SCAN_SEEN = 0.5           # share of a box inside a cut-off bubble that means the detector saw it
 SCAN_GRAZE = 0.02         # a box with less of itself inside a bubble that leaks out only grazes it
+SCAN_ROW_MARGIN = 0.05    # a scanned row is read with this share of its height of paper around it (2 px at least)
+
+
+def scanned_line(row, bubble):
+    """The box the OCR reads for a row of a scanned bubble, inside the bubble.
+
+    The row is cut flush with its ink.  Webtoon p36: read in one batch with the
+    page's lines, the condensed "NO," of a caption flush with its ink came back
+    as "№" (0.31) and stayed in English; with 2 px of paper around it, "NO," (0.6).
+    A one-letter row ("I") is widened to stay a horizontal line.
+    """
+    x0, y0, x1, y1 = row
+    m = max(2, round(SCAN_ROW_MARGIN * (y1 - y0)))
+    x0, y0, x1, y1 = x0 - m, y0 - m, x1 + m, y1 + m
+    if x1 - x0 < y1 - y0:
+        pad = (y1 - y0 - (x1 - x0)) // 2 + 1
+        x0, x1 = x0 - pad, x1 + pad
+    return max(bubble[0], x0), max(bubble[1], y0), min(bubble[2], x1), min(bubble[3], y1)
 
 
 def bubble_text_lines(image, boxes):
@@ -3238,18 +3413,62 @@ def _rows_below(gray, rows, letters, span, bottom):
     return rows, bottom
 
 
-def reads_as_speech(text, several_rows=False):
-    """True when a scanned bubble's OCR text reads as an English line, not a drawn sound.
+# Small words of speech: a word the OCR ran into its neighbour is split only next to one of these.
+SPEECH_WORDS = {"i", "a", "is", "it", "its", "the", "this", "that", "you", "he", "she", "we", "they", "me", "my",
+                "no", "not", "of", "to", "in", "on", "and", "so", "be", "am", "are", "was", "do", "what", "who"}
 
-    A line has a common English word and either two words or end punctuation:
-    "MUSCLE?", "I SEE." yes; "GRAB" (a sound in a jagged box) or "REEE" no.
+
+def run_together(word, common):
+    """``word`` as two words when the OCR read them without the space ("THISIS"), else [word].
+
+    Webtoon p41: "THIS IS..." in a condensed font came back as one word that is not in the
+    dictionary, and the bubble was kept as a drawn sound.  The split needs two dictionary
+    words, one of them a small word of speech, so "BADUMP" or "AHAHA" stay one sound.  A name
+    ("NOAH"), a word with an apostrophe, a repeated syllable ("HEHE") and a word with more than
+    one such split ("INEVER": "IN EVER" or "I NEVER") stay whole: a wrong space misleads the AI.
+    """
+    low = word.lower()
+    if "'" in low or low in common or low in english_words()[1]:
+        return [word]
+    def word_ok(part):
+        return part in SPEECH_WORDS or len(part) >= 2 and (part in common or part in _contractions(common))
+    cuts = []
+    for i in range(1, len(low) - 1):  # "I" and "A" are words of one letter
+        head, tail = low[:i], low[i:]
+        if head != tail and (head in SPEECH_WORDS or tail in SPEECH_WORDS) and word_ok(head) and word_ok(tail):
+            cuts.append(i)
+    return [word[:cuts[0]], word[cuts[0]:]] if len(cuts) == 1 else [word]
+
+
+def spaced_words(text):
+    """A one-word ``text`` with the space back between words the OCR ran together ("THISIS" -> "THIS IS").
+
+    Only a lone word: in a longer line the AI has the context, and a wrong split would mislead it.
     """
     common, _ = english_words()
     words = re.findall(r"[A-Za-z']+", text or "")
+    if len(words) != 1:
+        return text
+    return re.sub(r"[A-Za-z']+", lambda m: " ".join(run_together(m.group(0), common)), text)
+
+
+def reads_as_speech(text, several_rows=False, joined=False):
+    """True when a scanned bubble's OCR text reads as an English line, not a drawn sound.
+
+    A line has a common English word and either two words or end punctuation:
+    "MUSCLE?", "I SEE." yes; "GRAB" (a sound in a jagged box) or "REEE" no.  ``joined`` also
+    reads one word as two run together ("THISIS"); only the bubble scan asks for it, never the
+    checks for a logo or a speech over the drawing, where a word kept whole keeps the art.
+    """
+    common, _ = english_words()
+    words = re.findall(r"[A-Za-z']+", text or "")
+    if joined and len(words) == 1:  # "THISIS": two words the OCR ran together
+        words = run_together(words[0], common)
     if not words or not any(len(w) >= 2 and (w.lower() in common or w.lower().replace("'", "") in _contractions(common))
                             for w in words):
         return False
-    return several_rows or len(words) >= 2 or bool(re.search(r"[.!?…-]\W*$", text.strip()))
+    # A comma ends a line that goes on in the next caption (webtoon p36: "NO," alone in a box).
+    return several_rows or len(words) >= 2 or bool(re.search(r"[.!?…,-]\W*$", text.strip()))
 
 
 # Words that show a woman or girl is on the page (speaker or listener).
@@ -3272,7 +3491,9 @@ FEMININE_SELF = re.compile(
 # "DON'T", "DIDNT", "CAN'T" with or without the apostrophe, but not "WANT" or "EVENT".
 NT = r"(?:do|does|did|is|are|was|were|has|have|had|could|would|should|must|might|need|ca|wo|ai|sha)n'?t"
 SOURCE_NEGATION = re.compile(
-    r"\b(?:not|never|nobody|nothing|none|neither|nor|no one|cannot|without)\b|\b" + NT + r"\b|\bno\s+\w", re.I)
+    r"\b(?:not|never|nobody|nothing|none|neither|nor|no one|cannot|without)\b|\b" + NT + r"\b|\bno\s+\w|"
+    # A bare "NO," or "OH NO!" (webtoon p36: "NO," alone in a caption came back "Ora,"), not "NO. 1".
+    r"\bno\b\s*(?:[,!?…]|\.(?!\s*\d)|$)", re.I)
 NEGATION_IDIOMS = re.compile(
     r"\b" + NT + r"\b[^.!?]*\?|can'?t\s+wait|"
     r"nothing\s+but|not\s+only|no\s+(?:wonder|doubt|way)", re.I)
