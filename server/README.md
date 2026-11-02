@@ -20,7 +20,7 @@ Se `py` não funcionar, use `python`. O instalador pergunta, nesta ordem:
 
 | Pergunta | O que responder |
 |---|---|
-| Hardware | `1` (CPU) se não souber, ou com placa AMD RX 6000 ou mais antiga, ou Intel; `2` se tiver placa NVIDIA. Radeon RX 7000 ou mais nova: veja [AMD no Windows](#amd-no-windows-radeon-rx-7000-ou-mais-nova-experimental) |
+| Hardware | `1` (CPU) se não souber, ou com placa AMD RX 6000 ou mais antiga, ou Intel; `2` se tiver placa NVIDIA. Radeon RX 7000 ou mais nova: veja [Outros sistemas e placas](#outros-sistemas-e-placas) |
 | Celular na mesma rede Wi-Fi | `s` |
 | Velocidade | Enter. O padrão é Rápido em CPU e Qualidade com placa NVIDIA |
 | Qual IA | Groq e depois Gemini como reserva. Com o Ollama instalado, ele pode entrar como 3ª opção. Passo a passo no [guia de IAs](BYOK.md) |
@@ -72,17 +72,15 @@ Opções úteis:
 | `--pages 1-10` | Só algumas páginas, bom para testar |
 | `--glossary /work/glossario.csv` | Nomes e termos fixos (colunas `source,target`, e `gender` opcional com `m` ou `f` para o gênero do personagem); vencem os termos aprendidos |
 | `--work "Nome da obra"` | Obra para a memória (padrão: nome do arquivo). Use o mesmo nome em todos os capítulos |
-| `--no-memory` | Traduz sem a memória da obra (sem glossário aprendido e sem páginas anteriores) |
 | `--speed fast` / `--speed quality` | Força uma velocidade |
 | `--diagnostics` | Salva máscaras e regiões de cada página em `diagnostico/` |
-| `--art-text traduzir` | Experimental: traduz também a fala escrita sobre o desenho; o fundo sob as letras é refeito pelo modelo e pode sair borrado (padrão: `preservar`, que deixa no original) |
-| `--box-layout` | Encaixa o texto na caixa do original, como na 0.5.3 (para comparar) |
+| `--art-text traduzir` | Experimental: traduz toda fala sobre o desenho; o fundo pode sair borrado |
 
 Com placa NVIDIA, use `--profile gpu run ... translator-gpu` e acrescente `--gpu`. No Linux/macOS, troque `${PWD}` por `$PWD`.
 
-**Memória da obra.** A cada página, o servidor guarda os nomes e termos que a IA usou e as falas da página. Nas próximas páginas e capítulos da mesma obra, a IA recebe esses termos e as falas das duas páginas anteriores, então um nome sai sempre igual e o gênero de cada personagem, quando a página mostra, fica guardado. A memória é a mesma para o app e para este comando, e fica no volume `memoria` do Docker (não some com o `py rebuild.py`). O lote também grava `glossario.csv` com tudo o que a obra já tem: corrija o que quiser e passe de volta com `--glossary`.
+A **memória da obra** guarda nomes, termos e o gênero dos personagens, para saírem iguais em todos os capítulos. Ela vale para o app e para o lote e sobrevive ao `py rebuild.py`. O lote grava `glossario.csv`: corrija o que quiser e passe de volta com `--glossary`.
 
-Na saída, `capitulo-para-revisar.cbz` traz as páginas em ordem; quando uma página falha, fica o original, nunca uma página em branco. Em `revisao-completa.zip` estão os originais, os resultados e um `revisao.md` com o texto lido e o traduzido de cada página. Se três páginas seguidas falharem, o lote para de chamar a IA.
+Na saída, `capitulo-para-revisar.cbz` traz as páginas em ordem (uma página que falha fica no original), e `revisao-completa.zip` traz originais, resultados e um `revisao.md` com o texto lido e o traduzido.
 
 Para ler o CBZ no app, coloque-o na pasta de armazenamento do Mangalate, em `manga/Nome do mangá/`, e atualize a fonte Local.
 
@@ -92,7 +90,9 @@ Para ler o CBZ no app, coloque-o na pasta de armazenamento do Mangalate, em `man
 - **AMD:** Radeon RX 7000 ou mais nova acelera no Windows pelo WSL2 (veja abaixo). Placas mais antigas (RX 6000 para trás) usam CPU no motor, mas o Ollama, se você usar, roda nelas (veja o [guia de IAs](BYOK.md#ollama-experimental)). No Linux com ROCm, no `python3 setup.py` escolha `3`. As duas opções AMD são experimentais, ainda não testadas em placa real. Rode `python hardware.py` para ver o que foi detectado.
 - **Intel, DirectML e OpenVINO:** não implementados; use CPU.
 
-### AMD no Windows (Radeon RX 7000 ou mais nova, experimental)
+<details>
+<summary><b>AMD no Windows (Radeon RX 7000 ou mais nova, experimental)</b></summary>
+
 
 O servidor roda no Ubuntu do WSL2, e a placa chega até ele pelo ROCm da AMD. Funciona com Radeon RX 7000 e RX 9000 (e Ryzen AI recentes); RX 6000 e mais antigas não são suportadas pela AMD. A placa deixa a página umas 4 a 5 vezes mais rápida que o processador (estimativa, ainda sem medição em placa real).
 
@@ -104,7 +104,10 @@ O servidor roda no Ubuntu do WSL2, e a placa chega até ele pelo ROCm da AMD. Fu
 
 Ao iniciar, o servidor escreve no log `Placa de vídeo em uso: ...` (veja com `docker compose --profile amd-wsl logs translator-amd-wsl`). Se aparecer `usando o processador`, o ROCm não chegou ao container: confira o passo 3. O celular conecta no IP do Windows, porta 5003, como no modo normal; na primeira vez o Windows pode pedir para liberar o acesso do WSL na rede.
 
-## Servidor na internet (HTTPS)
+</details>
+
+<details>
+<summary><b>Servidor na internet (HTTPS)</b></summary>
 
 Para uma VPS sua, com domínio apontando para ela: instale como acima (com `py rebuild.py`), acrescente `MANGALATE_DOMAIN=seu-dominio.exemplo` ao `.env` e rode
 
@@ -114,9 +117,11 @@ docker compose -f docker-compose.yml -f docker-compose.public.yml --profile gpu 
 
 O Caddy cuida do HTTPS e a porta 5003 deixa de ficar exposta. No firewall, libere só as portas 80 e 443. No app, use `https://seu-dominio.exemplo` ([HTTPS automático do Caddy](https://caddyserver.com/docs/automatic-https)).
 
+</details>
+
 ## Colab
 
-O [notebook Colab](https://colab.research.google.com/github/delkrusty/Mangalate/blob/main/server/colab/Mangalate_Colab.ipynb) traduz um ZIP/CBZ sem instalar Docker e exporta o CBZ e o pacote de revisão. Ele não é um servidor para o app e não usa a Chave Mangalate. Se usar uma IA, coloque a chave num Secret chamado `MANGALATE_PROVIDER_KEY`, nunca numa célula. O notebook ainda está na versão 0.5.2 e será atualizado. As regras de uso são as do [Colab](https://research.google.com/colaboratory/intl/pt-BR/faq.html).
+O [notebook Colab](https://colab.research.google.com/github/delkrusty/Mangalate/blob/main/server/colab/Mangalate_Colab.ipynb) traduz um ZIP/CBZ sem instalar Docker (não serve de servidor para o app). A chave da IA vai num Secret chamado `MANGALATE_PROVIDER_KEY`, nunca numa célula. O notebook ainda está na versão 0.5.2.
 
 ## Problemas
 
@@ -134,6 +139,6 @@ secrets/provider_key.txt    chaves das IAs (só neste PC)
 .env                        hardware, velocidade e endereços; sem chaves
 ```
 
-O motor é o [manga-image-translator](https://github.com/zyddnys/manga-image-translator) (GPL-3.0), numa versão fixa. Ele roda num serviço interno, e só o gateway com a Chave Mangalate fica acessível pela rede. `engine_compat.py`, `quality.py`, `providers.py` e `seams.py` trazem as correções do Mangalate; `engine_compat.py` é GPL-3.0 ([LICENSE.engine](LICENSE.engine)). Os modelos têm licenças próprias. Use apenas capítulos que você tem direito de usar.
+O motor é o [manga-image-translator](https://github.com/zyddnys/manga-image-translator) (GPL-3.0), numa versão fixa e num serviço interno: só o gateway, com a Chave Mangalate, fica acessível pela rede. `engine_compat.py` é GPL-3.0 ([LICENSE.engine](LICENSE.engine)); os modelos têm licenças próprias. Use apenas capítulos que você tem direito de usar.
 
 O Docker Desktop pode exigir licença paga em alguns usos empresariais ([termos](https://docs.docker.com/subscription/desktop-license/)).

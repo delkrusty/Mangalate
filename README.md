@@ -12,51 +12,39 @@ Leitor de mangá para Android, baseado no [Mihon](https://github.com/mihonapp/mi
 
 ## Começar
 
-1. Baixe o APK em [Releases](https://github.com/delkrusty/Mangalate/releases/latest). `Mangalate-arm64-v8a.apk` serve na maioria dos celulares; se não instalar, use `Mangalate-universal.apk`.
+1. Baixe `Mangalate-arm64-v8a.apk` em [Releases](https://github.com/delkrusty/Mangalate/releases/latest). Se não instalar, use `Mangalate-universal.apk`.
 2. Abra um capítulo e toque em **文A** na barra do leitor.
-3. Escolha o idioma do mangá e o idioma da tradução e toque em **Traduzir**.
+3. Escolha os idiomas e toque em **Traduzir**. Para ver o original, toque em 文A de novo.
 
-Para voltar ao original, toque em 文A de novo. O app não traz fontes de conteúdo: as extensões são instaladas por você, como no Mihon.
+O app não traz fontes de conteúdo: as extensões são instaladas por você, como no Mihon.
 
 ## Dois modos
 
 | | **No celular** (padrão) | **Servidor + IA** |
 |---|---|---|
-| Onde roda | No próprio celular, offline | No seu PC, com Docker |
-| Tradução | Google ML Kit | IA escolhida por você: Groq e Gemini (grátis, se revezando entre as páginas), OpenRouter ou Ollama no PC |
-| Qualidade | Boa para entender a história | Português natural, nomes e tom dos personagens respeitados |
-| Precisa de | Baixar os idiomas uma vez | PC ligado, Docker e uma chave grátis de IA |
+| Onde roda | No celular, offline | No seu PC, com Docker |
+| Tradução | Google ML Kit | Uma IA grátis escolhida por você (Groq, Gemini, OpenRouter ou Ollama) |
+| Qualidade | Boa para entender a história | Português natural, com nomes e tom dos personagens |
 
-Para usar o servidor, siga o [manual do servidor](server/README.md); a escolha da IA está no [guia de IAs](server/BYOK.md). Só o texto das falas vai para a IA, nunca as imagens. A chave da IA fica no seu PC, e o Mangalate não cobra nada.
+O servidor tem [manual próprio](server/README.md). Só o texto das falas vai para a IA, nunca as imagens, e a chave da IA fica no seu PC.
 
-## Ler offline
-
-- **Pré-tradução:** enquanto você lê, as páginas seguintes já vão sendo traduzidas.
-- **Traduzir ao baixar:** ligue em Mais › Tradução (Mangalate). Os capítulos baixados chegam traduzidos e podem ser lidos sem internet.
-- Mudar idioma, modo ou servidor pode exigir traduzir de novo. Prepare os capítulos antes de sair.
+Para ler offline, ligue **Traduzir capítulos ao baixar** em Mais › Tradução (Mangalate).
 
 ## Limitações
 
-- Letras muito estilizadas, japonês vertical, balões abertos e texto sobre o desenho podem sair errados ou ficar no original. Confira o resultado antes de compartilhar.
-- O servidor deixa no original o texto que está sobre a arte, em vez de apagar o desenho, e marca essas páginas para revisão.
-- Aceleração por placa de vídeo no servidor: NVIDIA (CUDA). AMD é experimental: Radeon RX 7000 ou mais nova no Windows (pelo WSL2) ou ROCm no Linux; nos demais casos, o servidor usa a CPU.
-- Com a tradução ligada, o renderizador experimental do Mihon é trocado pelo leitor clássico.
+- Letra muito estilizada, japonês vertical e balão aberto podem sair errados ou ficar no original.
+- Com "Preservar a arte" ligado (o padrão), parte do texto sobre o desenho fica no original, e a página é marcada para revisão.
+- No servidor, a placa de vídeo acelera só com NVIDIA. AMD é experimental.
 
-## Compilar
-
-O GitHub Actions compila a cada push. Localmente, com JDK 21 e Android SDK:
+## Desenvolvimento
 
 ```bash
 ./gradlew :app:assembleRelease -Pdist=local
+python -m unittest discover -s server/tests
 ```
-
-Os testes do servidor estão em `server/tests` (`python -m unittest discover server/tests`).
 
 ## Créditos e licença
 
-- Base: [Mihon](https://github.com/mihonapp/mihon) (Apache 2.0).
-- Tradução no celular: Google ML Kit. Fonte Comic Neue (SIL OFL 1.1). Ícones Material Symbols (Apache 2.0).
-- Servidor: [manga-image-translator](https://github.com/zyddnys/manga-image-translator) (GPL-3.0), rodando como serviço separado.
-- Divisão silábica: [DivSilab/LibreOffice](https://github.com/LibreOffice/dictionaries/tree/master/pt_BR), de Raimundo Santos Moura (MPL), sem modificações, em `app/src/main/assets/lettering/` e `server/words/hyph_pt_BR/`.
+Base: [Mihon](https://github.com/mihonapp/mihon) (Apache 2.0). Servidor: [manga-image-translator](https://github.com/zyddnys/manga-image-translator) (GPL-3.0), rodando como serviço separado. Tradução no celular: Google ML Kit. Fonte Comic Neue (SIL OFL 1.1), ícones Material Symbols (Apache 2.0) e divisão silábica [DivSilab/LibreOffice](https://github.com/LibreOffice/dictionaries/tree/master/pt_BR) (MPL).
 
-O aplicativo usa a licença Apache 2.0 ([LICENSE](LICENSE)). A adaptação `server/engine_compat.py` é GPL-3.0, como o motor que ela adapta; a licença do motor fica em [server/LICENSE.engine](server/LICENSE.engine) e dentro das imagens Docker. Os modelos baixados têm licenças próprias.
+O app usa a licença Apache 2.0 ([LICENSE](LICENSE)). `server/engine_compat.py` é GPL-3.0, como o motor que adapta ([LICENSE.engine](server/LICENSE.engine)). Os modelos baixados têm licenças próprias.
