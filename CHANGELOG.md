@@ -2,7 +2,16 @@
 
 As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://github.com/mihonapp/mihon/blob/main/CHANGELOG.md).
 
-## Em teste
+## 0.7.0
+
+- **Leitor:** segurar o dedo na página mostra o original, refaz a página ou o capítulo e, no modo Servidor, corrige nomes da obra ou reporta a página para o PC.
+- **Avisos:** o indicador diz por que uma página ficou sem tradução e tenta de novo com um toque; um selo avisa quando alguma fala ficou no original.
+- **Idioma por obra:** no modo No celular, cada obra usa o idioma da sua fonte.
+- **Configurações:** mais curtas, guardadas num lugar só e com a Chave Mangalate protegida; o servidor se liga lendo um QR code.
+- **Adiantar o próximo capítulo:** opção nova, só no Wi-Fi e com o celular carregando.
+- **Servidor:** diz ao app quantas páginas aceita por vez e o que ficou no original na página.
+
+Detalhes técnicos de cada mudança no [CHANGELOG](https://github.com/delkrusty/Mangalate/blob/main/CHANGELOG.md#070).
 
 ### App
 - Saíram das configurações as opções que o servidor ignorava: a escolha de diagramação no modo Servidor e, já escondidas, motor de tradução, qualidade da limpeza e margem da máscara. O tamanho da letra agora vai de -3 a +3, o limite que o servidor sempre aplicou (antes ia de -10 a +10, e no celular só os valores negativos mudavam algo). O app manda ao servidor só o que ele lê: idioma de destino, tamanho e caixa da letra e a escolha sobre a fala no desenho.
