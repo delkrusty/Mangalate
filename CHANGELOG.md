@@ -4,6 +4,15 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 
 ## Em teste
 
+Nada por enquanto.
+
+## 0.6.1
+
+- **Configurações mais curtas:** saíram opções que não mudavam nada (diagramação no modo Servidor, Gemini e DeepL). O tamanho da letra vai de -3 a +3, e as páginas já traduzidas continuam salvas.
+- **Servidor:** ao testar a conexão, o app mostra que tradução o servidor usa, e o servidor só marca para revisão a página com fala que ficou no original ou foi traduzida sobre o desenho.
+
+Detalhes técnicos de cada mudança no [CHANGELOG](https://github.com/delkrusty/Mangalate/blob/main/CHANGELOG.md#061).
+
 ### App
 - Saíram das configurações as opções que o servidor ignorava: a escolha de diagramação no modo Servidor e, já escondidas, motor de tradução, qualidade da limpeza e margem da máscara. O tamanho da letra agora vai de -3 a +3, o limite que o servidor sempre aplicou (antes ia de -10 a +10, e no celular só os valores negativos mudavam algo). O app manda ao servidor só o que ele lê: idioma de destino, tamanho e caixa da letra e a escolha sobre a fala no desenho.
 - O cache das páginas continua valendo: a assinatura do modo Servidor é montada como a da 0.6.0, com as opções retiradas nos valores padrão. Quem nunca mexeu nelas não perde nenhuma página. Quem tinha mudado alguma, ou usava letra além de ±3, vê essas páginas traduzidas de novo uma vez.
