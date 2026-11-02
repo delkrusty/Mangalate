@@ -33,6 +33,7 @@ MAX_TERMS_PER_PAGE = 16
 CONFIRM_PAGES = 2        # pages that must list a term before it is used
 MAX_CANDIDATES = 300
 MAX_TERM_LEN = 60
+MAX_BLOCKED = 300        # terms the reader removed, never learned again
 MAX_CHAPTERS = 3         # chapters whose dialogue is kept
 MAX_PAGES = 400          # pages per chapter
 PREVIOUS_PAGES = 2
@@ -182,7 +183,7 @@ class WorkMemory:
     def load(self, work):
         if work in self.cache:
             return self.cache[work]
-        data = {"work": work, "glossary": [], "candidates": {}, "chapters": {}}
+        data = {"work": work, "glossary": [], "candidates": {}, "chapters": {}, "blocked": []}
         if self.folder:
             try:
                 stored = json.loads(self.path(work).read_text(encoding="utf-8"))
@@ -192,27 +193,83 @@ class WorkMemory:
                     data["chapters"] = stored.get("chapters", {}) if isinstance(stored.get("chapters"), dict) else {}
                     data["candidates"] = {k: v for k, v in (stored.get("candidates") or {}).items()
                                           if isinstance(v, dict) and isinstance(v.get("pages"), list)}
+                    data["blocked"] = [b for b in stored.get("blocked", []) if isinstance(b, str)][-MAX_BLOCKED:]
             except (OSError, ValueError):
                 pass
         self.cache[work] = data
         return data
 
     def save(self, work, data):
-        if not self.folder:
-            return
         try:
-            self.folder.mkdir(parents=True, exist_ok=True)
-            target = self.path(work)
-            temp = target.with_suffix(".tmp")
-            temp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
-            os.replace(temp, target)
+            self.write(work, data)
         except OSError as exc:
             print(f"Memória da obra não salva: {type(exc).__name__}", flush=True)
+
+    def write(self, work, data):
+        """Like save(), but a failure reaches the caller (the reader's edit must not vanish)."""
+        if not self.folder:
+            return
+        self.folder.mkdir(parents=True, exist_ok=True)
+        target = self.path(work)
+        temp = target.with_suffix(".tmp")
+        temp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+        os.replace(temp, target)
 
     def glossary(self, work):
         learned = self.load(work)["glossary"]
         pinned_keys = {normalize(p["source"]) for p in self.pinned}
         return self.pinned + [g for g in learned if normalize(g["source"]) not in pinned_keys]
+
+    def entries(self, work):
+        """The work's glossary as the app shows it: learned and reader-made terms, without pinned ones."""
+        work = self.clean(work)
+        if not work:
+            return []
+        with self.lock:
+            return [dict(g) for g in self.load(work)["glossary"]]
+
+    def edit(self, work, entries, removed=None):
+        """The reader's changes from the app. Returns the stored list.
+
+        [entries] are terms written or fixed by the reader, kept as written, since record() never
+        overwrites a known term. [removed] are the terms the reader deleted: they leave the
+        glossary and are blocked, so later pages do not learn them again. A term learned while
+        the app's list was open is in neither, so it stays."""
+        work = self.clean(work)
+        if not work:
+            raise ValueError("Obra sem nome.")
+        removed = [] if removed is None else removed
+        if not isinstance(entries, list) or not isinstance(removed, list):
+            raise ValueError("Envie a lista de termos.")
+        clean, seen = [], set()
+        for item in entries[:MAX_TERMS]:
+            if not isinstance(item, dict):
+                raise ValueError("Termo inválido.")
+            source = self.clean(item.get("source"), MAX_TERM_LEN)
+            target = self.clean(item.get("target"), MAX_TERM_LEN)
+            key = normalize(source)
+            if not key or not target or key in seen:
+                continue
+            seen.add(key)
+            entry = {"source": source, "target": target}
+            if item.get("gender") in GENDER_WORDS:
+                entry["gender"] = item["gender"]
+            clean.append(entry)
+        dropped = {normalize(self.clean(r, MAX_TERM_LEN)) for r in removed[:MAX_TERMS] if isinstance(r, str)}
+        dropped -= seen | {""}
+        with self.lock:
+            data = self.load(work)
+            fixed = {normalize(e["source"]): e for e in clean}
+            stored = [fixed.pop(normalize(g["source"]), g) for g in data["glossary"]
+                      if normalize(g["source"]) not in dropped]
+            blocked = [b for b in data.get("blocked", []) if b not in seen]
+            blocked += [b for b in sorted(dropped) if b not in blocked]
+            data["blocked"] = blocked[-MAX_BLOCKED:]
+            for key in seen | dropped:
+                data["candidates"].pop(key, None)
+            data["glossary"] = (stored + list(fixed.values()))[-MAX_TERMS:]
+            self.write(work, data)
+            return [dict(g) for g in data["glossary"]]
 
     def context(self, work, chapter, page):
         """What the AI receives with the page; None when the page has no work."""
@@ -233,8 +290,9 @@ class WorkMemory:
             glossary = self.glossary(work)
             known = {normalize(g["source"]) for g in glossary}
             names = [g["source"] for g in glossary] + [c["source"] for c in data["candidates"].values()]
+            blocked = set(data.get("blocked", []))
             for key, c in data["candidates"].items():
-                if not chapter or page is None or key in known or _misread_name(c["source"], names):
+                if not chapter or page is None or key in known or key in blocked or _misread_name(c["source"], names):
                     continue
                 # Without the gender: one page's guess (a man called "a Mara") is not forced on the next.
                 if (c.get("used") and _earlier_page(c["pages"], chapter, page)) or (
@@ -263,9 +321,12 @@ class WorkMemory:
             known = {normalize(g["source"]): g for g in data["glossary"]}
             candidates = data["candidates"]
             here = f"{chapter}#{page}"
+            blocked = set(data.get("blocked", []))
             added = []
             for source, target in accepted:
                 key = normalize(source)
+                if key in blocked:
+                    continue  # removed by the reader in the app: not learned again
                 target, gender = split_gender(target)
                 target = _out_of_capitals(target)
                 if _misread_name(source, names):

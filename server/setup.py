@@ -268,8 +268,12 @@ def main():
     print("\nArquivo da chave Mangalate:", path)
     print("No app cole o conteúdo desse arquivo em Chave Mangalate, NÃO a chave da API.")
     print("Essa senha é privada. Não compartilhe prints dela.")
-    print("Chave Mangalate:", path.read_text().strip())
-    print("Endereço no app: http://IP-DO-COMPUTADOR:5003 (use ipconfig no Windows / hostname -I no Linux)")
+    # With the local network on, the app reads address and key from a QR code (parear.py).
+    from parear import show
+    if not show(ROOT):
+        print("Chave Mangalate:", path.read_text().strip())
+        print("Endereço no app: http://IP-DO-COMPUTADOR:5003 (use ipconfig no Windows / hostname -I no Linux)")
+    print("Para mostrar o QR code de novo: py parear.py")
     print("Para iniciar ou atualizar depois de um git pull: py rebuild.py")
     print("Prepare modelos e teste UMA página antes de abrir um capítulo: python check.py --warmup")
     if yes_no("Verificar Docker e iniciar agora? [s/n]: "):

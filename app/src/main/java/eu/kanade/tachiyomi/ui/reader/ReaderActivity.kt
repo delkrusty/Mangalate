@@ -293,6 +293,7 @@ class ReaderActivity : BaseActivity() {
             ContentOverlay(state = state)
 
             app.mangalate.ui.MangalateReaderStatus(
+                page = state.currentChapter?.pages?.getOrNull(state.currentPage - 1),
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .statusBarsPadding()

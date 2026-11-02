@@ -48,6 +48,9 @@ services:
       MANGALATE_KEY_FILE: /run/secrets/mangalate_key
       MANGALATE_UPSTREAM: http://translator:8001
     secrets: [mangalate_key]
+    # Pages reported from the app (Reportar esta página), only on this computer.
+    volumes:
+      - ./relatorios:/data/relatorios
     ports: ["${MANGALATE_BIND:-127.0.0.1}:5003:5003"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:5003/healthz')"]

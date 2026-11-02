@@ -230,6 +230,8 @@ dependencies {
     implementation("com.google.mlkit:text-recognition-korean:16.0.1")
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
     implementation("com.google.mlkit:translate:17.0.3")
+    // Mangalate: leitor de QR code do Google Play (sem permissão de câmera) para parear com o servidor
+    implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
     implementation(projects.sourceLocal)
     implementation(projects.data)
     implementation(projects.domain)

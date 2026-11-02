@@ -29,6 +29,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,6 +44,7 @@ import app.mangalate.translate.MangalateWork
 import app.mangalate.translate.SourceLanguage
 import app.mangalate.translate.TargetLanguage
 import app.mangalate.translate.TranslateMode
+import kotlinx.coroutines.launch
 import mihon.icons.materialsymbols.MaterialSymbols
 import mihon.icons.materialsymbols.rounded.Translate
 
@@ -62,6 +64,8 @@ fun MangalateQuickSetupDialog(
     val settings by MangalateTranslator.settings.collectAsState()
     // O idioma vale para esta obra (sugerido pela extensão) e vira o padrão das próximas.
     var workLanguage by remember(mangaId) { mutableStateOf(MangalateWork.language(context, mangaId)) }
+    val scope = rememberCoroutineScope()
+    var pairing by remember { mutableStateOf<String?>(null) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -135,6 +139,19 @@ fun MangalateQuickSetupDialog(
                     }
                 }
                 if (settings.mode == TranslateMode.SERVER) {
+                    MangalatePairingButton(
+                        onPaired = {
+                            pairing = "Testando a conexão…"
+                            scope.launch {
+                                pairing = MangalateTranslator.testConnection(MangalateTranslator.settings.value).fold(
+                                    onSuccess = { "Conectado ao servidor." },
+                                    onFailure = { e -> "Lido, mas não conectou: ${e.message ?: e.javaClass.simpleName}" },
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    pairing?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                     OutlinedTextField(
                         value = settings.serverUrl,
                         onValueChange = { v -> MangalateTranslator.updateSettings(context) { it.copy(serverUrl = v.trim()) } },
@@ -150,7 +167,7 @@ fun MangalateQuickSetupDialog(
                         visualTransformation = PasswordVisualTransformation(),
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    Text("No PC: python setup.py na pasta server. A chave fica em server/secrets/mangalate_key.txt. A chave da IA fica só no servidor.")
+                    Text("No PC: py parear.py na pasta server mostra o QR code. Sem câmera, a chave fica em server/secrets/mangalate_key.txt. A chave da IA fica só no servidor.")
                     FilledTonalButton(onClick = { uriHandler.openUri("https://github.com/delkrusty/Mangalate/tree/main/server") }) {
                         Text("Manual Docker e BYOK")
                     }

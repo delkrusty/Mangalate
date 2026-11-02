@@ -1,12 +1,15 @@
 """Private Docker engine: direct calls, no pickle RPC or secondary worker port."""
 import asyncio
+import hashlib
 import io
 import json
 import os
 import traceback
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from collections import OrderedDict
+
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 
 from gateway import MAX_BODY, open_page
@@ -23,6 +26,35 @@ def graphics_card():
         print(f"Placa de vídeo não respondeu ({type(exc).__name__}).", flush=True)
     print("Placa de vídeo não encontrada pelo servidor; usando o processador.", flush=True)
     return False
+
+
+RECENT_PAGES = 64  # pages whose regions a report from the app can still find
+
+
+def _box(region, top=0):
+    try:
+        x1, y1, x2, y2 = (int(v) for v in region.xyxy)
+        return [x1, y1 - top, x2, y2 - top]
+    except Exception:
+        return None
+
+
+def report_rows(ctx, top=0):
+    """The page's regions for a report from the app: box, what was read and what was written.
+
+    The kept-as-drawn speech comes too, so a report shows what stayed in the original. [top] is
+    the borrowed slice above a webtoon page, so the boxes match the page the app sent."""
+    rows = []
+    for region in getattr(ctx, "text_regions", None) or []:
+        rows.append({"estado": "traduzida", "caixa": _box(region, top),
+                     "ocr": str(getattr(region, "text_raw", None) or getattr(region, "text", "")),
+                     "traducao": str(getattr(region, "translation", "") or ""),
+                     "fundo": getattr(region, "mangalate_background", None)})
+    for region in getattr(ctx, "mangalate_preserved", None) or []:
+        rows.append({"estado": "original", "caixa": _box(region, top),
+                     "ocr": str(getattr(region, "text_raw", None) or getattr(region, "text", "")),
+                     "fundo": getattr(region, "mangalate_background", None)})
+    return rows
 
 
 def create_core(engine=None, config_factory=None):
@@ -59,6 +91,30 @@ def create_core(engine=None, config_factory=None):
 
     from seams import SeamCache, Strip, finish
     seam_cache = SeamCache()
+    recent = OrderedDict()  # sha256 of the page as received -> report_rows
+
+    @app.get("/regions/{digest}")
+    async def regions(digest: str):
+        if digest not in recent:
+            raise HTTPException(404, "Page not seen recently")
+        return recent[digest]
+
+    @app.get("/glossary")
+    async def glossary(obra: str = ""):
+        from memory import default_memory
+        return {"obra": obra, "termos": default_memory().entries(obra)}
+
+    @app.put("/glossary")
+    async def edit_glossary(payload: dict = Body(...)):
+        from memory import default_memory
+        try:
+            terms = default_memory().edit(payload.get("obra", ""), payload.get("termos"), payload.get("removidos") or [])
+        except ValueError as exc:
+            raise HTTPException(422, str(exc))
+        except OSError as exc:
+            print(f"Glossário não salvo: {type(exc).__name__}", flush=True)
+            raise HTTPException(507, "O servidor não conseguiu salvar o glossário.")
+        return {"obra": payload.get("obra", ""), "termos": terms}
 
     @app.post("/translate/with-form/image")
     async def translate(image: UploadFile = File(...), config: str = Form("{}"),
@@ -109,6 +165,12 @@ def create_core(engine=None, config_factory=None):
                     print(f"Tempos: {summary(ctx.mangalate_timings)}", flush=True)
                 if strip.stitched:
                     print(f"Seams: above={strip.above is not None} below={strip.below is not None}", flush=True)
+                try:
+                    recent[hashlib.sha256(data).hexdigest()] = report_rows(ctx, strip.top)
+                    while len(recent) > RECENT_PAGES:
+                        recent.popitem(last=False)
+                except Exception as exc:  # only a report would miss them
+                    print(f"Report regions: {type(exc).__name__}", flush=True)
                 output = io.BytesIO()
                 result.save(output, "PNG")
                 # What the app may flag for review; the page itself is unchanged.

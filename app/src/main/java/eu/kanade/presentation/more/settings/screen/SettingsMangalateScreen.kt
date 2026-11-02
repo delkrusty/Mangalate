@@ -282,11 +282,31 @@ private fun ServerSection(
     var showKey by remember { mutableStateOf(false) }
     var test by remember { mutableStateOf<TestState>(TestState.Idle) }
 
+    fun runTest() {
+        test = TestState.Running
+        scope.launch {
+            val current = MangalateTranslator.settings.value
+            test = MangalateTranslator.testConnection(current).fold(
+                onSuccess = { TestState.Ok(it, MangalateTranslator.serverEdition(current).getOrNull()) },
+                onFailure = { TestState.Fail(it.message ?: it.javaClass.simpleName) },
+            )
+        }
+    }
+
     SectionCard(
         icon = MaterialSymbols.Rounded.Dns,
         title = "Servidor de tradução",
         subtitle = "OCR, limpeza dos balões e reconstrução rodam aqui",
     ) {
+        // Com o QR code do computador, endereço e chave entram sozinhos e a conexão é testada.
+        app.mangalate.ui.MangalatePairingButton(
+            onPaired = {
+                url = it.url
+                key = it.key
+                runTest()
+            },
+            modifier = Modifier.fillMaxWidth(),
+        )
         OutlinedTextField(
             value = url,
             onValueChange = {
@@ -318,8 +338,8 @@ private fun ServerSection(
             modifier = Modifier.fillMaxWidth(),
         )
         Text(
-            "No computador, rode python setup.py dentro da pasta server. Ele mostra o caminho " +
-                "server/secrets/mangalate_key.txt. Copie o conteúdo desse arquivo aqui. " +
+            "No computador, rode py parear.py dentro da pasta server e leia o QR code. Sem câmera, " +
+                "copie o conteúdo de server/secrets/mangalate_key.txt aqui. " +
                 "Não coloque a chave da API de IA no celular.",
             style = MaterialTheme.typography.bodySmall,
         )
@@ -335,16 +355,7 @@ private fun ServerSection(
         ) {
             Button(
                 enabled = url.isNotBlank() && key.isNotBlank() && test != TestState.Running,
-                onClick = {
-                    test = TestState.Running
-                    scope.launch {
-                        val current = MangalateTranslator.settings.value
-                        test = MangalateTranslator.testConnection(current).fold(
-                            onSuccess = { TestState.Ok(it, MangalateTranslator.serverEdition(current).getOrNull()) },
-                            onFailure = { TestState.Fail(it.message ?: it.javaClass.simpleName) },
-                        )
-                    }
-                },
+                onClick = { runTest() },
             ) {
                 if (test == TestState.Running) {
                     CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
