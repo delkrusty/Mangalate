@@ -1550,6 +1550,51 @@ def letter_height(image, lines):
 
 
 
+# Light letters on a dark ground (a shout in a blot of ink, a black caption): measured before the
+# cleaning takes them, for the lettering (Manhwa teste p3, p10, p20, p62, p69).
+DARK_GROUND = 90     # median grey (0-255) around the lines at most: a dark ground
+DARK_LIGHTER = 100   # the letters are this much lighter (grey) than the ground...
+DARK_LETTERS = 0.08  # ...on at least this share of the line boxes
+DARK_RING = 0.8      # this share of the ring around the lines is dark (no bubble paper half in it)
+
+
+def light_on_dark(image, lines):
+    """{"letters", "fg", "ground"} of light letters on a dark ground around ``lines``, or None.
+
+    ``letters`` is the height of their capitals (px; letter_height reads dark ink and measured the
+    gaps of the halftone, 7 px for 30), ``fg`` their colour and ``ground`` the colour around them.
+    """
+    quads = [np.asarray(q, np.float32).reshape(4, 2) for q in ([] if lines is None else lines)]
+    img = np.asarray(image)
+    if not quads or img.ndim != 3:
+        return None
+    img = np.ascontiguousarray(img[:, :, :3])
+    h, w = img.shape[:2]
+    line_height = float(np.median([np.ptp(q[:, 1]) for q in quads]))
+    if line_height < 4:
+        return None
+    inked = np.zeros((h, w), np.uint8)
+    for q in quads:
+        cv2.fillPoly(inked, [np.round(q).astype(np.int32)], 1)
+    pad = max(3, int(round(line_height / 2)))
+    ring = (cv2.dilate(inked, np.ones((2 * pad + 1, 2 * pad + 1), np.uint8)) > 0) & (inked == 0)
+    if ring.sum() < 4 * pad:
+        return None
+    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY).astype(int)
+    ground = float(np.median(gray[ring]))
+    if ground > DARK_GROUND or np.mean(gray[ring] < ground + DARK_LIGHTER / 2) < DARK_RING:
+        return None
+    light = (inked > 0) & (gray >= ground + DARK_LIGHTER)
+    if light.sum() < DARK_LETTERS * (inked > 0).sum():
+        return None
+    letters = letter_height(np.where(light, 0, 255).astype(np.uint8), quads)
+    if not letters:
+        return None
+    core = light & (gray >= np.median(gray[light]))  # the inside of the strokes, not their soft edge
+    return {"letters": letters, "fg": tuple(int(c) for c in np.median(img[core], axis=0)),
+            "ground": tuple(int(c) for c in np.median(img[ring], axis=0))}
+
+
 # A system window of a game webtoon (status, skill, quest): light letters on a vivid colour,
 # translucent (the drawing shows through it, its light changes across it), in a frame of light
 # straight lines.  Its margin fits no flat plane, so it read as art and stayed in English, or,

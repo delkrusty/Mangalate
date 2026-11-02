@@ -3364,6 +3364,33 @@ def system_window(behind="art", colour=(30, 110, 230), frame=True, letters=(250,
     return image, mask, quads, (x0, y0, x1, y1)
 
 
+def dark_blob(letters=(250, 250, 250), ground=(30, 32, 36), paper=(255, 255, 255)):
+    """A shout in a blot of ink: bold light letters in a dark blot of halftone with a ragged edge, on paper.
+
+    The halftone and the ragged edge leave no flat patch around the letters, so the room for the
+    translation was a sliver of it, or none (Manhwa teste p3, p10, p20, p62, p69: letters at half
+    the original size, or the engine's Arial).  Returns (image, cleaned image, line quads, blot mask).
+    """
+    image = page(paper, size=(700, 460))
+    blot = np.zeros(image.shape[:2], np.uint8)
+    cv2.ellipse(blot, (350, 230), (250, 150), 0, 0, 360, 1, -1)
+    rng = np.random.default_rng(7)
+    for angle in np.linspace(0, 2 * np.pi, 28, endpoint=False):  # the ragged edge
+        r = rng.uniform(0.85, 1.1)
+        cx, cy = 350 + 250 * r * np.cos(angle), 230 + 150 * r * np.sin(angle)
+        cv2.circle(blot, (int(cx), int(cy)), int(rng.uniform(14, 34)), 1, -1)
+    # The halftone: dots of uneven size and grey all over the ink.
+    grain = np.asarray(ground, int) + rng.integers(-25, 40, image.shape[:2])[..., None]
+    image[blot > 0] = np.clip(grain, 0, 255).astype(np.uint8)[blot > 0]
+    clean = image.copy()
+    quads = []
+    for text, x, y in (("BRACE YOURSELF,", 205, 210), ("WE'RE READY!", 235, 270)):
+        (w, h), base = cv2.getTextSize(text, cv2.FONT_HERSHEY_DUPLEX, 1.2, 5)
+        cv2.putText(image, text, (x, y), cv2.FONT_HERSHEY_DUPLEX, 1.2, letters, 5, cv2.LINE_AA)
+        quads.append(quad(x - 3, y - h - 4, x + w + 3, y + base))
+    return image, clean, quads, blot > 0
+
+
 class SystemWindowTest(unittest.TestCase):
     """The blue system windows of a game webtoon: art in classify_region, translated as "janela"."""
 
@@ -3462,3 +3489,34 @@ class SystemWindowTest(unittest.TestCase):
         self.assertTrue(cleaned[200, 300])  # the letters
         self.assertFalse(cleaned[:ry0, :].any() or cleaned[ry1 + 1:, :].any())  # the frame and the drawing
         self.assertFalse(cleaned[:, :rx0].any() or cleaned[:, rx1 + 1:].any())
+
+
+class LightOnDarkTest(unittest.TestCase):
+    """Light letters on a dark ground: their size and colour are measured before the cleaning."""
+
+    def test_letters_in_a_blot_of_ink_are_measured(self):
+        image, _, quads, _ = dark_blob()
+        found = quality.light_on_dark(image, quads)
+        self.assertIsNotNone(found)
+        # The capitals of the Hershey duplex font at 1.2, thickness 5: 24 px.
+        self.assertTrue(22 <= found["letters"] <= 27, found)
+        self.assertGreaterEqual(min(found["fg"]), 225)
+        self.assertLessEqual(max(found["ground"]), 90)
+
+    def test_dark_letters_and_light_grounds_are_not_measured(self):
+        image = page()
+        bubble(image, (200, 150), (150, 90), (255, 255, 255))
+        write(image, "NO WAY!", (140, 160), (0, 0, 0))
+        self.assertIsNone(quality.light_on_dark(image, [quad(138, 135, 262, 166)]))
+        image, _, quads, _ = system_window()  # light letters on a vivid colour, not dark
+        self.assertIsNone(quality.light_on_dark(image, quads))
+        image, _, quads, _ = dark_blob(letters=(60, 60, 60))  # letters barely lighter than the ink
+        self.assertIsNone(quality.light_on_dark(image, quads))
+
+    def test_small_white_bubble_in_a_dark_panel_is_not_measured(self):
+        # The ring around the lines falls half out of a tight bubble onto the dark panel; the paper
+        # between the letters is no light letter.
+        image = page((20, 22, 26), size=(500, 300))
+        cv2.ellipse(image, (250, 150), (120, 40), 0, 0, 360, (255, 255, 255), -1)
+        write(image, "NO WAY!", (190, 162), (0, 0, 0))
+        self.assertIsNone(quality.light_on_dark(image, [quad(186, 136, 314, 168)]))

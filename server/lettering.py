@@ -673,6 +673,30 @@ TONE_CLOSE = 9        # gap between strokes of a drawing closed to find them ins
 BLOCK_BELOW = 0.85    # a speech with a halo over the drawing may use the room of its old halo when its letters came out below this share of the original
 
 
+DARK_BLUR = 0.25     # the halftone of a blot of ink is smoothed over this share of the line height...
+DARK_REACH = 45      # ...and a smoothed pixel this close (per channel) to the colour of its ground is the blot...
+DARK_SPREAD = 1.0    # ...up to this many line heights around the original text box
+
+
+def dark_room(image, ground, line_height, box):
+    """The page with the blot of ink around ``box`` (``ground``, smoothed out of its halftone) black,
+    the rest white.
+
+    plan_shaped finds the blot around the text in it as a bubble: its ragged edge is the outline.
+    The ink runs on into dark parts of the drawing (Manhwa teste p20: the night sky of the panel
+    under the blot), so the room stops DARK_SPREAD line heights past the original text.
+    """
+    k = max(3, 2 * int(round(DARK_BLUR * line_height / 2)) + 1)
+    smooth = cv2.blur(np.ascontiguousarray(image[..., :3]), (k, k)).astype(int)
+    blot = np.abs(smooth - np.asarray(ground, int)).max(axis=2) <= DARK_REACH
+    h, w = blot.shape
+    spread = int(round(DARK_SPREAD * line_height))
+    x0, y0, x1, y1 = (int(v) for v in box)
+    near = np.zeros_like(blot)
+    near[max(0, y0 - spread):min(h, y1 + spread + 1), max(0, x0 - spread):min(w, x1 + spread + 1)] = True
+    return np.dstack([np.where(blot & near, 0, 255).astype(np.uint8)] * 3)
+
+
 def toned_page(image, box, hull):
     """The page with all but the ink made white, when that shows a clean bubble around ``box``; else None.
 

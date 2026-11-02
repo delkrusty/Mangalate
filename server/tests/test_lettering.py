@@ -906,3 +906,133 @@ class SystemWindowLayoutTest(unittest.TestCase):
         self.assertTrue((grey[changed] >= before[changed] - 3).all())  # nothing darker: no outline
         core = out[changed][grey[changed] >= np.percentile(grey[changed], 90)]
         self.assertLessEqual(np.abs(np.median(core, axis=0) - np.asarray(window["fg"])).max(), 12)
+
+
+class DarkBlotLayoutTest(unittest.TestCase):
+    """Light letters in a blot of ink (quality.light_on_dark) are lettered across the blot.
+
+    Manhwa teste p3, p10, p20, p62, p69: the halftone and the ragged edge left no flat patch
+    around the letters; the translation came out at half the original size, or in the engine's Arial.
+    """
+    TRANSLATION = "Preparem-se, estamos prontos!"
+
+    def letter(self, ground=(30, 32, 36)):
+        import quality
+        from test_quality import dark_blob
+        image, clean, quads, blot = dark_blob(ground=ground)
+        light = quality.light_on_dark(image, quads)
+        out, region = self.layout(clean, quads, light)
+        return clean, out, region, light, blot
+
+    def layout(self, clean, quads, light):
+        import types
+        from engine_compat import bubble_layout
+        calls = []
+        rendering = types.SimpleNamespace(
+            resize_regions_to_font_size=lambda img, regions, *a: [np.zeros((1, 4, 2), np.int64) for _ in regions],
+            render=lambda img, region, *a: calls.append("engine") or img, fg_bg_compare=lambda fg, bg: (fg, bg))
+        text_render = types.SimpleNamespace(
+            calc_horizontal=lambda size, text, w, h, lang, hyphenate: char_layout(text)(size, w, h),
+            put_text_horizontal=lambda *a: None)
+        bubble_layout(rendering, text_render)
+        lines = np.array(quads)
+        region = types.SimpleNamespace(
+            xyxy=(int(lines[..., 0].min()), int(lines[..., 1].min()), int(lines[..., 0].max()), int(lines[..., 1].max())),
+            lines=lines, font_size=30, direction="h", horizontal=True, target_lang="PTB",
+            text="BRACE YOURSELF, WE'RE READY!", mangalate_background={"kind": "interior"},
+            mangalate_light=light, get_translation_for_rendering=lambda: self.TRANSLATION,
+            get_font_colors=lambda: ((0, 0, 0), (255, 255, 255)))
+        old = os.environ.get("MANGALATE_FONT")
+        os.environ["MANGALATE_FONT"] = FONT
+        try:
+            rendering.resize_regions_to_font_size(clean, [region], None, 0, -1)
+            out = rendering.render(clean.copy(), region, None, False, None, False)
+        finally:
+            if old is None:
+                os.environ.pop("MANGALATE_FONT")
+            else:
+                os.environ["MANGALATE_FONT"] = old
+        self.assertEqual(calls, [])  # never the engine's drawing
+        return out, region
+
+    def test_blot_running_into_a_dark_panel_keeps_its_room_near_the_text(self):
+        # Manhwa teste p20: the ink of the blot runs on into the night sky of the panel under it.
+        # The fill reached the edge of the search and was cut to the text box; the room stops a
+        # line height past the text instead, and the letters keep the original size.
+        import quality
+        from test_quality import dark_blob
+        image, clean, quads, blot = dark_blob()
+        sky = np.zeros(blot.shape, bool)
+        sky[330:, :] = True  # a dark panel of the same ink, from under the blot to the page edge...
+        sky[:, :140] = True  # ...and beside it
+        for picture in (image, clean):
+            picture[sky] = (30, 32, 36)
+        light = quality.light_on_dark(image, quads)
+        out, region = self.layout(clean, quads, light)
+        capitals = region.mangalate_shaped["size"] * lettering.capital_share(FONT)
+        self.assertGreaterEqual(capitals, 0.95 * light["letters"], (capitals, light))
+        lines = np.array(quads)
+        lh = float(np.median([np.ptp(q[:, 1]) for q in lines]))
+        changed = np.argwhere((out != clean).any(axis=2))
+        self.assertLessEqual(changed[:, 0].max(), lines[..., 1].max() + lh)  # never down into the panel
+
+    def test_long_translation_in_a_flat_black_caption_stays_in_it(self):
+        # A translation much longer than the original: the room of the blot may be tried in a flat
+        # black caption, and it is the caption itself.
+        import quality
+        from test_quality import page, quad
+        image = page(size=(700, 460))
+        cv2.rectangle(image, (190, 170), (520, 300), (12, 12, 12), -1)
+        clean = image.copy()
+        quads = []
+        for text, x, y in (("BRACE YOURSELF,", 205, 220), ("WE'RE READY!", 235, 280)):
+            (w, h), base = cv2.getTextSize(text, cv2.FONT_HERSHEY_DUPLEX, 1.2, 5)
+            cv2.putText(image, text, (x, y), cv2.FONT_HERSHEY_DUPLEX, 1.2, (250, 250, 250), 5, cv2.LINE_AA)
+            quads.append(quad(x - 3, y - h - 4, x + w + 3, y + base))
+        light = quality.light_on_dark(image, quads)
+        self.TRANSLATION = "Preparem-se todos agora mesmo, porque desta vez estamos realmente prontos para a luta!"
+        from unittest import mock
+        with mock.patch.object(lettering, "dark_room", wraps=lettering.dark_room) as room:
+            out, region = self.layout(clean, quads, light)
+        self.assertEqual(room.call_count, 1)  # tried, the letters being small...
+        changed = np.argwhere((out != clean).any(axis=2))
+        self.assertGreater(len(changed), 500)
+        self.assertTrue(changed[:, 1].min() >= 190 and changed[:, 1].max() <= 520, (changed.min(0), changed.max(0)))
+        self.assertTrue(changed[:, 0].min() >= 170 and changed[:, 0].max() <= 300, (changed.min(0), changed.max(0)))
+        # ...and the room it gives is the caption: no bigger letters, nothing past the caption.
+
+    def test_flat_black_caption_keeps_its_lettering(self):
+        # A black caption box already fits its translation at the original size: unchanged.
+        import quality
+        from test_quality import page, quad
+        image = page(size=(700, 460))
+        cv2.rectangle(image, (120, 140), (580, 330), (12, 12, 12), -1)
+        clean = image.copy()
+        quads = []
+        for text, x, y in (("BRACE YOURSELF,", 205, 220), ("WE'RE READY!", 235, 280)):
+            (w, h), base = cv2.getTextSize(text, cv2.FONT_HERSHEY_DUPLEX, 1.2, 5)
+            cv2.putText(image, text, (x, y), cv2.FONT_HERSHEY_DUPLEX, 1.2, (250, 250, 250), 5, cv2.LINE_AA)
+            quads.append(quad(x - 3, y - h - 4, x + w + 3, y + base))
+        light = quality.light_on_dark(image, quads)
+        self.assertIsNotNone(light)
+        out, region = self.layout(clean, quads, light)
+        before, plain = self.layout(clean, quads, None)
+        self.assertEqual(region.mangalate_shaped["size"], plain.mangalate_shaped["size"])
+        self.assertTrue((out == before).all())
+
+    def test_translation_takes_the_blot_at_the_size_of_the_original(self):
+        clean, out, region, light, blot = self.letter()
+        plan = region.mangalate_shaped
+        self.assertIsNotNone(plan)
+        capitals = plan["size"] * lettering.capital_share(FONT)
+        self.assertTrue(0.85 * light["letters"] <= capitals <= 1.1 * light["letters"], (capitals, light))
+        changed = (out != clean).any(axis=2)
+        self.assertGreater(changed.sum(), 1500)
+        self.assertFalse((changed & ~blot).any())  # inside the blot, never on the paper
+
+    def test_translation_takes_the_colour_of_the_letters(self):
+        clean, out, region, light, blot = self.letter()
+        grey = cv2.cvtColor(out, cv2.COLOR_RGB2GRAY).astype(int)
+        changed = (out != clean).any(axis=2)
+        core = out[changed][grey[changed] >= np.percentile(grey[changed], 90)]
+        self.assertLessEqual(np.abs(np.median(core, axis=0) - np.asarray(light["fg"])).max(), 12)
