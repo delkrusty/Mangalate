@@ -9,13 +9,13 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
+import app.mangalate.ui.MangalateSettingsScreen
 import cafe.adriel.voyager.navigator.LocalNavigator
 import cafe.adriel.voyager.navigator.Navigator
 import cafe.adriel.voyager.navigator.currentOrThrow
 import eu.kanade.presentation.more.settings.screen.SettingsAppearanceScreen
 import eu.kanade.presentation.more.settings.screen.SettingsDataScreen
 import eu.kanade.presentation.more.settings.screen.SettingsMainScreen
-import eu.kanade.presentation.more.settings.screen.SettingsMangalateScreen
 import eu.kanade.presentation.more.settings.screen.SettingsTrackingScreen
 import eu.kanade.presentation.more.settings.screen.about.AboutScreen
 import eu.kanade.presentation.util.DefaultNavigatorScreenTransition
@@ -39,7 +39,7 @@ class SettingsScreen(
                     Destination.About.id -> AboutScreen
                     Destination.DataAndStorage.id -> SettingsDataScreen
                     Destination.Tracking.id -> SettingsTrackingScreen
-                    Destination.Mangalate.id -> SettingsMangalateScreen()
+                    Destination.Mangalate.id -> MangalateSettingsScreen()
                     else -> SettingsMainScreen
                 },
                 onBackPressed = null,
@@ -61,7 +61,7 @@ class SettingsScreen(
                     Destination.About.id -> AboutScreen
                     Destination.DataAndStorage.id -> SettingsDataScreen
                     Destination.Tracking.id -> SettingsTrackingScreen
-                    Destination.Mangalate.id -> SettingsMangalateScreen()
+                    Destination.Mangalate.id -> MangalateSettingsScreen()
                     else -> SettingsAppearanceScreen
                 },
                 onBackPressed = null,

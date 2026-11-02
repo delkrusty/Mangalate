@@ -1,4 +1,4 @@
-package eu.kanade.presentation.more.settings.screen
+package app.mangalate.ui
 
 import android.text.format.Formatter
 import androidx.compose.animation.AnimatedVisibility
@@ -87,7 +87,7 @@ private const val SERVER_GUIDE_URL = "https://github.com/delkrusty/Mangalate/blo
 /**
  * Tela de configurações do Mangalate (Configurações › Mangalate).
  */
-class SettingsMangalateScreen : Screen() {
+class MangalateSettingsScreen : Screen() {
 
     @Composable
     override fun Content() {
