@@ -262,7 +262,7 @@ fun MangalateAboutContent() {
                         Text(
                             "Mangalate é um projeto independente baseado no código aberto do Mihon (Apache 2.0). " +
                                 "Não é uma versão oficial do Mihon. Preservamos os créditos e as licenças da base e das bibliotecas.\n\n" +
-                                "OCR e tradução offline: Google ML Kit. Tradução online: Gemini. " +
+                                "OCR e tradução no celular: Google ML Kit. " +
                                 "Fonte: Comic Neue (SIL OFL). Divisão silábica: DivSilab, Raimundo Santos Moura (MPL). " +
                                 "Reconstrução por servidor compatível: manga-image-translator (serviço separado).",
                             style = MaterialTheme.typography.bodySmall,
@@ -352,7 +352,7 @@ private fun MangalateGuideContent(page: MangalateInfoPage) {
                 item {
                     TextPreferenceWidget(
                         title = "Abrir configurações de tradução",
-                        subtitle = "Modos, idiomas, Gemini e preparação offline",
+                        subtitle = "Modos, idiomas, servidor e preparação offline",
                         icon = MaterialSymbols.Rounded.Translate,
                         onPreferenceClick = { navigator.push(SettingsMangalateScreen()) },
                     )

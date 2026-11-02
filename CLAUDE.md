@@ -48,7 +48,7 @@ python -m unittest discover -s server/tests -p test_quality.py   # um arquivo
 App Android (JDK 21 e Android SDK):
 ```bash
 ./gradlew :app:assembleRelease -Pdist=local
-./gradlew :app:testDebugUnitTest --tests 'app.mangalate.local.*'
+./gradlew :app:testDebugUnitTest --tests 'app.mangalate.*'
 ./gradlew spotlessCheck
 ```
 

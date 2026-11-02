@@ -86,7 +86,8 @@ def create_core(engine=None, config_factory=None):
             except (ValueError, TypeError, AttributeError):
                 raise HTTPException(422, "Invalid page or configuration")
             try:
-                from engine_compat import art_mode, set_art_mode, set_page_context, set_page_rows, take_learned_terms
+                from engine_compat import (art_mode, review_counts, set_art_mode, set_page_context, set_page_rows,
+                                           take_learned_terms)
                 from memory import default_memory, parse_work, remember
                 set_page_rows(strip.top, strip.bottom)
                 set_art_mode(art)
@@ -110,7 +111,15 @@ def create_core(engine=None, config_factory=None):
                     print(f"Seams: above={strip.above is not None} below={strip.below is not None}", flush=True)
                 output = io.BytesIO()
                 result.save(output, "PNG")
-                return Response(output.getvalue(), media_type="image/png")
+                # What the app may flag for review; the page itself is unchanged.
+                try:
+                    counts = review_counts(ctx)
+                    headers = {"X-Mangalate-Preserved": str(counts["preserved"]),
+                               "X-Mangalate-Over-Art": str(counts["over_art"])}
+                except Exception as exc:  # the page is done; without counts the gateway asks for review
+                    print(f"Review counts: {type(exc).__name__}", flush=True)
+                    headers = {}
+                return Response(output.getvalue(), media_type="image/png", headers=headers)
             except Exception as exc:
                 if type(exc).__name__ == "AllProvidersResting":
                     print(f"Translation paused: {exc}", flush=True)

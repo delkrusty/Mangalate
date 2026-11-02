@@ -69,6 +69,21 @@ def art_choice(requested):
     return "traduzir" if requested.get("arte") == "traduzir" else "preservar"
 
 
+def review_headers(worker_headers):
+    """Speech left as drawn and speech translated over the art, from the worker's counts.
+
+    "required" when either is above zero or the worker did not count (an older worker).
+    """
+    counts = {}
+    for name in ("X-Mangalate-Preserved", "X-Mangalate-Over-Art"):
+        value = str(worker_headers.get(name, ""))
+        if not (value.isascii() and value.isdigit()) or len(value) > 4:
+            return {"X-Mangalate-Review": "required"}
+        counts[name] = value
+    flagged = any(int(value) for value in counts.values())
+    return {"X-Mangalate-Review": "required" if flagged else "none", **counts}
+
+
 def page_work(value):
     """Optional {"obra", "capitulo", "pagina"} from the app, for the work's glossary and context.
 
@@ -261,7 +276,7 @@ def create_app(key=None, upstream=None, profile=None, transport=None):
         png = io.BytesIO()
         translated.save(png, "PNG")
         return Response(png.getvalue(), media_type="image/png", headers={
-            "X-Mangalate-Review": "required",
+            **review_headers(result.headers),
             "X-Mangalate-Changed": str(metrics["changed_fraction"]),
             "Cache-Control": "no-store",
         })

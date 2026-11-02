@@ -1,0 +1,29 @@
+{
+  "about": "What the app sends to the gateway (MangalateSettings.toServerConfig) and what the gateway makes of it. Read by server/tests/test_contract.py and app/src/test/java/app/mangalate/translate/ServerContractTest.kt.",
+  "cases": [
+    {
+      "name": "defaults",
+      "settings": {},
+      "sent": {"translator": {"target_lang": "PTB"}, "render": {"font_size_offset": 0, "uppercase": false}},
+      "server": {"target_lang": "PTB", "font_size_offset": 0, "uppercase": false, "art": "preservar"}
+    },
+    {
+      "name": "everything the reader can choose",
+      "settings": {"targetLanguage": "ENG", "fontSizeOffset": -3, "uppercase": true, "preserveArtText": false},
+      "sent": {"translator": {"target_lang": "ENG"}, "render": {"font_size_offset": -3, "uppercase": true}, "arte": "traduzir"},
+      "server": {"target_lang": "ENG", "font_size_offset": -3, "uppercase": true, "art": "traduzir"}
+    },
+    {
+      "name": "letter size beyond the server limit",
+      "settings": {"fontSizeOffset": 9},
+      "sent": {"translator": {"target_lang": "PTB"}, "render": {"font_size_offset": 3, "uppercase": false}},
+      "server": {"target_lang": "PTB", "font_size_offset": 3, "uppercase": false, "art": "preservar"}
+    },
+    {
+      "name": "art preserved by choice",
+      "settings": {"targetLanguage": "KOR", "preserveArtText": true},
+      "sent": {"translator": {"target_lang": "KOR"}, "render": {"font_size_offset": 0, "uppercase": false}},
+      "server": {"target_lang": "KOR", "font_size_offset": 0, "uppercase": false, "art": "preservar"}
+    }
+  ]
+}

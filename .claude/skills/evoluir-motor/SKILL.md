@@ -60,7 +60,7 @@ Some a isso a inspeção visual das páginas tocadas pelo problema, com os crit�
 ## 5. Validar sem regressão
 
 1. Rode o teste novo e a suíte inteira: `python -m unittest discover -s server/tests -v`, tudo verde.
-2. Se mexeu no app: `./gradlew :app:testDebugUnitTest --tests 'app.mangalate.local.*'`.
+2. Se mexeu no app: `./gradlew :app:testDebugUnitTest --tests 'app.mangalate.*'`.
 3. Rode no PC, no commit novo: `py rebuild.py`, depois o trecho motivador e o conjunto de controle com as mesmas opções do baseline (`--profile byok --speed fast --diagnostics` e o mesmo `--work`). Use uma pasta nova em `teste-curto/<rodada>/`.
 4. Monte a tabela antes e depois, trecho a trecho, com as métricas do passo 2, e compare as imagens das páginas tocadas.
 5. Chame o subagente `revisor-motor` com o diff, a ficha do problema e a tabela.

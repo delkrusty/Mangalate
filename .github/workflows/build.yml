@@ -65,7 +65,7 @@ jobs:
         run: ./gradlew :app:assembleRelease -Pdist=local --stacktrace
 
       - name: Test bubble geometry and Portuguese lettering
-        run: ./gradlew :app:testDebugUnitTest --tests 'app.mangalate.local.*' --stacktrace
+        run: ./gradlew :app:testDebugUnitTest --tests 'app.mangalate.*' --stacktrace
 
       - name: Rename APKs
         run: |

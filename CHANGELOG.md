@@ -4,7 +4,17 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 
 ## Em teste
 
-Nada por enquanto.
+### App
+- Saíram das configurações as opções que o servidor ignorava: a escolha de diagramação no modo Servidor e, já escondidas, motor de tradução, qualidade da limpeza e margem da máscara. O tamanho da letra agora vai de -3 a +3, o limite que o servidor sempre aplicou (antes ia de -10 a +10, e no celular só os valores negativos mudavam algo). O app manda ao servidor só o que ele lê: idioma de destino, tamanho e caixa da letra e a escolha sobre a fala no desenho.
+- O cache das páginas continua valendo: a assinatura do modo Servidor é montada como a da 0.6.0, com as opções retiradas nos valores padrão. Quem nunca mexeu nelas não perde nenhuma página. Quem tinha mudado alguma, ou usava letra além de ±3, vê essas páginas traduzidas de novo uma vez.
+- Ao testar a conexão, o app mostra que tradução o servidor usa (a IA escolhida no instalador ou o tradutor offline), lida do `/v1/info`.
+- Os modos Gemini e DeepL, escondidos desde a 0.5, saíram de vez, com o código e o teste. As chaves deles que ainda estivessem guardadas no celular são apagadas.
+
+### Servidor
+- O cabeçalho `X-Mangalate-Review` deixou de ser sempre "required": o motor conta as falas que ficaram no original (`X-Mangalate-Preserved`, sem contar sons, créditos, logotipos, marcas sem letra e falas que a IA devolveu iguais) e as traduzidas sobre o desenho (`X-Mangalate-Over-Art`), e o gateway marca "required" só quando alguma passa de zero, ou quando o motor não mandou a contagem. Se a contagem falhar, a página traduzida sai do mesmo jeito, sem os números. A página não muda.
+
+### Testes
+- Teste de contrato entre app e servidor: `server/tests/app_config_contract.json` é lido por `test_contract.py` e por `ServerContractTest.kt`, que também confere que a assinatura do cache não mudou. O CI roda todos os testes `app.mangalate.*` do app, não só os de `local`.
 
 ## 0.6.0
 

@@ -102,7 +102,7 @@ fun MoreScreen(
             item {
                 TextPreferenceWidget(
                     title = "Tradução (Mangalate)",
-                    subtitle = "Idiomas, modo grátis ou Gemini",
+                    subtitle = "Idiomas, no celular ou servidor",
                     icon = MaterialSymbols.Rounded.Translate,
                     onPreferenceClick = onClickMangalate,
                 )
