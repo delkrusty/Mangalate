@@ -2517,13 +2517,13 @@ class BubbleScanTest(unittest.TestCase):
 
     def test_comma_at_the_end_of_a_short_row_is_part_of_it(self):
         # Webtoon p36: "NO," read without its comma came back as one CJK glyph and was dropped.
-        from PIL import ImageFont
-        font = ImageFont.truetype(str(Path(__file__).resolve().parents[1] / "fonts" / "ComicNeue-Bold.ttf"), 26)
-        x = 350 - font.getlength("NO,") / 2
-        comma = font.getbbox("NO,")
-        rows = quality.bubble_text_lines(self.page(text="NO,"), [])[0][1]
-        self.assertGreaterEqual(rows[0][2], x + comma[2] - 1, rows)
-        self.assertGreaterEqual(rows[0][3], 312 + comma[3] - 1, rows)
+        page = self.page(text="NO,")
+        # The letters' own ink, measured on the page: Pillow's subpixel placement varies by platform.
+        ink = np.argwhere(page[300:350, 300:400].min(axis=-1) < 128) if page.ndim == 3 else np.argwhere(page[300:350, 300:400] < 128)
+        right, bottom = 300 + int(ink[:, 1].max()) + 1, 300 + int(ink[:, 0].max()) + 1
+        rows = quality.bubble_text_lines(page, [])[0][1]
+        self.assertGreaterEqual(rows[0][2], right - 1, rows)
+        self.assertGreaterEqual(rows[0][3], bottom - 1, rows)
 
     def test_one_word_and_a_comma_reads_as_speech(self):
         for text in ("NO,", "YES,"):
