@@ -58,6 +58,11 @@ object MangalateReaderPages {
     /** Páginas que ficaram sem tradução, com o motivo (para o indicador do leitor). */
     val failures: StateFlow<Map<String, Problem>> = _failures.asStateFlow()
 
+    private val _reviews = MutableStateFlow<Map<String, PageReview>>(emptyMap())
+
+    /** Páginas traduzidas que o servidor pediu para conferir (para o selo do leitor). */
+    val reviews: StateFlow<Map<String, PageReview>> = _reviews.asStateFlow()
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     @Volatile
@@ -113,6 +118,9 @@ object MangalateReaderPages {
                 neighbors = { MangalateNeighbors.of(page) },
                 force = force,
                 sourceLanguage = MangalateWork.language(context, MangalateWork.mangaIdOf(page)),
+                onReview = { review ->
+                    _reviews.update { if (review?.needsLook == true) it + (key to review) else it - key }
+                },
             )
             done = true
             _failures.update { it - key }
@@ -187,6 +195,7 @@ object MangalateReaderPages {
     fun startReading() {
         _failures.value = emptyMap()
         _original.value = emptySet()
+        _reviews.value = emptyMap()
         limitRetries.clear()
     }
 

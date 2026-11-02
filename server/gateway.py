@@ -1,9 +1,12 @@
 """Small authenticated API. Only this service is exposed, never the model worker."""
 import asyncio
+import hashlib
 import hmac
 import io
 import json
 import os
+import re
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -31,6 +34,8 @@ def load_key():
 
 
 SPEEDS = {"quality", "fast"}
+MAX_GLOSSARY_BODY = 64 * 1024
+MAX_NOTE = 500
 
 
 def apply_speed(config, speed):
@@ -143,13 +148,61 @@ def pages_at_once():
         return 2
 
 
-def create_app(key=None, upstream=None, profile=None, transport=None):
+def glossary_request(raw):
+    """The app's glossary changes: {"obra", "termos": [{"source", "target", "gender"?}], "removidos": [source]}, bounded."""
+    if len(raw) > MAX_GLOSSARY_BODY:
+        raise ValueError("Glossário grande demais.")
+    data = json.loads(raw or b"{}")
+    if not isinstance(data, dict) or not isinstance(data.get("obra"), str) or not data["obra"].strip():
+        raise ValueError("Informe a obra.")
+    terms = data.get("termos")
+    if not isinstance(terms, list) or len(terms) > 200:
+        raise ValueError("Envie até 200 termos.")
+    clean = []
+    for item in terms:
+        if not isinstance(item, dict) or not isinstance(item.get("source"), str) or not isinstance(item.get("target"), str):
+            raise ValueError("Termo inválido.")
+        entry = {"source": item["source"][:60], "target": item["target"][:60]}
+        if item.get("gender") in ("m", "f"):
+            entry["gender"] = item["gender"]
+        clean.append(entry)
+    removed = data.get("removidos", [])
+    if not isinstance(removed, list) or len(removed) > 200 or not all(isinstance(r, str) for r in removed):
+        raise ValueError("Envie até 200 termos removidos.")
+    return {"obra": data["obra"].strip()[:200], "termos": clean, "removidos": [r[:60] for r in removed]}
+
+
+def image_extension(data):
+    """File extension for an image already checked by open_page."""
+    with Image.open(io.BytesIO(data)) as page:
+        return {"JPEG": "jpg"}.get(page.format, (page.format or "png").lower())
+
+
+def report_folder(root, work):
+    """A new folder for one report: date and time, then the work's name in plain letters."""
+    data = json.loads(work) if work else {}
+    slug = re.sub(r"[^0-9a-z]+", "-", str(data.get("obra", "")).lower())[:40].strip("-") or "pagina"
+    page = data.get("pagina")
+    name = time.strftime("%Y%m%d-%H%M%S") + f"-{slug}" + (f"-p{page}" if isinstance(page, int) else "")
+    Path(root).mkdir(parents=True, exist_ok=True)
+    for n in range(1, 100):
+        folder = Path(root) / (name if n == 1 else f"{name}-{n}")
+        try:
+            folder.mkdir()  # atomic: two reports in the same second get different folders
+            return folder
+        except FileExistsError:
+            continue
+    raise OSError("Pastas demais no mesmo segundo.")
+
+
+def create_app(key=None, upstream=None, profile=None, transport=None, reports=None):
     key = key if key is not None else load_key()
     profile = profile or os.environ.get("MANGALATE_PROFILE", "basic")
     profile_config(profile, {})
     upstream = upstream or os.environ.get("MANGALATE_UPSTREAM", "http://translator:8001")
     lock = asyncio.Semaphore(pages_at_once())
     busy = [0]
+    reports = Path(reports or os.environ.get("MANGALATE_REPORTS_DIR", "/data/relatorios"))
 
     @asynccontextmanager
     async def lifespan(app):
@@ -280,6 +333,93 @@ def create_app(key=None, upstream=None, profile=None, transport=None):
             "X-Mangalate-Changed": str(metrics["changed_fraction"]),
             "Cache-Control": "no-store",
         })
+
+    @app.get("/v1/glossary")
+    async def get_glossary(request: Request, obra: str = ""):
+        """The work's names and terms, as the server learned them or the reader fixed them."""
+        authorize(request)
+        await worker_ready()
+        if not obra.strip():
+            raise HTTPException(422, "Informe a obra.")
+        try:
+            result = await app.state.client.get("/glossary", params={"obra": obra.strip()[:200]}, timeout=20)
+            result.raise_for_status()
+            return result.json()
+        except (httpx.HTTPError, ValueError):
+            raise HTTPException(503, "Motor indisponível. Confira os logs locais do servidor.")
+
+    @app.put("/v1/glossary")
+    async def put_glossary(request: Request):
+        authorize(request)
+        await worker_ready()
+        try:
+            raw = bytearray()
+            async for chunk in request.stream():
+                raw.extend(chunk)
+                if len(raw) > MAX_GLOSSARY_BODY:
+                    raise ValueError("Glossário grande demais.")
+            payload = glossary_request(bytes(raw))
+        except (ValueError, TypeError):
+            raise HTTPException(422, "Glossário inválido.")
+        try:
+            result = await app.state.client.put("/glossary", json=payload, timeout=20)
+        except httpx.HTTPError:
+            raise HTTPException(503, "Motor indisponível. Confira os logs locais do servidor.")
+        if result.status_code == 422:
+            raise HTTPException(422, "Glossário inválido.")
+        if result.status_code == 507:
+            raise HTTPException(507, "O servidor não conseguiu salvar o glossário.")
+        if result.status_code != 200:
+            raise HTTPException(502, "O motor não salvou o glossário. Confira os logs locais.")
+        return result.json()
+
+    @app.post("/v1/report")
+    async def report(request: Request):
+        """A page the reader found wrong: original, translation and regions, saved on this computer."""
+        authorize(request)
+        raw = bytearray()
+        async for chunk in request.stream():
+            raw.extend(chunk)
+            if len(raw) > 2 * MAX_BODY:
+                raise HTTPException(413, "Relatório grande demais.")
+        request._body = bytes(raw)
+        try:
+            async with request.form(max_files=2, max_fields=2, max_part_size=MAX_BODY) as form:
+                files = {}
+                for name in ("original", "traduzida"):
+                    upload = form.get(name)
+                    if not isinstance(upload, UploadFile):
+                        if name == "traduzida":
+                            continue  # the page failed or its translation left the cache
+                        raise ValueError(f"Envie o campo {name}.")
+                    files[name] = await upload.read()
+                    await asyncio.to_thread(open_page, files[name])
+                work = page_work(form.get("work"))
+                note = str(form.get("nota") or "")[:MAX_NOTE]
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise HTTPException(422, str(exc))
+        regions = None
+        try:
+            digest = hashlib.sha256(files["original"]).hexdigest()
+            result = await app.state.client.get(f"/regions/{digest}", timeout=20)
+            if result.status_code == 200:
+                regions = result.json()
+        except (httpx.HTTPError, ValueError):
+            pass  # the report still has both pages
+        try:
+            folder = await asyncio.to_thread(report_folder, reports, work)
+            for name, data in files.items():
+                (folder / f"{name}.{image_extension(data)}").write_bytes(data)
+            info = {"obra": json.loads(work) if work else None, "nota": note,
+                    "traduzida": "traduzida" in files, "regioes_encontradas": regions is not None}
+            (folder / "info.json").write_text(json.dumps(info, ensure_ascii=False, indent=1), encoding="utf-8")
+            if regions is not None:
+                (folder / "regioes.json").write_text(json.dumps(regions, ensure_ascii=False, indent=1), encoding="utf-8")
+        except OSError as exc:
+            print(f"Relatório não salvo: {type(exc).__name__}", flush=True)
+            raise HTTPException(507, "O servidor não conseguiu salvar o relatório.")
+        print(f"Relatório salvo: {folder.name}", flush=True)
+        return {"pasta": folder.name, "regioes": regions is not None}
 
     return app
 

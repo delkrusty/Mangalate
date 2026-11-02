@@ -39,12 +39,26 @@ A primeira vez baixa os modelos e demora. Abra `server/review/teste-traduzido.pn
 
 ## Ligar o app
 
+Com QR code (uma vez, `py -m pip install qrcode`):
+
+1. No PC, dentro de `server/`: `py parear.py`. Ele mostra um QR code com o endereço do PC e a Chave Mangalate. O `setup.py` já mostra o mesmo código no fim.
+2. No app: Mais › Tradução (Mangalate) › **Servidor** › **Ler QR code do PC**. O app preenche endereço e chave e testa a conexão sozinho.
+
+O QR code contém a chave: não tire print dele. Sem câmera, ou sem o Google Play no celular:
+
 1. Rode `ipconfig` no PC e anote o IPv4 da rede Wi-Fi, por exemplo `192.168.0.15`.
 2. No app: Mais › Tradução (Mangalate) › **Servidor**.
 3. Endereço `http://192.168.0.15:5003` (troque pelo seu IP) e a Chave Mangalate.
 4. Toque em **Testar conexão**.
 
 `localhost` no celular é o próprio celular. Se o Windows perguntar sobre o firewall, permita só em redes privadas. Não abra a porta 5003 no roteador.
+
+## Corrigir nomes e reportar páginas
+
+No leitor, segure o dedo na página:
+
+- **Nomes da obra** mostra os nomes e termos que o servidor aprendeu para aquela obra. Corrija a tradução de um nome e ela vale para as próximas páginas (nas já traduzidas, use Refazer). Um termo apagado não é aprendido de novo. A lista fica no volume `memoria` do Docker, junto com o resto da memória da obra.
+- **Reportar página** salva o original, a tradução, as regiões lidas e a sua nota em `server/relatorios/<data>-<obra>-p<página>/`, no PC. Nada vai para a internet e a pasta não entra no git. As regiões só vêm se a página foi traduzida pelo servidor há pouco (uma das 64 últimas).
 
 ## Atualizar
 

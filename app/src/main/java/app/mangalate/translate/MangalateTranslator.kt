@@ -89,7 +89,7 @@ object MangalateTranslator {
     @Volatile
     private var lastErrorToastAt = 0L
 
-    private val client: OkHttpClient by lazy {
+    internal val client: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .connectTimeout(20, TimeUnit.SECONDS)
             .writeTimeout(90, TimeUnit.SECONDS)
@@ -183,6 +183,23 @@ object MangalateTranslator {
      * a página de um capítulo baixado continua guardada para ler offline.
      * [sourceLanguage] é o idioma da obra; sem ele, vale o padrão das configurações.
      */
+    /**
+     * A tradução já guardada desta página, sem pedir nada ao servidor; null quando não há (a página
+     * falhou ou saiu do cache). Usado por "Reportar página", que não pode gastar a cota das IAs.
+     */
+    suspend fun cached(
+        context: Context,
+        image: ByteArray,
+        sourceLanguage: SourceLanguage? = null,
+    ): ByteArray? = withContext(Dispatchers.IO) {
+        init(context)
+        val s = _settings.value.let { if (sourceLanguage != null) it.copy(sourceLanguage = sourceLanguage) else it }
+        val key = sha256(image) + "_" + sha256(s.cacheSignature().toByteArray()).take(16)
+        listOf(File(offlineDir(context), "$key.img"), File(cacheDir(context), "$key.img"))
+            .firstOrNull { it.exists() && it.length() > 0 }
+            ?.readBytes()
+    }
+
     suspend fun translate(
         context: Context,
         image: ByteArray,
@@ -191,6 +208,7 @@ object MangalateTranslator {
         neighbors: (suspend () -> Pair<ByteArray?, ByteArray?>)? = null,
         force: Boolean = false,
         sourceLanguage: SourceLanguage? = null,
+        onReview: ((PageReview?) -> Unit)? = null,
     ): ByteArray {
         init(context)
         val s = _settings.value.let { if (sourceLanguage != null) it.copy(sourceLanguage = sourceLanguage) else it }
@@ -206,12 +224,22 @@ object MangalateTranslator {
         // tradução em andamento (inclusive a de refazer) vale mais que a guardada.
         val useSaved = !force && !inFlight.containsKey(key)
         if (useSaved && offlineFile.exists() && offlineFile.length() > 0) {
-            return withContext(Dispatchers.IO) { offlineFile.readBytes() }
+            return withContext(Dispatchers.IO) {
+                onReview?.invoke(readReview(offlineFile))
+                offlineFile.readBytes()
+            }
         }
         if (useSaved && tempFile.exists() && tempFile.length() > 0) {
             tempFile.setLastModified(System.currentTimeMillis())
             val bytes = withContext(Dispatchers.IO) { tempFile.readBytes() }
-            if (keepOffline) withContext(Dispatchers.IO) { runCatching { offlineFile.writeBytes(bytes) } }
+            val review = withContext(Dispatchers.IO) { readReview(tempFile) }
+            if (keepOffline) {
+                withContext(Dispatchers.IO) {
+                    runCatching { offlineFile.writeBytes(bytes) }
+                    writeReview(offlineFile, review)
+                }
+            }
+            onReview?.invoke(review)
             return bytes
         }
 
@@ -223,14 +251,15 @@ object MangalateTranslator {
                     semaphores.getValue(s.mode).withPermit {
                         _activeJobs.update { it + 1 }
                         try {
-                            val result = when (s.mode) {
+                            val (result, review) = when (s.mode) {
                                 TranslateMode.SERVER -> {
                                     // Vizinhas só no modo servidor: ele emenda balões cortados entre fatias.
                                     val (above, below) = neighbors?.invoke() ?: (null to null)
                                     request(s, s.toServerConfig(), image, above, below, work)
                                 }
-                                else -> LocalPipeline.process(context.applicationContext, image, s) { _status.value = it }
+                                else -> LocalPipeline.process(context.applicationContext, image, s) { _status.value = it } to null
                             }
+                            writeReview(cacheFile, review)
                             writeCache(context, cacheFile, result)
                             result
                         } finally {
@@ -244,8 +273,17 @@ object MangalateTranslator {
         }
         val result = deferred.await()
         if (keepOffline && !offlineFile.exists()) {
-            withContext(Dispatchers.IO) { runCatching { offlineFile.writeBytes(result) } }
+            withContext(Dispatchers.IO) {
+                runCatching { offlineFile.writeBytes(result) }
+                writeReview(offlineFile, readReview(cacheFile))
+            }
         }
+        onReview?.invoke(
+            withContext(Dispatchers.IO) {
+                // Outra chamada pode ter guardado a mesma página na outra pasta.
+                readReview(cacheFile) ?: readReview(if (cacheFile == tempFile) offlineFile else tempFile)
+            },
+        )
         return result
     }
 
@@ -256,7 +294,7 @@ object MangalateTranslator {
         above: ByteArray? = null,
         below: ByteArray? = null,
         work: PageWork? = null,
-    ): ByteArray {
+    ): Pair<ByteArray, PageReview?> {
         val mime = sniffMime(image)
         val ext = mime.substringAfter('/')
         val body = MultipartBody.Builder()
@@ -287,7 +325,10 @@ object MangalateTranslator {
                     Thread.sleep(wait * 1000)
                     return@use
                 }
-                return readResponse(response)
+                return readResponse(response) to PageReview.of(
+                    response.header("X-Mangalate-Preserved"),
+                    response.header("X-Mangalate-Over-Art"),
+                )
             }
         }
     }
@@ -322,7 +363,7 @@ object MangalateTranslator {
         runCatching { org.json.JSONObject(String(bytes)).optString("detail") }.getOrNull()
             ?.takeIf { it.isNotBlank() && it.length < 300 }
 
-    private fun authHeaders(s: MangalateSettings): Map<String, String> =
+    internal fun authHeaders(s: MangalateSettings): Map<String, String> =
         if (s.accessKey.isBlank()) {
             emptyMap()
         } else {
@@ -403,6 +444,26 @@ object MangalateTranslator {
         offlineDir(context).listFiles()?.forEach { it.delete() }
     }
 
+    /** Aviso de revisão guardado ao lado da página traduzida ("falas no original,falas sobre o desenho"). */
+    private fun reviewFile(page: File) = File(page.parentFile, page.nameWithoutExtension + ".review")
+
+    private fun readReview(page: File): PageReview? = runCatching {
+        reviewFile(page).takeIf { it.exists() }?.readText()?.split(',')
+            ?.let { PageReview.of(it.getOrNull(0), it.getOrNull(1)) }
+    }.getOrNull()
+
+    private fun writeReview(page: File, review: PageReview?) {
+        runCatching {
+            val file = reviewFile(page)
+            if (review == null) {
+                file.delete()
+            } else {
+                file.parentFile?.mkdirs()
+                file.writeText("${review.preserved},${review.overArt}")
+            }
+        }
+    }
+
     private fun writeCache(context: Context, file: File, bytes: ByteArray) {
         file.parentFile?.mkdirs()
         runCatching {
@@ -414,13 +475,15 @@ object MangalateTranslator {
     }
 
     private fun trimCache(context: Context) {
-        val files = cacheDir(context).listFiles()?.filter { it.isFile } ?: return
+        // O .review vai junto com a sua página, nunca antes dela.
+        val files = cacheDir(context).listFiles()?.filter { it.isFile && it.extension != "review" } ?: return
         var total = files.sumOf { it.length() }
         if (total <= MAX_CACHE_BYTES) return
         for (f in files.sortedBy { it.lastModified() }) {
             if (total <= MAX_CACHE_BYTES * 8 / 10) break
             total -= f.length()
             f.delete()
+            reviewFile(f).delete()
         }
     }
 
@@ -460,6 +523,23 @@ object MangalateTranslator {
 
     private fun sha256(data: ByteArray): String =
         MessageDigest.getInstance("SHA-256").digest(data).joinToString("") { "%02x".format(it) }
+}
+
+/**
+ * O que o servidor achou que vale conferir na página: falas que ficaram no original
+ * ([preserved]) e falas traduzidas sobre o desenho ([overArt]).
+ */
+data class PageReview(val preserved: Int, val overArt: Int) {
+    val needsLook: Boolean get() = preserved > 0 || overArt > 0
+
+    companion object {
+        /** Lido dos cabeçalhos do servidor; null quando ele não contou (servidor antigo). */
+        fun of(preserved: String?, overArt: String?): PageReview? {
+            val p = preserved?.trim()?.toIntOrNull()?.takeIf { it in 0..9999 } ?: return null
+            val o = overArt?.trim()?.toIntOrNull()?.takeIf { it in 0..9999 } ?: return null
+            return PageReview(p, o)
+        }
+    }
 }
 
 /** Todas as IAs do servidor estão no limite gratuito; a página volta a ser tentada sozinha. */
