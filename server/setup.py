@@ -69,23 +69,26 @@ def configure(profile, hardware, bind, api_base="", model="", provider_key="", r
     return key_path, hardware
 
 
+WINDOWS = os.name == "nt"
+
 KEY_PREFIXES = {"groq": ("gsk_",), "groq-2": ("gsk_",), "gemini": ("AIza", "AQ."),
                 "openrouter": ("sk-or-",)}
 
 
 def read_clipboard():
     """Windows clipboard via PowerShell; '' when unavailable."""
-    if os.name != "nt":
+    if not WINDOWS:
         return ""
     try:
-        out = subprocess.run(["powershell", "-NoProfile", "-Command", "Get-Clipboard"],
-                             capture_output=True, text=True, timeout=10)
-        return out.stdout.strip()
+        out = subprocess.run(["powershell", "-NoProfile", "-Command",
+                              "[Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-Clipboard"],
+                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
+        return (out.stdout or "").strip()
     except (OSError, subprocess.SubprocessError):
         return ""
 
 
-def ask_key(name, secret, ask=input, clipboard=read_clipboard):
+def ask_key(name, secret, ask=input, clipboard=None):
     """Get an API key without the Windows hidden-prompt paste trap.
 
     On Windows: copy the key on the website and press Enter; it is read from
@@ -96,9 +99,9 @@ def ask_key(name, secret, ask=input, clipboard=read_clipboard):
     prefixes = KEY_PREFIXES.get(name, ())
     for _ in range(3):
         key = ""
-        if os.name == "nt" or clipboard is not read_clipboard:
+        if WINDOWS or clipboard is not None:
             ask(f"  Copie a chave de {name} no site e aperte Enter aqui (não precisa colar): ")
-            key = clipboard().strip()
+            key = (clipboard or read_clipboard)().strip()
         if not key:
             key = secret(f"  Cole a chave de {name} e aperte Enter (ela não aparece): ").strip()
         if not key or not all(ch.isprintable() and not ch.isspace() for ch in key):
@@ -203,11 +206,10 @@ def configure_one(index, names, providers, ask, secret):
             print("  3) Digite abaixo o mesmo nome que você baixou.")
         if name == "openrouter":
             print("  Copie o nome de um modelo terminado em :free na lista do site.")
-        default = preset["model"]
-        hint = f" (Enter = {default})" if default else ""
-        model = ""
-        for _ in range(3):
-            model = clean_model(ask(f"  Modelo{hint}: ").strip() or default)
+        # A preset with its model set has nothing to choose: the next step is the key.
+        model = preset["model"]
+        for _ in range(0 if model else 3):
+            model = clean_model(ask("  Modelo: ").strip())
             if model:
                 break
             print("  Digite só o nome exato do modelo, sem espaços (ex.: gpt-oss:20b).")
