@@ -275,5 +275,140 @@ class PromptTest(unittest.TestCase):
         self.assertEqual(calls[0][0]["content"], "System PTB.")
 
 
+class TermConsistencyTest(unittest.TestCase):
+    """A term keeps the translation the chapter first used (Manwha teste p24 -> p64)."""
+
+    def test_a_term_the_page_did_not_use_is_not_learned(self):
+        # The AI translated the title and listed it untranslated: "IRON FIST MASTER=IRON FIST MASTER"
+        # next to "Mestre do Punho de Ferro!".  The glossary then held the English as the translation.
+        memory = WorkMemory()
+        page = [region("IRON FIST MASTER!", "Mestre do Punho de Ferro!")]
+        for number in (1, 2):
+            remember(memory, {"obra": "Obra", "capitulo": "Cap 1", "pagina": number}, page,
+                     [("IRON FIST MASTER", "IRON FIST MASTER")])
+        self.assertEqual(memory.glossary("Obra"), [])
+        # The translation it did write is learned.
+        for number in (3, 4):
+            remember(memory, {"obra": "Obra", "capitulo": "Cap 1", "pagina": number}, page,
+                     [("IRON FIST MASTER", "Mestre do Punho de Ferro (m)")])
+        self.assertEqual(memory.glossary("Obra"), [{"source": "IRON FIST MASTER", "target": "Mestre do Punho de Ferro",
+                                                    "gender": "m"}])
+
+    def test_a_term_used_once_is_offered_to_the_later_pages_of_the_chapter(self):
+        memory = WorkMemory()
+        remember(memory, {"obra": "Obra", "capitulo": "Cap 1", "pagina": 24},
+                 [region("IRON FIST MASTER!", "Mestre do Punho de Ferro!")], [("IRON FIST MASTER", "Mestre do Punho de Ferro")])
+        self.assertEqual(memory.glossary("Obra"), [])  # still not a glossary term of the work
+        later = memory.context("Obra", "Cap 1", 64)["glossary"]
+        self.assertEqual(later, [{"source": "IRON FIST MASTER", "target": "Mestre do Punho de Ferro"}])
+        # Not before the page that used it, nor in another chapter.
+        self.assertEqual(memory.context("Obra", "Cap 1", 10)["glossary"], [])
+        self.assertEqual(memory.context("Obra", "Cap 2", 64)["glossary"], [])
+
+    def test_a_word_only_kept_capitalized_waits_for_a_second_page(self):
+        # Manga control p3: "THAT MUST BE THE BAR" -> "Deve ser o Bar".  A word the translation
+        # merely kept is weaker evidence than a term the AI listed: offered to the next pages,
+        # it was listed there too and "Bar" became a name of the work.
+        memory = WorkMemory()
+        remember(memory, {"obra": "Obra", "capitulo": "Cap 1", "pagina": 3},
+                 [region("THAT MUST BE THE BAR", "Deve ser o Bar")], [])
+        self.assertEqual(memory.context("Obra", "Cap 1", 5)["glossary"], [])
+        remember(memory, {"obra": "Obra", "capitulo": "Cap 1", "pagina": 3},
+                 [region("[MARA KELL HAS WON!]", "[Mara Kell venceu!]")], [("MARA KELL", "Mara Kell")])
+        self.assertEqual([g["source"] for g in memory.context("Obra", "Cap 1", 5)["glossary"]], ["MARA KELL"])
+
+    def test_a_bubble_that_is_only_a_title_teaches_it(self):
+        # Manwha teste p24: a title alone in a bubble, never listed as a term,
+        # came back another way on p64.
+        from memory import region_titles
+        pairs = [{"original": "IRON FIST MASTER!", "translation": "Mestre do Punho de Ferro!"},
+                 {"original": "GOT IT.", "translation": "Entendido."},                       # one word
+                 {"original": "THE LAST QUEEN, MARA.", "translation": "A última rainha, Mara."},  # a sentence
+                 {"original": "RUN, NOW!", "translation": "Corre, Agora!"},                  # a comma: speech
+                 {"original": "I SEE...", "translation": "Entendo..."},
+                 {"original": "IT'S MARA KELL", "translation": "É Mara Kell"},              # a sentence about a name
+                 {"original": "NOT CHA SUNGMIN.", "translation": "Não Notcha Sungmin."},
+                 {"original": "GET OUT OF HERE", "translation": "SAIA DAQUI"}]              # an answer in capitals
+        self.assertEqual(region_titles(pairs), [("IRON FIST MASTER", "Mestre do Punho de Ferro")])
+
+    def test_a_term_in_capitals_is_kept_in_sentence_case(self):
+        # The AI listed "MARA KELL=MARA KELL" and the next pages wrote the name in capitals.
+        memory = WorkMemory()
+        page = [region("[MARA KELL OF THE NORTH WINS!]", "[MARA KELL DO NORTE VENCE!]")]
+        remember(memory, {"obra": "Obra", "capitulo": "Cap 1", "pagina": 1}, page,
+                 [("MARA KELL", "MARA KELL"), ("NORTH", "NORTE"), ("HP", "HP")])
+        targets = {g["source"]: g["target"] for g in memory.context("Obra", "Cap 1", 2)["glossary"]}
+        self.assertEqual(targets["MARA KELL"], "Mara Kell")
+        self.assertEqual(targets["NORTH"], "Norte")
+        from memory import _out_of_capitals
+        for acronym in ("NPC", "SSS RANK", "STR", "HP"):  # acronyms of a status window stay
+            self.assertTrue(_out_of_capitals(acronym).startswith(acronym.split()[0]), acronym)
+        self.assertEqual(_out_of_capitals("ESPADA DO REI"), "Espada do Rei")
+
+    def test_an_offered_term_does_not_force_its_gender(self):
+        # Manga control: one page guessed "a" for a man's name; passed on with the term, the
+        # guess spread to the next page.  The gender counts once the term is confirmed.
+        memory = WorkMemory()
+        remember(memory, {"obra": "Obra", "capitulo": "Cap 1", "pagina": 3},
+                 [region("MARA KELL IS HERE", "Mara Kell está aqui")], [("MARA KELL", "Mara Kell (f)")])
+        self.assertEqual(memory.context("Obra", "Cap 1", 7)["glossary"], [{"source": "MARA KELL", "target": "Mara Kell"}])
+
+    def test_a_name_misread_after_the_right_one_is_known_is_not_learned(self):
+        # Manwha teste: a name misread on p36 and p64, the right one known since p40; the
+        # misreading became a name of the work.
+        memory = WorkMemory()
+        for number in (36, 64):
+            if number == 64:
+                for p in (39, 40):
+                    remember(memory, {"obra": "Obra", "capitulo": "Cap 1", "pagina": p},
+                             [region("MARA KELL ATTACKS", "Mara Kell ataca")], [("MARA KELL", "Mara Kell")])
+            remember(memory, {"obra": "Obra", "capitulo": "Cap 1", "pagina": number},
+                     [region("MARA TELL WINS", "Mara Tell vence")], [("MARA TELL", "Mara Tell")])
+        self.assertEqual([g["source"] for g in memory.glossary("Obra")], ["MARA KELL"])
+
+    def test_a_misread_name_learned_first_is_not_offered_once_the_right_one_is_known(self):
+        # Manwha teste p64: the misreading, learned on p36 before the right name was known, went
+        # to the AI next to the right name and the misreading stayed.
+        memory = WorkMemory()
+        remember(memory, {"obra": "Obra", "capitulo": "Cap 1", "pagina": 36},
+                 [region("MARA TELL WINS", "Mara Tell vence")], [("MARA TELL", "Mara Tell")])
+        for p in (39, 40):
+            remember(memory, {"obra": "Obra", "capitulo": "Cap 1", "pagina": p},
+                     [region("MARA KELL ATTACKS", "Mara Kell ataca")], [("MARA KELL", "Mara Kell")])
+        self.assertEqual([g["source"] for g in memory.context("Obra", "Cap 1", 64)["glossary"]], ["MARA KELL"])
+
+    def test_a_misread_name_is_not_offered_next_to_the_right_one_seen_once(self):
+        memory = WorkMemory()
+        remember(memory, {"obra": "Obra", "capitulo": "Cap 1", "pagina": 36},
+                 [region("MARA TELL WINS", "Mara Tell vence")], [("MARA TELL", "Mara Tell")])
+        remember(memory, {"obra": "Obra", "capitulo": "Cap 1", "pagina": 39},
+                 [region("MARA KELL ATTACKS", "Mara Kell ataca")], [("MARA KELL", "Mara Kell")])
+        self.assertEqual([g["source"] for g in memory.context("Obra", "Cap 1", 64)["glossary"]], ["MARA KELL"])
+
+    def test_written_the_chapter_way_but_listed_another_counts(self):
+        memory = WorkMemory()
+        remember(memory, {"obra": "Obra", "capitulo": "Cap 1", "pagina": 1},
+                 [region("IRON FIST MASTER!", "Mestre do Punho de Ferro!")], [("IRON FIST MASTER", "Mestre do Punho de Ferro")])
+        added = remember(memory, {"obra": "Obra", "capitulo": "Cap 1", "pagina": 2},
+                         [region("THE IRON FIST MASTER WON", "O Mestre do Punho de Ferro venceu")],
+                         [("IRON FIST MASTER", "Mestre Punho-de-Ferro")])
+        self.assertEqual(added, [("IRON FIST MASTER", "Mestre do Punho de Ferro")])
+
+    def test_a_name_read_one_letter_off_goes_to_the_ai_as_a_hint(self):
+        block = context_block({"glossary": [{"source": "MARA KELL", "target": "Mara Kell"}], "previous": []},
+                              "<|1|>[HELPER, MARA TELL HAS FALLEN!]")
+        self.assertIn('"names_maybe_misread": [{"read": "MARA TELL", "name": "Mara Kell"}]', block)
+        block = context_block({"glossary": [{"source": "MARA KELL", "target": "Mara Kell"}], "previous": []},
+                              "<|1|>MARA TOLD ME.")
+        self.assertNotIn("names_maybe_misread\":", block)
+
+    def test_a_term_without_translations_to_check_keeps_waiting(self):
+        # Neighbour: terms recorded with no dialogue (older callers, a page whose regions
+        # were not kept) still need a second page before any other page sees them.
+        memory = WorkMemory()
+        memory.record("Obra", "Cap 1", 8, [], [("WEST MARSH", "West Marsh")], "BORN IN THE WEST MARSH")
+        self.assertEqual(memory.context("Obra", "Cap 1", 9)["glossary"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3711,6 +3711,14 @@ SPANISH_WORDS = re.compile(
 # "O mais triste de todas": the article and "de todos/todas" disagree in gender.
 # Only "o ... de todas": a woman in a mixed group is rightly "a mais forte de todos".
 SUPERLATIVE_GENDER = re.compile(r"(?<![\wÀ-ÿ])(?:o|um)\s+mais\s+[\wÀ-ÿ]+\s+de\s+todas(?![\wÀ-ÿ])", re.I)
+# A singular verb before a plural participle, or a plural verb before a masculine singular one:
+# "foi mortos" (Manwha teste p64, "...HAS BEEN KILLED!"), "foram derrotado".  A feminine noun
+# after a plural verb is no participle ("são comida", "são piada"), and "a gente foi convidados"
+# is spoken Portuguese.
+_PARTICIPLE = r"(?:[\wÀ-ÿ]{2,}[ai]d|mort|pres|feit|dit|vist|abert|post|escrit|cobert|pag|salv|solt|extint)"
+PARTICIPLE_NUMBER = re.compile(
+    r"(?<![\wÀ-ÿ])(?:(?:foi|é|era|está|estava|ficou|será|seria)\s+" + _PARTICIPLE + r"[oa]s"
+    r"|(?:foram|são|eram|estão|estavam|ficaram|serão|seriam)\s+" + _PARTICIPLE + r"o)(?![\wÀ-ÿ])", re.I)
 # The same word twice in a row ("vocês tão tão distraídos"); a hyphen marks a stutter and a
 # word without a vowel is a sound ("Bzz bzz", "Hmm hmm").
 DOUBLED_WORD = re.compile(r"(?<![\wÀ-ÿ-])((?=[\wÀ-ÿ]*[aeiouáéíóúâêôãõà])[\wÀ-ÿ]{2,})\s+\1(?![\wÀ-ÿ-])",
@@ -3782,6 +3790,10 @@ def portuguese_problems(source, text):
     match = SUPERLATIVE_GENDER.search(text or "")
     if match:
         notes.append(f"\"{match.group(0)}\" mixes masculine and feminine: make the gender agree")
+    match = next((m for m in PARTICIPLE_NUMBER.finditer(text or "")
+                  if not re.search(r"(?<![\wÀ-ÿ])a gente\s*$", text[:m.start()], re.I)), None)
+    if match:
+        notes.append(f"\"{match.group(0)}\" mixes singular and plural: make the verb and the participle agree")
     if not DOUBLED_WORD.search(str(source or "")):
         for match in DOUBLED_WORD.finditer(text or ""):
             if match.group(1).lower() not in REDUPLICATIONS:
@@ -4006,6 +4018,41 @@ def fix_ocr_words(text, keep=()):
 
     fixed = re.sub(r"[A-Za-z0-9/|']*[A-Za-z][A-Za-z0-9/|']*", repl, text)
     return fixed, changed
+
+
+def misread_names(text, names):
+    """Known names of several words the OCR may have read with one letter off.
+
+    Manwha teste p64: a name like MARA KELL was read "MARA TELL"; "tell" is an English word, so
+    fix_ocr_words left it and the AI lettered the wrong name.  The text is not changed:
+    "DID MARA TELL YOU?" is a name and a verb, and only the AI can tell them apart, so the
+    pairs go to it as a hint (memory.context_block).  A pair needs a name of two or more
+    words with exactly one word off by one letter (same length, 3+ letters), the word read
+    an English word and the name's word not one (the OCR misreads into words, not out of
+    them: "KIM MINJI" is never a hint for "KIM MINJU"), and a matching word the word list
+    does not know (not "RED DRAGON" for "BED DRAGON").  Returns [(words read, name), ...].
+    """
+    common, _ = english_words()
+    found = []
+    for name in names:
+        parts = [p.upper() for p in re.findall(r"[A-Za-z]+", str(name or ""))]
+        if len(parts) < 2 or " ".join(parts) != str(name).strip().upper():
+            continue
+        pattern = r"(?<![A-Za-z])" + r"\s+".join(r"([A-Za-z]{%d})" % len(p) for p in parts) + r"(?![A-Za-z])"
+        for match in re.finditer(pattern, text or ""):
+            words = [w.upper() for w in match.groups()]
+            off = [k for k, (w, p) in enumerate(zip(words, parts)) if w != p]
+            if len(off) != 1 or match.group(0) != match.group(0).upper():
+                continue
+            k = off[0]
+            if (len(parts[k]) < 3 or sum(a != b for a, b in zip(words[k], parts[k])) != 1
+                    or parts[k].lower() in common or words[k].lower() not in common
+                    or all(p.lower() in common for j, p in enumerate(parts) if j != k)):
+                continue
+            pair = (" ".join(words), str(name).strip())
+            if pair not in found:
+                found.append(pair)
+    return found
 
 
 SUFFIXES = {"ing", "ed", "ly", "er", "ers", "est", "tion", "tions", "ness", "ment", "able", "ful", "less", "ous", "ity"}

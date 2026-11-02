@@ -1616,6 +1616,7 @@ def validate_page_translations(original_translate):
         result = await original_translate(self, config, ctx)
         if not legacy_quality() and isinstance(result, list):
             import re
+            import unicodedata
             from quality import (normalize_spacing, page_names, same_text, sentence_case, source_names, square_brackets,
                                  tidy_start, unchanged_english)
             texts = [getattr(region, "translation", None) for region in result]
@@ -1643,6 +1644,14 @@ def validate_page_translations(original_translate):
                                                            devolvida_igual=True)
                         ctx.mangalate_preserved = list(getattr(ctx, "mangalate_preserved", None) or []) + [region]
                 print(f"Same as the original: {len(back)} lettered, {len(same) - len(back)} left as drawn", flush=True)
+            # No letter or digit and a drawing symbol: a mark of the art the OCR read (manhwa antigo p7,
+            # the dots of a drawn "!!!!" read "‥ ●" came back "..." and the cleaning cut into the "!").
+            drawn = [region for region in result if not re.search(r"[^\W_]", str(getattr(region, "text", "")))
+                     and any(unicodedata.category(c).startswith("S") for c in str(getattr(region, "text", "")))]
+            if drawn:
+                result = [region for region in result if all(region is not mark for mark in drawn)]
+                ctx.mangalate_preserved = list(getattr(ctx, "mangalate_preserved", None) or []) + drawn
+                print(f"Drawn marks left as drawn: {len(drawn)}", flush=True)
             for region in result:
                 if isinstance(getattr(region, "translation", None), str):
                     # The (m)/(f) marks belong to the terms line only (memory.TERMS_INSTRUCTION);

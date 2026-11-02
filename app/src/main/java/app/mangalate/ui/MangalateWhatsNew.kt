@@ -45,6 +45,7 @@ internal object MangalateWhatsNew {
                 "Menos erros de leitura: número no lugar de letra, letra trocada e palavra partida no fim da linha saem certos, e a última linha de legendas em letra fina não fica em inglês.",
                 "Em balões estreitos, palavras longas podem ser partidas com hífen no fim da linha, e a letra fica maior.",
                 "No servidor, a tradução pelo Ollama, com a IA rodando no próprio computador, agora funciona. Como erra mais, ele fica de reserva para quando Groq e Gemini chegam ao limite.",
+                "Nomes e termos de uma obra, como técnicas e títulos, saem iguais do começo ao fim do capítulo, e um nome lido com uma letra trocada é corrigido quando o nome certo já apareceu antes.",
             ),
         ),
         WhatsNewRelease(

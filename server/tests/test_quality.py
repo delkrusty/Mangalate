@@ -2409,6 +2409,28 @@ class AddedNegationTest(unittest.TestCase):
             self.assertFalse(quality.added_negation(source, text), source)
 
 
+
+class MisreadNameTest(unittest.TestCase):
+    """Manwha teste p64: a name read with one letter off into an English word, so the
+    dictionary fix left it, and the AI wrote the wrong name.  The pair goes to the AI as a
+    hint; the text itself is never changed ("DID MARA TELL YOU?" is a name and a verb)."""
+
+    def test_one_letter_off_in_a_known_name(self):
+        keep = ["MARA KELL", "IRON FIST MASTER"]
+        self.assertEqual(quality.misread_names("[HELPER, MARA TELL HAS FALLEN!]", keep), [("MARA TELL", "MARA KELL")])
+        # A misread name learned earlier ("MARA TELL") never hides the right one, nor is the name to write.
+        self.assertEqual(quality.misread_names("MARA TELL WON.", ["MARA TELL", "MARA KELL"]), [("MARA TELL", "MARA KELL")])
+        self.assertEqual(quality.misread_names("MARA KELL WON.", ["MARA TELL", "MARA KELL"]), [])
+
+    def test_other_words_stay(self):
+        keep = ["MARA KELL", "RED DRAGON", "KAI", "SATO YUKI", "KIM MINJI", "KIM MINJU"]
+        for text in ("MARA TOLD ME.", "MARA, TELL HIM!", "BED DRAGON",   # a different word, apart, or common words only
+                     "MARA KELLY", "KAY!", "MORA TELL",                    # another length, one word, two letters off
+                     "SATO YUKO", "NARA KELL",                             # the word read is no English word: another person
+                     "KIM MINJI", "KIM MINJU"):                            # two known names, none an English word
+            self.assertEqual(quality.misread_names(text, keep), [], text)
+
+
 class PortugueseCheckTest(unittest.TestCase):
     """op1153-6a: Spanish words, a superlative with the wrong gender and a doubled word."""
 
@@ -2433,6 +2455,17 @@ class PortugueseCheckTest(unittest.TestCase):
         for text in ("A mais triste de todas as aves", "O mais forte de todos!",
                      "Ela é a mais rápida de todas.", "Ela é a mais forte de todos nós."):
             self.assertFalse(any("gender" in n for n in quality.translation_problems(["X"], [text])), text)
+
+    def test_participle_agrees_with_its_verb(self):
+        # Manwha teste p64: "...HAS BEEN KILLED!" came back "...foi mortos!".
+        for text in ("O mestre foi mortos!", "Eles foram derrotado.", "A porta está abertas."):
+            notes = quality.translation_problems(["X"], [text])
+            self.assertTrue(any("agree" in n for n in notes), text)
+        for text in ("O mestre foi morto!", "Eles foram derrotados.", "Ela foi presa.", "Foi pros lados de lá.",
+                     "É obrigado a ir.", "Eles estão cansados.", "Os soldados foram vistos.",
+                     "Os humanos são comida.", "Eles são piada.", "Vocês são parada dura!",  # nouns, not participles
+                     "A gente foi convidados pra festa."):                                    # spoken Portuguese
+            self.assertFalse(any("agree" in n for n in quality.translation_problems(["X"], [text])), text)
 
     def test_doubled_word_asks_again(self):
         notes = quality.translation_problems(["WHY ARE YOU SO QUIET?"],
