@@ -366,8 +366,7 @@ private fun ServerSection(
                 Text(
                     text = when (val t = test) {
                         is TestState.Ok -> "Conectado. Páginas na fila do servidor: ${t.queue}" +
-                            editionLabel(t.edition)?.let { "
-Tradução do servidor: $it" }.orEmpty()
+                            editionLabel(t.edition)?.let { "\nTradução do servidor: $it" }.orEmpty()
                         is TestState.Fail -> "Falhou: ${t.message}"
                         else -> ""
                     },
