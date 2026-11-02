@@ -351,8 +351,8 @@ class ReaderViewModel(
                 val source = sourceManager.getOrStub(manga.source)
                 incognitoMode = getIncognitoState.await(manga.source)
                 mutableState.update { it.copy(manga = manga, source = source) }
-                // Mangalate: o servidor guarda glossário e contexto por obra.
-                app.mangalate.translate.MangalateWork.remember(manga.id, manga.title)
+                // Mangalate: o servidor guarda glossário e contexto por obra; o idioma da extensão vira o da obra.
+                app.mangalate.translate.MangalateWork.remember(manga.id, manga.title, source.lang)
                 if (chapterId == -1L) chapterId = initialChapterId
 
                 loader = ChapterLoader(

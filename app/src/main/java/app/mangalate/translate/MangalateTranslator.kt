@@ -5,7 +5,6 @@ import android.content.SharedPreferences
 import android.os.Handler
 import android.os.Looper
 import android.widget.Toast
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -26,7 +25,6 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import app.mangalate.local.LocalPipeline
 import okio.Buffer
-import okio.BufferedSource
 import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
@@ -167,33 +165,7 @@ object MangalateTranslator {
         return _enabled.value
     }
 
-    /**
-     * Gancho usado pelos leitores (paginado e webtoon). Se a tradução estiver ativa,
-     * devolve a página traduzida; em qualquer falha devolve a original, para a leitura
-     * nunca travar.
-     */
-    suspend fun maybeTranslate(
-        context: Context,
-        source: Buffer,
-        work: PageWork? = null,
-        neighbors: (suspend () -> Pair<ByteArray?, ByteArray?>)? = null,
-    ): BufferedSource {
-        if (!isEnabled(context)) return source
-        if (source.size < 2048) return source
-        if (isGifOrAnimated(source)) return source
-        return try {
-            val bytes = source.peek().readByteArray()
-            val translated = translate(context, bytes, work = work, neighbors = neighbors)
-            Buffer().write(translated)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Throwable) {
-            notifyError(context, e)
-            source
-        }
-    }
-
-    private fun isGifOrAnimated(source: Buffer): Boolean {
+    internal fun isGifOrAnimated(source: Buffer): Boolean {
         val head = source.peek().readByteArray(minOf(64L, source.size))
         val isGif = head.size > 3 && head[0] == 'G'.code.toByte() && head[1] == 'I'.code.toByte()
         // WebP animado: "RIFF....WEBPVP8X" com flag de animação
@@ -204,27 +176,39 @@ object MangalateTranslator {
         return isGif || isAnimWebp
     }
 
-    /** Traduz os bytes de uma imagem, usando cache em disco e deduplicação. */
+    /**
+     * Traduz os bytes de uma imagem, usando cache em disco e deduplicação.
+     *
+     * [force] ignora a tradução guardada e traduz de novo (refazer página ou capítulo);
+     * a página de um capítulo baixado continua guardada para ler offline.
+     * [sourceLanguage] é o idioma da obra; sem ele, vale o padrão das configurações.
+     */
     suspend fun translate(
         context: Context,
         image: ByteArray,
         keepOffline: Boolean = false,
         work: PageWork? = null,
         neighbors: (suspend () -> Pair<ByteArray?, ByteArray?>)? = null,
+        force: Boolean = false,
+        sourceLanguage: SourceLanguage? = null,
     ): ByteArray {
         init(context)
-        val s = _settings.value
+        val s = _settings.value.let { if (sourceLanguage != null) it.copy(sourceLanguage = sourceLanguage) else it }
         if (!s.isConfigured) throw IOException("Tradução não configurada")
         val signature = s.cacheSignature()
         val key = sha256(image) + "_" + sha256(signature.toByteArray()).take(16)
         val offlineFile = File(offlineDir(context), "$key.img")
-        val cacheFile = if (keepOffline) offlineFile else File(cacheDir(context), "$key.img")
+        val tempFile = File(cacheDir(context), "$key.img")
+        // Página de capítulo baixado refeita continua guardada para ler offline.
+        val cacheFile = if (keepOffline || (force && offlineFile.exists())) offlineFile else tempFile
 
-        if (offlineFile.exists() && offlineFile.length() > 0) {
+        // Refazer não lê o guardado, mas só o substitui quando a nova tradução dá certo. Uma
+        // tradução em andamento (inclusive a de refazer) vale mais que a guardada.
+        val useSaved = !force && !inFlight.containsKey(key)
+        if (useSaved && offlineFile.exists() && offlineFile.length() > 0) {
             return withContext(Dispatchers.IO) { offlineFile.readBytes() }
         }
-        val tempFile = File(cacheDir(context), "$key.img")
-        if (tempFile.exists() && tempFile.length() > 0) {
+        if (useSaved && tempFile.exists() && tempFile.length() > 0) {
             tempFile.setLastModified(System.currentTimeMillis())
             val bytes = withContext(Dispatchers.IO) { tempFile.readBytes() }
             if (keepOffline) withContext(Dispatchers.IO) { runCatching { offlineFile.writeBytes(bytes) } }
@@ -316,6 +300,7 @@ object MangalateTranslator {
                 429 -> "O servidor já está traduzindo uma página. Aguarde antes de tentar de novo."
                 422 -> "Página bloqueada pela proteção de imagem ou configuração. Confira o original e os logs do seu servidor."
                 502 -> serverDetail(bytes)?.takeIf { it.startsWith("Limite gratuito") }
+                    ?.let { throw ProviderLimitException(it) }
                     ?: "O motor de tradução falhou. Confira a chave e o modelo da IA no servidor (docker compose logs)."
                 503 -> "O processo de tradução ainda está iniciando ou parou. Aguarde e rode check.py --warmup no computador."
                 504 -> "A tradução demorou demais. Prepare os modelos com check.py --warmup antes de abrir o capítulo."
@@ -448,13 +433,13 @@ object MangalateTranslator {
 
     // endregion
 
-    private fun notifyError(context: Context, e: Throwable) {
+    internal fun notifyError(context: Context, e: Throwable) {
         val now = System.currentTimeMillis()
         if (now - lastErrorToastAt < 8_000) return
         lastErrorToastAt = now
         val app = context.applicationContext
         val msg = when (e) {
-            is app.mangalate.local.FriendlyException -> "Mangalate: ${e.message}"
+            is app.mangalate.local.FriendlyException, is ProviderLimitException -> "Mangalate: ${e.message}"
             is java.net.UnknownHostException -> "Mangalate: sem internet para traduzir esta página"
             else -> "Mangalate: não foi possível traduzir (${e.message ?: e.javaClass.simpleName})"
         }
@@ -476,3 +461,6 @@ object MangalateTranslator {
     private fun sha256(data: ByteArray): String =
         MessageDigest.getInstance("SHA-256").digest(data).joinToString("") { "%02x".format(it) }
 }
+
+/** Todas as IAs do servidor estão no limite gratuito; a página volta a ser tentada sozinha. */
+class ProviderLimitException(message: String) : IOException(message)

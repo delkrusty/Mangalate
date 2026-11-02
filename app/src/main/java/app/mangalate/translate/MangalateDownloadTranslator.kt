@@ -28,8 +28,16 @@ object MangalateDownloadTranslator {
     }
 
     /** Nunca lança erro: se algo falhar, a página é traduzida depois, na hora da leitura. */
-    suspend fun translateFolder(context: Context, dir: UniFile, chapterName: String, mangaTitle: String) {
+    suspend fun translateFolder(
+        context: Context,
+        dir: UniFile,
+        chapterName: String,
+        mangaTitle: String,
+        mangaId: Long? = null,
+        sourceLang: String = "",
+    ) {
         if (!shouldTranslate(context)) return
+        val language = MangalateWork.language(context, mangaId, sourceLang)
         val files = withContext(Dispatchers.IO) {
             dir.listFiles().orEmpty()
                 .filter { f -> f.name?.substringAfterLast('.', "")?.lowercase() in imageExt }
@@ -54,6 +62,7 @@ object MangalateDownloadTranslator {
                                 keepOffline = true,
                                 work = PageWork(mangaTitle, chapterName, index + 1),
                                 neighbors = { MangalateNeighbors.ofList(readers, index) },
+                                sourceLanguage = language,
                             )
                         } catch (e: CancellationException) {
                             throw e

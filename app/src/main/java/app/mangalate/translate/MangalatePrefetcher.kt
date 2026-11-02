@@ -35,16 +35,11 @@ object MangalatePrefetcher {
                         val stream = page.stream ?: return@launch
                         val bytes = stream().use { it.readBytes() }
                         if (bytes.size < 2048) return@launch
-                        MangalateTranslator.translate(
-                            context,
-                            bytes,
-                            work = MangalateWork.of(page),
-                            neighbors = { MangalateNeighbors.of(page) },
-                        )
+                        MangalateReaderPages.translate(context, bytes, page)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Throwable) {
-                        // falhas aparecem quando a página for aberta
+                        // A falha fica registrada e aparece no indicador do leitor.
                     }
                 }
             }

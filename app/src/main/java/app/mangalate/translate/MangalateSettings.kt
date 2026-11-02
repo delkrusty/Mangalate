@@ -38,6 +38,23 @@ enum class SourceLanguage(val label: String) {
 
     companion object {
         fun fromName(name: String?) = entries.firstOrNull { it.name == name } ?: JA
+
+        /**
+         * Idioma do texto das páginas a partir do idioma da extensão ("ja", "ko", "zh-Hans", "en").
+         * Extensões de vários idiomas ("all") ou de outros idiomas não sugerem nada.
+         */
+        fun fromSourceLang(lang: String?): SourceLanguage? =
+            when (lang.orEmpty().lowercase().substringBefore('-').substringBefore('_')) {
+                "ja" -> JA
+                "ko" -> KO
+                "zh" -> ZH
+                "en" -> EN
+                else -> null
+            }
+
+        /** O escolhido para a obra vence; depois a extensão, o sugerido ao abrir a obra e o padrão. */
+        fun pick(chosen: String?, sourceLang: String, suggested: SourceLanguage?, default: SourceLanguage) =
+            entries.firstOrNull { it.name == chosen } ?: fromSourceLang(sourceLang) ?: suggested ?: default
     }
 }
 

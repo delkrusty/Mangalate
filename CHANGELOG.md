@@ -9,12 +9,16 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 - O cache das páginas continua valendo: a assinatura do modo Servidor é montada como a da 0.6.0, com as opções retiradas nos valores padrão. Quem nunca mexeu nelas não perde nenhuma página. Quem tinha mudado alguma, ou usava letra além de ±3, vê essas páginas traduzidas de novo uma vez.
 - Ao testar a conexão, o app mostra que tradução o servidor usa (a IA escolhida no instalador ou o tradutor offline), lida do `/v1/info`.
 - Os modos Gemini e DeepL, escondidos desde a 0.5, saíram de vez, com o código e o teste. As chaves deles que ainda estivessem guardadas no celular são apagadas.
-
+- Idioma de origem por obra: ao abrir uma obra, o idioma da extensão (`ja`, `ko`, `zh`, `en`) vira o idioma dela; extensões "all" ou de outro idioma usam o padrão das configurações, que passou a se chamar "Idioma padrão das obras". O idioma escolhido no assistente ou no menu da página fica guardado para aquela obra e vale também na tradução ao baixar. Só o modo No celular usa; o servidor reconhece o idioma sozinho. Obras cuja extensão tem idioma diferente do padrão são traduzidas de novo uma vez (antes saíam com o idioma errado) e, offline, precisam do tradutor desse idioma já baixado.
+- Segurar o dedo na página abre o menu do Mihon com três ações novas: "Ver original" (só aquela página, com a tradução ainda ligada), "Refazer página" e "Refazer capítulo". Refazer não usa a tradução guardada, mas só a substitui quando a nova dá certo (sem conexão ou com a IA no limite, a de antes continua); a página aberta é refeita na hora e as outras do capítulo quando forem abertas ou pré-traduzidas. Página de capítulo baixado continua guardada para ler offline. No modo No celular, o mesmo menu troca o idioma da obra.
+- O indicador do leitor mostra as páginas que ficaram sem tradução e o motivo (IA no limite grátis, sem conexão ou outro erro), e um toque tenta de novo. Com todas as IAs no limite, as páginas paradas são tentadas de novo a cada minuto em segundo plano (por até 30 minutos), como o servidor já prometia; só a que dá certo é redesenhada, e o aviso do limite não se repete a cada tentativa. As falhas da pré-tradução deixaram de ser descartadas e entram no indicador.
+- Cada página do leitor é redesenhada sozinha quando muda (original, refazer, nova tentativa), sem recarregar as outras. Os ganchos no Mihon ficaram menores: os dois leitores chamam `MangalateReaderPages.maybeTranslate(context, buffer, page)`.
 ### Servidor
 - O cabeçalho `X-Mangalate-Review` deixou de ser sempre "required": o motor conta as falas que ficaram no original (`X-Mangalate-Preserved`, sem contar sons, créditos, logotipos, marcas sem letra e falas que a IA devolveu iguais) e as traduzidas sobre o desenho (`X-Mangalate-Over-Art`), e o gateway marca "required" só quando alguma passa de zero, ou quando o motor não mandou a contagem. Se a contagem falhar, a página traduzida sai do mesmo jeito, sem os números. A página não muda.
 
 ### Testes
 - Teste de contrato entre app e servidor: `server/tests/app_config_contract.json` é lido por `test_contract.py` e por `ServerContractTest.kt`, que também confere que a assinatura do cache não mudou. O CI roda todos os testes `app.mangalate.*` do app, não só os de `local`.
+- `WorkLanguageTest.kt`: idioma da extensão para o da obra, prioridade entre escolhido, extensão e padrão, motivo da falha e textos do indicador.
 
 ## 0.6.0
 

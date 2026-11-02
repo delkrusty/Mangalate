@@ -14,6 +14,9 @@ internal object MangalateWhatsNew {
             null,
             listOf(
                 "As configurações de tradução ficaram mais curtas: saíram opções que não mudavam nada, e as páginas já traduzidas continuam salvas.",
+                "No modo No celular, cada obra guarda o seu idioma: o Mangalate já sugere o da fonte, sem trocar a configuração entre mangá e manhwa.",
+                "Segure o dedo na página para ver o original só dela ou para refazer a tradução da página ou do capítulo.",
+                "Quando uma página fica sem tradução, o aviso no canto do leitor diz o motivo, e um toque tenta de novo.",
             ),
         ),
         WhatsNewRelease(

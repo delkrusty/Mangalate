@@ -5,7 +5,8 @@ A ajuda completa também está no app, em **Mais › Ajuda do Mangalate**, com b
 ## Usar
 
 - **Traduzir:** abra um capítulo, toque no centro da página e depois em **文A**. Escolha os idiomas e toque em Traduzir.
-- **Ver o original:** toque em 文A de novo.
+- **Ver o original:** toque em 文A de novo. Para ver o original só de uma página, segure o dedo nela e toque em **Ver original**.
+- **Refazer:** segure o dedo na página e toque em **Refazer página** ou **Refazer capítulo**. No modo No celular, o mesmo menu troca o idioma da obra.
 - **Ajustes:** Mais › Tradução (Mangalate).
 - **Modo No celular:** na primeira vez, toque em Preparar idiomas com internet. Depois funciona offline.
 - **Modo Servidor:** precisa do servidor rodando no seu PC. Veja o [manual do servidor](server/README.md).
