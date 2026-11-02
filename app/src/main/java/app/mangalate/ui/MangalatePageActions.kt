@@ -36,8 +36,8 @@ import tachiyomi.presentation.core.components.material.padding
 
 /**
  * Ações de tradução no menu que abre ao segurar o dedo na página: ver o original só
- * desta página, refazer a página ou o capítulo, no servidor os nomes da obra e reportar
- * a página e, no celular, o idioma desta obra.
+ * desta página, refazer a página ou o capítulo, reportar a página, no servidor os nomes da
+ * obra e, no celular, o idioma desta obra.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -82,33 +82,31 @@ fun MangalatePageActions(page: ReaderPage, onDismissRequest: () -> Unit) {
                 },
             )
         }
-        // Glossário e relatório ficam no servidor; no celular não há onde guardar.
+        // O glossário fica no servidor; o relatório vai por e-mail e vale nos dois modos.
         val work = MangalateWork.of(page)?.work
-        if (settings.mode == TranslateMode.SERVER) {
-            var showGlossary by remember { mutableStateOf(false) }
-            var showReport by remember { mutableStateOf(false) }
-            Row(horizontalArrangement = Arrangement.spacedBy(MaterialTheme.padding.small)) {
-                if (work != null) {
-                    ActionButton(
-                        modifier = Modifier.weight(1f),
-                        title = "Nomes da obra",
-                        icon = MaterialSymbols.Rounded.EditNote,
-                        onClick = { showGlossary = true },
-                    )
-                }
+        var showGlossary by remember { mutableStateOf(false) }
+        var showReport by remember { mutableStateOf(false) }
+        Row(horizontalArrangement = Arrangement.spacedBy(MaterialTheme.padding.small)) {
+            if (settings.mode == TranslateMode.SERVER && work != null) {
                 ActionButton(
                     modifier = Modifier.weight(1f),
-                    title = "Reportar página",
-                    icon = MaterialSymbols.Rounded.BugReport,
-                    onClick = { showReport = true },
+                    title = "Nomes da obra",
+                    icon = MaterialSymbols.Rounded.EditNote,
+                    onClick = { showGlossary = true },
                 )
             }
-            if (showGlossary && work != null) {
-                MangalateGlossaryDialog(work, onDismissRequest = { showGlossary = false })
-            }
-            if (showReport) {
-                MangalateReportDialog(page, onDismissRequest = { showReport = false })
-            }
+            ActionButton(
+                modifier = Modifier.weight(1f),
+                title = "Reportar página",
+                icon = MaterialSymbols.Rounded.BugReport,
+                onClick = { showReport = true },
+            )
+        }
+        if (showGlossary && work != null) {
+            MangalateGlossaryDialog(work, onDismissRequest = { showGlossary = false })
+        }
+        if (showReport) {
+            MangalateReportDialog(page, onDismissRequest = { showReport = false })
         }
         // Só o OCR do celular precisa saber o idioma; o servidor reconhece sozinho.
         if (settings.mode == TranslateMode.ON_DEVICE) {

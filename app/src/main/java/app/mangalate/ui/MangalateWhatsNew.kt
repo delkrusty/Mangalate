@@ -11,6 +11,12 @@ internal data class WhatsNewRelease(val version: String?, val items: List<String
 internal object MangalateWhatsNew {
     val releases = listOf(
         WhatsNewRelease(
+            null,
+            listOf(
+                "Achou uma página com erro? Segure o dedo nela e toque em Reportar página: o e-mail já vem pronto, com a página, para quem cuida do Mangalate.",
+            ),
+        ),
+        WhatsNewRelease(
             "0.7.0",
             listOf(
                 "Segure o dedo na página para ver o original, refazer a tradução da página ou do capítulo e, no modo Servidor, corrigir nomes da obra ou guardar a página no computador.",
