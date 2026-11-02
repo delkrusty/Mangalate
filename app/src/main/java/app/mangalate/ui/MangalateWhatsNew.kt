@@ -11,7 +11,7 @@ internal data class WhatsNewRelease(val version: String?, val items: List<String
 internal object MangalateWhatsNew {
     val releases = listOf(
         WhatsNewRelease(
-            "0.6.1",
+            null,
             listOf(
                 "As configurações de tradução ficaram mais curtas: saíram opções que não mudavam nada, e as páginas já traduzidas continuam salvas.",
             ),
