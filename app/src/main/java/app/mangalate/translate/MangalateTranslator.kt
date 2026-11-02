@@ -47,12 +47,6 @@ object MangalateTranslator {
     private const val ENDPOINT = "/translate/with-form/image"
     private const val BUSY_RETRIES = 40
 
-    // Opções que saíram do app: chaves do Gemini e do DeepL e ajustes que o servidor ignorava.
-    private val RETIRED_KEYS = listOf(
-        "gemini_key", "gemini_model", "gemini_fast", "deepl_key",
-        "engine", "quality", "typeset", "mask_dilation",
-    )
-
     @Volatile
     private var prefs: SharedPreferences? = null
 
@@ -105,49 +99,16 @@ object MangalateTranslator {
             if (prefs != null) return
             val p = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             prefs = p
-            p.edit().apply { RETIRED_KEYS.forEach(::remove) }.apply()
-            _settings.value = read(p)
+            _settings.value = MangalateSettingsStore.read(p)
             _enabled.value = p.getBoolean("enabled", false) && _settings.value.isConfigured
         }
     }
-
-    private fun read(p: SharedPreferences) = MangalateSettings(
-        mode = TranslateMode.fromName(p.getString("mode", null)),
-        sourceLanguage = SourceLanguage.fromName(p.getString("source_lang", null)),
-        setupDone = p.getBoolean("setup_done", false),
-        translateOnDownload = p.getBoolean("translate_on_download", false),
-        serverUrl = p.getString("server_url", "") ?: "",
-        accessKey = p.getString("access_key", "") ?: "",
-        targetLanguage = TargetLanguage.fromCode(p.getString("target_lang", null)),
-        // A opção antiga "Só traduzir texto dentro de balões", se ligada, vira "Preservar a arte".
-        preserveArtText = when {
-            p.contains("preserve_art_text") -> p.getBoolean("preserve_art_text", false)
-            p.getBoolean("ignore_outside_bubbles", false) -> true
-            else -> null
-        },
-        uppercase = p.getBoolean("uppercase", false),
-        fontSizeOffset = p.getInt("font_size_offset", 0).coerceIn(MangalateSettings.FONT_OFFSETS),
-    )
 
     fun updateSettings(context: Context, transform: (MangalateSettings) -> MangalateSettings) {
         init(context)
         val new = transform(_settings.value)
         _settings.value = new
-        prefs?.edit()
-            ?.putString("mode", new.mode.name)
-            ?.putString("source_lang", new.sourceLanguage.name)
-            ?.putBoolean("setup_done", new.setupDone)
-            ?.putBoolean("translate_on_download", new.translateOnDownload)
-            ?.putString("server_url", new.serverUrl)
-            ?.putString("access_key", new.accessKey)
-            ?.putString("target_lang", new.targetLanguage.code)
-            ?.also { editor ->
-                new.preserveArtText?.let { editor.putBoolean("preserve_art_text", it) }
-                    ?: editor.remove("preserve_art_text")
-            }
-            ?.putBoolean("uppercase", new.uppercase)
-            ?.putInt("font_size_offset", new.fontSizeOffset.coerceIn(MangalateSettings.FONT_OFFSETS))
-            ?.apply()
+        prefs?.let { MangalateSettingsStore.write(it, new) }
         if (!new.isConfigured) setEnabled(context, false)
     }
 
