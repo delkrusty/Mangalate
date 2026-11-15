@@ -2,7 +2,13 @@
 
 As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://github.com/mihonapp/mihon/blob/main/CHANGELOG.md).
 
-## Em teste
+## 0.7.2
+
+- **Janelas de sistema:** mais janelas e mensagens dos webtoons saem traduzidas, inclusive as tortas e as que cobrem um quadro inteiro, com letra parecida com a original.
+- **Balões pretos com letra brilhante** agora são traduzidos e ficam limpos, e um balão cortado entre duas partes do webtoon não cola mais o inglês do vizinho.
+- **Tradução:** sem etiquetas como "[SFX]" no lugar da fala, e a memória da obra não guarda termo com gênero errado.
+
+Detalhes técnicos de cada mudança no [CHANGELOG](https://github.com/delkrusty/Mangalate/blob/main/CHANGELOG.md#072).
 
 ### Janelas de sistema e balões com brilho
 - Janela de sistema com um lado da moldura apagado (a janela passa por cima de um painel escuro) agora é achada: o lado que falta fica à mesma distância do texto que o oposto (`WINDOW_LOST_SIDES`). A moldura de uma janela translúcida clara conta a partir de 40 tons acima do fundo, não 60 (`WINDOW_FRAME_LIGHTER`).

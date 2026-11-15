@@ -11,7 +11,7 @@ internal data class WhatsNewRelease(val version: String?, val items: List<String
 internal object MangalateWhatsNew {
     val releases = listOf(
         WhatsNewRelease(
-            null,
+            "0.7.2",
             listOf(
                 "Mais janelas e mensagens de sistema dos webtoons saem traduzidas, inclusive as tortas e as que cobrem um quadro inteiro, com letra parecida com a original.",
                 "Balões pretos com letra brilhante agora são traduzidos e ficam limpos, sem mancha das letras antigas.",
