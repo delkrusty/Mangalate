@@ -618,10 +618,11 @@ def plan_shaped(image, region_box, others, text, font_path, original_size, minim
         top, bottom = max(top, cy - reach), min(bottom, cy + reach)
     floor = max(1, int(minimum))
     cap = max(floor, int(round(original_size * scale)) + int(offset))
+    rows = (top, bottom)
 
     def largest(strict, sentences=False, cut=False, cap=cap):
         def attempt(size):
-            return shaped(half, cx, (top, bottom), text, Measure(font_path, size), strict=strict, sentences=sentences,
+            return shaped(half, cx, rows, text, Measure(font_path, size), strict=strict, sentences=sentences,
                           syllables=cut)
         if attempt(floor) is None:
             return None
@@ -648,14 +649,37 @@ def plan_shaped(image, region_box, others, text, font_path, original_size, minim
                 return found
         return loose
 
-    best = preferred()
-    # Worth a try only with a word that can be cut and room for the letters to grow.
-    can_cut = syllables and any(syllable_breaks(re.sub(r"[^\w]", "", word)) for word in text.split())
-    limit = max(floor, min(cap, int(round(original_size))))
-    small = best is None or best[0] < HYPHEN_BELOW * original_size
-    cut = preferred(True, limit) if can_cut and small and (best is None or HYPHEN_GAIN * best[0] <= limit) else None
-    if cut is not None and syllable_cuts(cut[1][0], text.split()) and (best is None or cut[0] >= HYPHEN_GAIN * best[0]):
-        best = cut
+    def choose():
+        best = preferred()
+        # Worth a try only with a word that can be cut and room for the letters to grow.
+        can_cut = syllables and any(syllable_breaks(re.sub(r"[^\w]", "", word)) for word in text.split())
+        limit = max(floor, min(cap, int(round(original_size))))
+        small = best is None or best[0] < HYPHEN_BELOW * original_size
+        cut = preferred(True, limit) if can_cut and small and (best is None or HYPHEN_GAIN * best[0] <= limit) else None
+        if cut is not None and syllable_cuts(cut[1][0], text.split()) and (best is None or cut[0] >= HYPHEN_GAIN * best[0]):
+            best = cut
+        return best
+
+    best = choose()
+    # A side cut halfway to another text (bubble_mask), not by the outline, is no edge to centre on:
+    # the block centred between the cut and the far outline went into the taper of the bubble and
+    # shrank (Manhwa teste p36, two joined bubbles).  The block centred on the original text, inside
+    # the same rows, is tried too and kept when its letters come out bigger.
+    if others:
+        free = bubble_mask(image, region_box, ())
+        if free is not None:
+            fmask, fx0, fy0 = free
+
+            def neighbour_cut(row):
+                y, x = row + wy0 - fy0, cx + wx0 - fx0
+                return 0 <= y < fmask.shape[0] and 0 <= x < fmask.shape[1] and bool(fmask[y, x])
+            if neighbour_cut(top - 1) or neighbour_cut(bottom + 1):
+                reach = min(cy - top, bottom - cy)
+                if reach > 0:
+                    rows = (cy - reach, cy + reach)
+                    centred = choose()
+                    if centred is not None and (best is None or centred[0] > best[0]):
+                        best = centred
     if best is None:
         return None
     lo, (lines, block_top, slot, advance) = best

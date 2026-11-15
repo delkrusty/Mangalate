@@ -2515,6 +2515,17 @@ class PortugueseCheckTest(unittest.TestCase):
             self.assertFalse(any("is a lone letter" in n for n in quality.translation_problems([source], [text])), text)
 
 
+    def test_placeholder_tag_never_wins_the_second_try(self):
+        # Manga teste p9: "WHAT SAY YOU?" came back "【SFX】" and was lettered in the bubble.
+        for text in ("【SFX】", "[SFX]", "(SFX)", "<sound effect>", "[efeito sonoro]", "SFX", "[Onomatopeia]"):
+            notes = quality.translation_problems(["WHAT SAY YOU?"], [text])
+            self.assertTrue(any("placeholder" in n for n in notes), text)
+        # A real line, a window in brackets and a source that is the tag itself stay.
+        for source, text in (("WHAT SAY YOU?", "O que me diz?"), ("[LEVEL UP!]", "[Subiu de nível!]"),
+                             ("SFX", "SFX"), ("BOOM!", "BUM!"), ("IF...", "Se..."), ("NOTHING.", "Nada."),
+                             ("A SOUND?", "Um som?")):
+            self.assertFalse(any("placeholder" in n for n in quality.translation_problems([source], [text])), text)
+
 class BubbleScanTest(unittest.TestCase):
     """Small white bubbles the detector missed (Grand Blue pp. 19/27)."""
 
@@ -3367,13 +3378,15 @@ class ThroughLineTest(unittest.TestCase):
         self.assertEqual(quality.through_lines(image, mask, box, 18), [])
 
 
-def system_window(behind="art", colour=(30, 110, 230), frame=True, letters=(250, 250, 250), icons=False):
+def system_window(behind="art", colour=(30, 110, 230), frame=True, letters=(250, 250, 250), icons=False,
+                  faint=(), frame_colour=(200, 235, 255)):
     """A system window of a game webtoon: light letters on a vivid, translucent colour in a light frame.
 
     The drawing shows through it and the light changes across it, so its margin fits no flat
     plane (the window read as art and stayed in English).  Returns (image, text mask, line
     quads, frame); with ``icons`` the window has its buttons in the top right corner, read by
-    the OCR as one more line ("曰回").
+    the OCR as one more line ("曰回").  The sides in ``faint`` ("top", "bottom", "left",
+    "right") have their frame dimmed by a dark part of the drawing under the window.
     """
     image = noisy_art((700, 420)) if behind == "art" else page(size=(700, 420))
     x0, y0, x1, y1 = 80, 110, 620, 320
@@ -3381,8 +3394,14 @@ def system_window(behind="art", colour=(30, 110, 230), frame=True, letters=(250,
     body = np.clip(np.asarray(colour, float) * ramp, 0, 255)
     image[y0:y1, x0:x1] = (0.8 * body + 0.2 * image[y0:y1, x0:x1]).astype(np.uint8)
     if frame:  # a double light line, as drawn
-        cv2.rectangle(image, (x0, y0), (x1, y1), (200, 235, 255), 2)
-        cv2.rectangle(image, (x0 + 6, y0 + 6), (x1 - 6, y1 - 6), (200, 235, 255), 2)
+        cv2.rectangle(image, (x0, y0), (x1, y1), frame_colour, 2)
+        cv2.rectangle(image, (x0 + 6, y0 + 6), (x1 - 6, y1 - 6), frame_colour, 2)
+    for side in faint:  # the frame over a dark panel: a dim line, lighter than the window only here and there
+        band = {"top": (slice(y0 - 2, y0 + 10), slice(x0 - 2, x1 + 3)),
+                "bottom": (slice(y1 - 9, y1 + 3), slice(x0 - 2, x1 + 3)),
+                "left": (slice(y0 - 2, y1 + 3), slice(x0 - 2, x0 + 10)),
+                "right": (slice(y0 - 2, y1 + 3), slice(x1 - 9, x1 + 3))}[side]
+        image[band] = (image[band] * 0.45).astype(np.uint8)
     mask = np.zeros(image.shape[:2], np.uint8)
     quads = []
     for text, x, y in (("[THE HELPER IS PREPARING", 120, 195), ("AN ULTIMATE SKILL!]", 175, 250)):
@@ -3395,6 +3414,210 @@ def system_window(behind="art", colour=(30, 110, 230), frame=True, letters=(250,
             cv2.rectangle(image, (540 + 18 * k, 126), (553 + 18 * k, 139), letters, 2)
         quads.insert(0, quad(536, 122, 594, 143))
     return image, mask, quads, (x0, y0, x1, y1)
+
+
+def system_card(inside="tint", colour=(40, 120, 200), border=True, letters=(235, 245, 255)):
+    """A system message lettered on a whole panel of one tint: light letters, no frame of a window.
+
+    The panel is a black border on the paper of the page, filled with streaks of one hue (a glitch
+    effect); its margin fits no flat plane, and it has no light frame, so it stayed in English
+    (Manhwa teste p25, p26).  With ``inside="art"`` the panel holds a drawing of many colours.
+    Returns (image, line quads, inside of the panel).
+    """
+    image = page(size=(700, 520))
+    x0, y0, x1, y1 = 40, 60, 660, 460
+    rng = np.random.default_rng(3)
+    if inside == "tint":
+        streaks = rng.uniform(0.35, 1.0, x1 - x0)[None, :, None] * rng.uniform(0.8, 1.1, (y1 - y0, 1, 1))
+        image[y0:y1, x0:x1] = np.clip(np.asarray(colour, float) * streaks, 0, 255).astype(np.uint8)
+    else:
+        image[y0:y1, x0:x1] = noisy_art((x1 - x0, y1 - y0))
+    if border:
+        cv2.rectangle(image, (x0 - 4, y0 - 4), (x1 + 3, y1 + 3), (10, 10, 10), 5)
+    quads = []
+    for text, x, y in (("[THE CROWD OF STARS", 140, 230), ("IS WATCHING YOU.]", 160, 290)):
+        (w, h), base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.3, 3)
+        cv2.putText(image, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1.3, letters, 3, cv2.LINE_AA)
+        quads.append(quad(x - 2, y - h - 3, x + w + 2, y + base))
+    return image, quads, (x0, y0, x1 - 1, y1 - 1)
+
+
+def glowing_bubble(behind="ink", glow=True):
+    """Light letters with a warm glow in a black bubble on paper (``behind="art"``: on a dark drawing).
+
+    The glow runs past the dilated detector mask into the margin classify_region samples, so the
+    bubble read as art and stayed in English (Manhwa teste p29, p36, p37).  Returns (image, raw
+    detector mask, line quads).
+    """
+    image = page(size=(700, 420))
+    if behind == "ink":
+        cv2.ellipse(image, (350, 210), (300, 170), 0, 0, 360, (5, 4, 2), -1)
+    else:  # a dark drawing: strokes and patches all over
+        image[:] = (noisy_art((700, 420)) * 0.35).astype(np.uint8)
+    raw = np.zeros(image.shape[:2], np.uint8)
+    quads, layer = [], np.zeros(image.shape[:2], np.uint8)
+    for text, x, y in (("SINCE WHEN HAS THE", 150, 190), ("CENTER INTERFERED?", 150, 250)):
+        (w, h), base = cv2.getTextSize(text, cv2.FONT_HERSHEY_DUPLEX, 1.2, 3)
+        cv2.putText(layer, text, (x, y), cv2.FONT_HERSHEY_DUPLEX, 1.2, 255, 3)
+        quads.append(quad(x - 2, y - h - 3, x + w + 2, y + base))
+    if glow:  # bright right around the strokes, a dim orange farther out
+        base = cv2.dilate(layer, np.ones((9, 9), np.uint8))
+        halo = ((cv2.GaussianBlur(base, (0, 0), 3).astype(float) / 255)[..., None] * np.array([200, 140, 50])
+                + (cv2.GaussianBlur(base, (0, 0), 6).astype(float) / 255)[..., None] * np.array([130, 78, 16]))
+        image[:] = np.clip(image + halo, 0, 255).astype(np.uint8)
+    image[layer > 0] = (255, 236, 190)
+    raw[layer > 0] = 255
+    return image, raw, quads
+
+
+class GlowingLettersTest(unittest.TestCase):
+    """Light letters glowing in a dark bubble: interior, not art."""
+
+    def test_glow_in_a_black_bubble_is_no_drawing(self):
+        image, raw, quads = glowing_bubble()
+        self.assertEqual(classify_region(image, raw, quads)["kind"], "art")  # the defect
+        self.assertTrue(quality.glowing_letters(image, raw, quads))
+
+    def test_neighbours_stay(self):
+        # Light letters over a dark drawing stay art; a black bubble with no glow was interior already.
+        image, raw, quads = glowing_bubble(behind="art")
+        self.assertFalse(quality.glowing_letters(image, raw, quads))
+        image, raw, quads = glowing_bubble(glow=False)
+        self.assertEqual(classify_region(image, raw, quads)["kind"], "interior")
+        # Dark letters on paper (the light ground of a bubble) are no glow either.
+        image = page(size=(700, 420))
+        write(image, "WHAT ON EARTH", (200, 200), (0, 0, 0), 1.2)
+        raw = (image.min(axis=2) < 128).astype(np.uint8) * 255
+        self.assertFalse(quality.glowing_letters(image, raw, [quad(195, 170, 470, 210)]))
+
+
+class BubbleGlowTest(unittest.TestCase):
+    """The glow of light letters in a black bubble stayed as a brown smear after the cleaning
+    (Manhwa teste p30, p36: the shape of the old lines under the translation)."""
+
+    def test_glow_joins_the_cleaning(self):
+        image, raw, quads = glowing_bubble()
+        tight = cv2.dilate(raw, np.ones((5, 5), np.uint8)) > 0  # the mask: the strokes, a little grown
+        ground = (5, 4, 2)
+        extra = quality.bubble_glow(image, tight, quads, ground, 30)
+        smear = (cv2.cvtColor(image, cv2.COLOR_RGB2GRAY).astype(int) >= 4 + 12) & ~tight
+        smear &= cv2.dilate(raw, np.ones((31, 31), np.uint8)) > 0  # the glow of the letters
+        self.assertGreater(np.mean(extra[smear]), 0.9)
+
+    def test_outline_and_paper_stay(self):
+        # Letters glowing right by the edge of the bubble: the paper past it is no glow.
+        image, raw, quads = glowing_bubble()
+        cv2.ellipse(image, (350, 210), (300, 170), 0, 0, 360, (255, 255, 255), -1)
+        cv2.ellipse(image, (350, 205), (260, 70), 0, 0, 360, (5, 4, 2), -1)  # a narrow bubble round the lines
+        glowing = image.copy()
+        image2, raw2, _ = glowing_bubble()
+        keep = cv2.dilate(raw2, np.ones((25, 25), np.uint8)) > 0
+        glowing[keep] = image2[keep]  # the letters and their glow, cut by the narrow bubble
+        inside = np.zeros(image.shape[:2], np.uint8)
+        cv2.ellipse(inside, (350, 205), (260, 70), 0, 0, 360, 1, -1)
+        glowing[(inside == 0) & keep] = 255
+        tight = cv2.dilate(raw2, np.ones((5, 5), np.uint8)) > 0
+        extra = quality.bubble_glow(glowing, tight, quads, (5, 4, 2), 30)
+        self.assertFalse((extra & (inside == 0)).any())
+
+
+def tilted(image, quads, degrees):
+    """``image`` and its line quads turned ``degrees`` counter-clockwise about the centre of the text."""
+    points = np.concatenate([np.asarray(q, np.float32).reshape(4, 2) for q in quads])
+    turn = cv2.getRotationMatrix2D(tuple(float(v) for v in points.mean(axis=0)), degrees, 1.0)
+    h, w = image.shape[:2]
+    out = cv2.warpAffine(image, turn, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+    return out, [cv2.transform(np.asarray(q, np.float32).reshape(-1, 1, 2), turn).reshape(4, 2) for q in quads], turn
+
+
+class TiltedWindowTest(unittest.TestCase):
+    """A system window drawn tilted in the panel stayed in English (Manhwa teste p73): its frame
+    runs across the rows and columns the frame is looked for in."""
+
+    def test_tilted_window_is_found_with_its_turned_frame(self):
+        image, mask, quads, (x0, y0, x1, y1) = system_window()
+        turned, tquads, turn = tilted(image, quads, 12)
+        self.assertIsNone(quality.system_window(turned, tquads))  # the defect
+        window = quality.tilted_window(turned, tquads)
+        self.assertIsNotNone(window)
+        self.assertAlmostEqual(window["angle"], -12, delta=1.5)
+        corners = cv2.transform(np.float32([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]).reshape(-1, 1, 2), turn).reshape(4, 2)
+        poly = np.asarray(window["poly"], float)
+        self.assertLess(np.abs(poly - corners).max(), 14, (poly, corners))  # inside the turned frame
+        self.assertTrue(20 <= window["letters"] <= 30, window)
+
+    def test_neighbours_are_no_tilted_window(self):
+        # A turned sky with white letters and no frame stays art; a straight window is system_window's.
+        image, mask, quads, _ = system_window(frame=False)
+        turned, tquads, _ = tilted(image, quads, 12)
+        self.assertIsNone(quality.tilted_window(turned, tquads))
+        image, mask, quads, _ = system_window()
+        self.assertIsNone(quality.tilted_window(image, quads))
+
+
+class WindowGlowTest(unittest.TestCase):
+    """The glow of the letters of a window runs past the cleaning mask and stayed as a smear
+    (Manhwa teste p25: the tip of an italic "J" left by the cleaning, which also narrowed the room
+    of the translation to four short lines)."""
+
+    def glowing(self):
+        image, mask, quads, frame = system_window(icons=True)
+        window = quality.system_window(image, quads)
+        quads = quads[1:]  # the buttons left the region (engine_compat.drop_window_buttons)
+        layer = np.zeros(image.shape[:2], np.uint8)
+        for text, x, y in (("[THE HELPER IS PREPARING", 120, 195), ("AN ULTIMATE SKILL!]", 175, 250)):
+            cv2.putText(layer, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1.1, 255, 9)
+        glow = cv2.GaussianBlur(layer, (0, 0), 4).astype(float) / 255
+        glowing = np.clip(image + glow[..., None] * 140, 0, 255).astype(np.uint8)
+        tight = mask > 0  # the cleaning mask: the strokes, not their light
+        return glowing, tight, window, glow, quads
+
+    def test_glow_touching_the_letters_joins_the_cleaning(self):
+        image, tight, window, glow, quads = self.glowing()
+        extra = quality.window_glow(image, tight, window, quads)
+        bright = (glow > 0.3) & ~tight  # the halo that shows
+        self.assertGreater(np.mean(extra[bright]), 0.9)
+
+    def test_buttons_frame_and_far_light_stay(self):
+        image, tight, window, glow, quads = self.glowing()
+        cv2.circle(image, (580, 290), 9, (250, 250, 250), -1)  # a light spark far from the letters
+        # The engine's mask runs onto a button (Manhwa teste p98: its "-" went with the glow).
+        tight = tight.copy()
+        tight[124:132, 538:546] = True
+        extra = quality.window_glow(image, tight, window, quads)
+        rx0, ry0, rx1, ry1 = window["rect"]
+        self.assertFalse(extra[:ry0].any() or extra[ry1 + 1:].any() or extra[:, :rx0].any() or extra[:, rx1 + 1:].any())
+        self.assertFalse(extra[118:148, 532:600].any())  # the buttons in the corner
+        self.assertFalse(extra[278:302, 568:592].any())  # the spark
+
+
+class SystemCardTest(unittest.TestCase):
+    """A system message on a whole panel of one tint: translated in the room of its panel, as a window."""
+
+    def test_card_is_found_with_its_panel_and_letters(self):
+        image, quads, (x0, y0, x1, y1) = system_card()
+        self.assertIsNone(quality.system_window(image, quads))  # the defect: no frame of a window
+        card = quality.system_card(image, quads)
+        self.assertIsNotNone(card)
+        rx0, ry0, rx1, ry1 = card["rect"]
+        self.assertTrue(abs(rx0 - x0) <= 6 and abs(ry0 - y0) <= 6 and abs(rx1 - x1) <= 6 and abs(ry1 - y1) <= 6, card)
+        self.assertGreaterEqual(min(card["fg"]), 220)  # light letters
+        self.assertGreater(card["body"][2], card["body"][0] + 60)  # on blue
+        self.assertTrue(24 <= card["letters"] <= 34, card)
+
+    def test_card_cut_by_the_end_of_the_slice_is_found(self):
+        # The panel runs on into the next slice: the end of the image closes it.
+        image, quads, _ = system_card()
+        self.assertIsNotNone(quality.system_card(image[:420], quads))
+
+    def test_neighbours_are_no_card(self):
+        # A drawing of many colours in the panel, the same tint with no border (a sky), a grey panel
+        # (black and white), and the vivid window drawn over the drawing keep their own path.
+        for kwargs in ({"inside": "art"}, {"border": False}, {"colour": (128, 128, 128)}):
+            image, quads, _ = system_card(**kwargs)
+            self.assertIsNone(quality.system_card(image, quads), kwargs)
+        image, mask, quads, _ = system_window(frame=False)
+        self.assertIsNone(quality.system_card(image, quads))
 
 
 def dark_blob(letters=(250, 250, 250), ground=(30, 32, 36), paper=(255, 255, 255)):
@@ -3443,6 +3666,39 @@ class SystemWindowTest(unittest.TestCase):
     def test_window_on_white_paper_is_found(self):
         image, mask, quads, _ = system_window(behind="paper")
         self.assertIsNotNone(quality.system_window(image, quads))
+
+    def test_window_with_one_side_over_a_dark_panel_is_found(self):
+        # The window overlaps the dark panel under it: the frame on that side is too dim to be
+        # found, and the window stayed in English (Manhwa teste p95, p97).  The lost side is put as
+        # far from the text as the opposite one.
+        for side in ("bottom", "top", "left", "right"):
+            image, mask, quads, (x0, y0, x1, y1) = system_window(faint=(side,))
+            window = quality.system_window(image, quads)
+            self.assertIsNotNone(window, side)
+            rx0, ry0, rx1, ry1 = window["rect"]
+            tx0, ty0 = min(q[0][0] for q in quads), quads[0][0][1]
+            tx1, ty1 = max(q[1][0] for q in quads), quads[-1][2][1]
+            self.assertTrue(rx0 < tx0 and tx1 < rx1 and ry0 < ty0 and ty1 < ry1, (side, window))
+            # The inner line of the frame is 8 px in, and the text of this window is 12 px (across
+            # 15 px) off its centre: the mirrored side is that much off the frame.
+            self.assertTrue(abs(rx0 - x0) <= 40 and abs(rx1 - x1) <= 40, (side, window))
+            self.assertTrue(abs(ry0 - y0) <= 22 and abs(ry1 - y1) <= 22, (side, window))
+            if side in ("top", "bottom"):
+                self.assertLessEqual(abs((ty0 - ry0) - (ry1 - ty1)), 2, (side, window))
+            else:
+                self.assertLessEqual(abs((tx0 - rx0) - (rx1 - tx1)), 2, (side, window))
+
+    def test_light_window_with_a_dim_frame_is_found(self):
+        # A light, translucent window over paper: its frame is about 50 (grey) above the window, not
+        # 60 (Manhwa teste p73, p95).
+        image, mask, quads, _ = system_window(behind="paper", colour=(50, 150, 240), frame_colour=(160, 205, 245))
+        self.assertIsNotNone(quality.system_window(image, quads))
+
+    def test_frame_on_two_sides_is_no_window(self):
+        # Two light lines across a vivid drawing (a thin gutter above and below the text) are no frame.
+        for sides in (("top", "bottom"), ("left", "right"), ("top", "left")):
+            image, mask, quads, _ = system_window(faint=sides)
+            self.assertIsNone(quality.system_window(image, quads), sides)
 
     def test_red_window_is_found_across_the_end_of_the_hue_circle(self):
         image, mask, quads, _ = system_window(colour=(225, 30, 60))

@@ -155,6 +155,21 @@ class ServerTest(unittest.TestCase):
         self.assertEqual([r.text for r in result], ["...?!", "HI ★"])  # punctuation and speech stay
         self.assertEqual([r.text for r in ctx.mangalate_preserved], ["‥ ●"])
 
+    def test_a_tag_left_after_the_second_try_is_not_lettered(self):
+        # Manga P&B p9: "WHAT SAY YOU?" came back "【SFX】".  The second try asks again; when the
+        # tag is still there, the line stays as drawn and the page goes to review.
+        async def engine(self, config, ctx):
+            for region, answer in zip(ctx.text_regions, ("【SFX】", "Oi!", "SFX")):
+                region.translation = answer
+            return list(ctx.text_regions)
+        regions = [SimpleNamespace(text=text, translation="", mangalate_background={"kind": "interior"})
+                   for text in ("WHAT SAY YOU?", "HI!", "SFX")]
+        ctx = SimpleNamespace(text_regions=list(regions), mangalate_preserved=[])
+        with patch.dict("os.environ", {"MANGALATE_LEGACY_QUALITY": "false"}):
+            result = asyncio.run(validate_page_translations(engine)(None, None, ctx))
+        self.assertEqual([r.text for r in result], ["HI!", "SFX"])
+        self.assertEqual([r.text for r in ctx.mangalate_preserved], ["WHAT SAY YOU?"])
+
     def test_byok_provider_without_usage_and_truncated_output(self):
         response = SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content="<|1|>Olá!"), finish_reason="stop")],

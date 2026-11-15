@@ -2,6 +2,38 @@
 
 As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://github.com/mihonapp/mihon/blob/main/CHANGELOG.md).
 
+## Em teste
+
+### Janelas de sistema e balões com brilho
+- Janela de sistema com um lado da moldura apagado (a janela passa por cima de um painel escuro) agora é achada: o lado que falta fica à mesma distância do texto que o oposto (`WINDOW_LOST_SIDES`). A moldura de uma janela translúcida clara conta a partir de 40 tons acima do fundo, não 60 (`WINDOW_FRAME_LIGHTER`).
+- Mensagem de sistema escrita num painel inteiro de uma só cor (efeito de falha, tela brilhando), sem moldura de janela, é traduzida como janela, no espaço do painel (`quality.system_card`). Precisa da borda escura do quadro em três lados e do painel todo na mesma cor; um céu sem borda, um painel desenhado ou cinza continuam como arte.
+- Janela de sistema desenhada inclinada no quadro é achada com o texto endireitado e traduzida inclinada, na fonte, cor e tamanho da original (`quality.tilted_window`).
+- Balão preto com letra clara e brilhante deixou de ser lido como desenho: o brilho em volta das letras não conta como arte quando a margem mais afastada é fundo liso (`quality.glowing_letters`). Antes a fala inteira ficava em inglês.
+- Numa janela de sistema, os 【 】 que a IA às vezes devolve viram os [ ] da janela, mesmo quando o OCR não leu os colchetes do original. Antes o texto pulava o letreiramento da janela e saía em Arial, passando da moldura.
+- O brilho das letras que passa da máscara entra na limpeza, dentro da janela (`quality.window_glow`) e no balão escuro (`quality.bubble_glow`), sem os botões da janela, o papel ou o contorno do balão. Antes ficava uma mancha com a forma das linhas antigas, que também estreitava o espaço da tradução.
+- Mensagem num painel de uma cor só agora conta para revisão, como fala sobre o desenho (`engine_compat.over_the_art`): a cor do painel pode ser um desenho no mesmo tom.
+- Colchetes que o OCR não leu numa janela voltam quando outra janela da mesma página tem os dela (`quality.page_window_brackets`).
+
+### Tradução
+- Uma resposta da IA que é só uma etiqueta ("【SFX】", "[efeito sonoro]") no lugar da fala ganha uma segunda tentativa (`quality_translation.PLACEHOLDER`). Se a etiqueta voltar, a fala fica como foi desenhada e a página vai para revisão. Antes a etiqueta era escrita no balão.
+- A memória da obra não aprende mais um substantivo em -tion/-sion traduzido como outra coisa que não -ção/-são ("INCARNATION=encarnado"), que espalhava "seu encarnado" pelo capítulo (`memory.wrong_noun`).
+- Uma resposta da IA toda em maiúsculas, quando volta para a caixa normal, mantém o sobrenome curto de um nome que ficou em inglês ("Junghyeok Yu", antes "Junghyeok yu"). O nome vale inteiro, então a palavra curta continua minúscula no resto da frase; partículas e palavras curtas ("de", "do", "van", "no") nunca contam como sobrenome. Um nome no começo da frase também é acertado (`quality_text.source_names`, `sentence_case`).
+
+### Emendas de webtoon
+- A metade guardada de um balão cortado entre duas fatias não cobre mais os balões que são só da página de baixo. Antes ela colava por cima da tradução o balão vizinho ainda em inglês ("WAS I", "AREN'T YOU?"). Onde a caixa desse balão encosta no balão cortado, vale a metade guardada, para as letras do balão cortado nunca saírem misturadas.
+
+### Letreiramento
+- Dois balões desenhados como uma forma só, cada um com a sua fala: o espaço de cada um é cortado no meio entre os textos, e o bloco era centralizado entre esse corte e o contorno do outro lado, descendo para a ponta do balão com letra menor. Agora o bloco centralizado no texto original também é tentado, e vale o que der letra maior, sem passar do corte.
+
+### Testes
+- `test_quality.py`: etiqueta no lugar da fala pede segunda tentativa; janela com um lado apagado, janela clara com moldura fraca e com moldura em dois lados só, cartão de sistema e vizinhos (painel desenhado, céu sem borda, painel cinza), janela inclinada, letra brilhante em balão preto e vizinhos (letra clara sobre desenho escuro), brilho na limpeza da janela (sem os botões) e do balão escuro (sem o papel).
+- `test_lettering.py`: janela inclinada escrita inclinada dentro da moldura girada; balões colados com a letra do balão sozinho, sem passar do corte.
+- `test_rounds.py`: colchetes 【 】 numa janela viram [ ]; fora da janela, a regra de antes continua.
+- `test_memory.py`: -tion/-sion traduzido como particípio não é aprendido; nomes e -ção/-são continuam.
+- `test_rounds.py`: mensagem em painel de uma cor conta para revisão; colchetes da janela vindos da página; sobrenome curto numa resposta em maiúsculas, sem tomar partícula por sobrenome.
+- `test_server.py`: etiqueta que volta na segunda tentativa não é letreirada.
+- `test_seams.py`: balão da página de baixo ao lado do balão cortado mantém a própria tradução, e o balão cortado nunca sai com letras misturadas.
+
 ## 0.7.1
 
 - **Reportar página:** agora em todos os modos e por e-mail. O app monta a página original, a tradução e uma nota e abre o e-mail já pronto para quem cuida do Mangalate.

@@ -132,8 +132,21 @@ def finish(strip, result, regions, cache, salt=""):
     full = np.asarray(result)
     page = np.array(strip.crop(result))
     own_key = page_key(strip.page, salt)
+    # A bubble wholly in this page keeps this page's rendering: the stored half is a rectangle with a
+    # margin, and the other request saw that bubble only as context, still in English (Manhwa teste
+    # p37 "AREN'T YOU?" pasted over its translation, p38 "WAS I").
+    own = np.zeros(page.shape[:2], bool)
+    crossing = np.zeros(page.shape[:2], bool)
+    for region in regions or []:
+        rx0, ry0, rx1, ry1 = region_box(region)
+        cut = ry0 < strip.top < ry1 or ry0 < strip.bottom < ry1
+        rows = slice(max(0, ry0 - strip.top - (0 if cut else MARGIN)), max(0, ry1 - strip.top + (0 if cut else MARGIN)))
+        cols = slice(max(0, rx0 - (0 if cut else MARGIN)), max(0, rx1 + (0 if cut else MARGIN)))
+        (crossing if cut else own)[rows, cols] = True  # a cut bubble: its halves must match
+    own &= ~crossing
     for (x0, y0, x1, y1), patch in cache.take(own_key):
-        page[y0:y1, x0:x1] = patch
+        keep = own[y0:y1, x0:x1]
+        page[y0:y1, x0:x1] = np.where(keep[..., None], page[y0:y1, x0:x1], patch)
     for region in regions or []:
         rx0, ry0, rx1, ry1 = region_box(region)
         mx = MARGIN + (rx1 - rx0) // 4

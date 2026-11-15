@@ -234,6 +234,11 @@ def portuguese_problems(source, text):
     return notes
 
 
+# A label in place of the line ("【SFX】" for "WHAT SAY YOU?", Manga teste p9): it was lettered in
+# the bubble.  Only the whole answer being such a tag, and a source that is not the tag itself.
+PLACEHOLDER = re.compile(r"^\W*(?:sfx|fx|sound\s+effects?|efeitos?\s+sonoros?|onomatopeias?|blank|n/a)\W*$", re.I)
+
+
 def translation_problems(sources, translations, glossary=(), earlier=""):
     """Notes for a second try: dropped names and negations, feminine forms with no woman in sight.
 
@@ -255,6 +260,9 @@ def translation_problems(sources, translations, glossary=(), earlier=""):
             # The prompt leaves "isolated sound effects" alone, but a region here sits in a bubble
             # or caption: unchanged, the engine drops it and the English stays on the page.
             notes.append(f"<|{number}|> {UNCHANGED_NOTE}")
+            continue
+        if PLACEHOLDER.match(text) and not PLACEHOLDER.match(str(source)):
+            notes.append(f"<|{number}|> is a placeholder tag, not a translation; translate the whole line")
             continue
         letters = re.findall(r"[^\W\d_]", text)
         if len(letters) == 1 and letters[0].lower() not in "aeoéóô" and len(re.findall(r"[^\W\d_]", str(source))) > 2:

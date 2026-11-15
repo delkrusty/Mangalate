@@ -908,6 +908,95 @@ class SystemWindowLayoutTest(unittest.TestCase):
         self.assertLessEqual(np.abs(np.median(core, axis=0) - np.asarray(window["fg"])).max(), 12)
 
 
+class JoinedBubblesLayoutTest(unittest.TestCase):
+    """Two bubbles drawn as one joined shape, each with its own text, both translated.
+
+    The room of each is cut halfway between the texts; the block was centred between that cut and
+    the far outline, pushed into the taper of the bubble, and its letters shrank (Manhwa teste p36:
+    from 45 to 37 once the bubble above was translated too).
+    """
+    SHAPE = [[46, 488], [47, 697], [300, 801], [330, 793], [332, 913], [537, 992], [740, 912], [740, 758],
+             [561, 686], [560, 487], [303, 382]]
+    ABOVE, BELOW = (97, 494, 508, 692), (381, 754, 691, 916)
+    TEXT = "Especialmente um envolvendo uma história colossal..."
+
+    def page(self):
+        image = np.full((1100, 800, 3), 255, np.uint8)
+        shape = np.int32(self.SHAPE)
+        cv2.fillPoly(image, [shape], (0, 0, 0))
+        return image
+
+    def test_neighbour_cut_keeps_the_letters_of_the_bubble_alone(self):
+        image = self.page()
+        alone = lettering.plan_shaped(image, self.BELOW, [], self.TEXT, FONT, 36.5, 8)
+        shared = lettering.plan_shaped(image, self.BELOW, [self.ABOVE], self.TEXT, FONT, 36.5, 8)
+        self.assertGreaterEqual(shared["size"], 0.95 * alone["size"], (shared, alone))
+        # Never past the cut: the bubble above keeps its half.
+        self.assertGreaterEqual(shared["box"][1], (self.ABOVE[3] + self.BELOW[1]) // 2)
+
+    def test_bubble_above_keeps_its_room(self):
+        # The neighbour's half, the other way round: its block stays above the cut.
+        image = self.page()
+        plan = lettering.plan_shaped(image, self.ABOVE, [self.BELOW], "Desde quando o centro interfere?",
+                                     FONT, 32.0, 8)
+        self.assertLessEqual(plan["box"][3], (self.ABOVE[3] + self.BELOW[1]) // 2)
+
+
+class TiltedWindowLayoutTest(unittest.TestCase):
+    """A tilted system window (quality.tilted_window) is lettered tilted, inside its turned frame.
+
+    Manhwa teste p73: the window drawn tilted in the panel stayed in English.
+    """
+    TRANSLATION = "[O ajudante está preparando um golpe especial!]"
+
+    def test_translation_is_lettered_tilted_inside_the_turned_frame(self):
+        import types
+        from unittest import mock
+        import quality
+        from engine_compat import bubble_layout
+        from test_quality import system_window, tilted
+        image, _, quads, _ = system_window()
+        image, quads, _ = tilted(image, quads, 12)
+        window = quality.tilted_window(image, quads)
+        self.assertIsNotNone(window)
+        clean = image.copy()
+        for q in quads:  # the letters cleaned
+            cv2.fillPoly(clean, [np.round(q).astype(np.int32).reshape(-1, 1, 2)], window["body"])
+        calls = []
+        rendering = types.SimpleNamespace(
+            resize_regions_to_font_size=lambda img, regions, *a: [np.zeros((1, 4, 2), np.int64) for _ in regions],
+            render=lambda img, region, *a: calls.append("engine") or img, fg_bg_compare=lambda fg, bg: (fg, bg))
+        text_render = types.SimpleNamespace(
+            calc_horizontal=lambda size, text, w, h, lang, hyphenate: char_layout(text)(size, w, h),
+            put_text_horizontal=lambda *a: None)
+        bubble_layout(rendering, text_render)
+        lines = np.array(quads)
+        region = types.SimpleNamespace(
+            xyxy=(int(lines[..., 0].min()), int(lines[..., 1].min()), int(lines[..., 0].max()), int(lines[..., 1].max())),
+            lines=lines, font_size=30, direction="h", horizontal=True, target_lang="PTB",
+            text="[THE HELPER IS PREPARING AN ULTIMATE SKILL!]", mangalate_background={"kind": "janela"},
+            mangalate_window=window, get_translation_for_rendering=lambda: self.TRANSLATION,
+            get_font_colors=lambda: ((0, 0, 0), (255, 255, 255)))
+        with mock.patch.object(lettering, "window_font", lambda: FONT):
+            rendering.resize_regions_to_font_size(clean, [region], None, 0, -1)
+        out = rendering.render(clean.copy(), region, None, False, None, False)
+        self.assertEqual(calls, [])  # never the engine's drawing
+        changed = (np.abs(out.astype(int) - clean.astype(int)).max(axis=2) > 40).astype(np.uint8)
+        self.assertGreater(changed.sum(), 500)
+        inside = np.zeros(changed.shape, np.uint8)
+        cv2.fillPoly(inside, [np.round(np.asarray(window["poly"])).astype(np.int32).reshape(-1, 1, 2)], 1)
+        self.assertFalse((changed & (1 - inside)).any())  # inside the turned frame
+        # Tilted as the original lines: the long axis of the lettered block.
+        (_, _), (bw, bh), angle = cv2.minAreaRect(np.argwhere(changed)[:, ::-1].astype(np.float32))
+        tilt = angle if bw >= bh else angle - 90
+        tilt = (tilt + 90) % 180 - 90
+        self.assertAlmostEqual(abs(tilt), 12, delta=3)
+        # The box the engine and the seams read bounds the lettering on the page.
+        x0, y0, x1, y1 = region.mangalate_shaped["box"]
+        ys, xs = np.nonzero(changed)
+        self.assertTrue(x0 - 2 <= xs.min() and xs.max() <= x1 + 2 and y0 - 2 <= ys.min() and ys.max() <= y1 + 2)
+
+
 class DarkBlotLayoutTest(unittest.TestCase):
     """Light letters in a blot of ink (quality.light_on_dark) are lettered across the blot.
 
