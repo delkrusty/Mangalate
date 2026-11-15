@@ -162,13 +162,14 @@ def sentence_case(text, names=()):
     letters = [c for c in text or "" if c.isalpha()]
     # A short hesitation ("EU...") is fixed too; a short shout ("NÃO!") is not.
     trailing = re.search(r"(\.\.|…)\W*$", text or "") and "!" not in (text or "")
-    if (len(letters) < 6 and not (trailing and len(letters) >= 2)) or has_cjk(text) \
+    # 【 】 are the engine's brackets, not CJK text (Manhwa teste p25: a window answer in capitals).
+    if (len(letters) < 6 and not (trailing and len(letters) >= 2)) or has_cjk(re.sub("[【】]", "", text or "")) \
             or any(c.islower() for c in letters):
         return text
     out = text.lower()
     out = re.sub(r"(^|[.!?…]\s+|^[\W_]+)(\w)", lambda m: m.group(1) + m.group(2).upper(), out)
     for name in sorted({n for n in names if n and n[:1].isupper()}, key=len, reverse=True):
-        out = re.sub(rf"(?<!\w){re.escape(name.lower())}(?!\w)", name, out)
+        out = re.sub(rf"(?<!\w){re.escape(name)}(?!\w)", name, out, flags=re.I)
     return out
 
 
@@ -176,6 +177,15 @@ def sentence_case(text, names=()):
 COGNATES = {"real", "normal", "total", "final", "animal", "hotel", "mental", "natural", "legal",
             "general", "capital", "plan", "drama", "mana", "area", "idea", "radio", "virus", "zero",
             "super", "hobby", "show", "status", "chef", "bacon", "game", "online", "sexy", "sofa"}
+
+
+# Short words of English and Portuguese and name particles: never taken for a surname.
+SHORT_WORDS = {"de", "da", "do", "dos", "das", "di", "du", "del", "van", "von", "la", "le", "el", "los", "no", "na",
+               "nos", "nas", "em", "um", "e", "o", "a", "os", "as", "ao", "aos", "que", "se", "me", "te", "eu", "tu",
+               "ele", "ela", "foi", "vai", "sem", "com", "por", "mas", "nem", "the", "of", "and", "to", "in", "on",
+               "at", "is", "it", "by", "for", "an", "or", "be", "we", "he", "she", "you", "i", "my", "his", "her",
+               "our", "not", "was", "are", "has", "had", "did", "can", "all", "but", "so", "up", "out", "too", "now",
+               "who", "how", "why", "yes", "ok", "oh", "ah", "eh", "uh", "hm", "ha", "huh", "hey", "sir", "jr", "sr"}
 
 
 def source_names(original, translation):
@@ -186,8 +196,19 @@ def source_names(original, translation):
     """
     words = set(re.findall(r"[A-Za-zÀ-ÿ]{4,}", original or ""))
     kept = (translation or "").lower()
-    return {w[:1].upper() + w[1:].lower() for w in words
-            if w.lower() not in COGNATES and re.search(rf"(?<![\wÀ-ÿ]){re.escape(w.lower())}(?![\wÀ-ÿ])", kept)}
+
+    def stays(word):
+        return re.search(rf"(?<![\wÀ-ÿ]){re.escape(word.lower())}(?![\wÀ-ÿ])", kept)
+
+    names = {w[:1].upper() + w[1:].lower() for w in words if w.lower() not in COGNATES and stays(w)}
+    # A short surname right after a kept name ("JUNGHYEOK YU" -> "Junghyeok Yu"), kept right after it
+    # too.  The whole name is returned, so the short word elsewhere keeps its case; particles and
+    # short words of either language ("de", "do", "van", "no") are never a surname.
+    for name, short in re.findall(r"(?<![\wÀ-ÿ])([A-Za-zÀ-ÿ]{4,})\s+([A-Za-zÀ-ÿ]{2,3})(?![\wÀ-ÿ])", original or ""):
+        first = name[:1].upper() + name[1:].lower()
+        if first in names and short.lower() not in SHORT_WORDS and stays(f"{name} {short}"):
+            names.add(f"{first} {short[:1].upper()}{short[1:].lower()}")
+    return names
 
 
 def tidy_start(text, original="", names=()):

@@ -83,6 +83,19 @@ def split_terms(content):
     return TERMS_LINE.sub("", content).rstrip(), terms
 
 
+# An English noun in -tion/-sion is a Portuguese noun in -ção/-são: one word listed as something else
+# ("INCARNATION=encarnado", Manhwa teste) is a participle or an adjective, and spread "seu encarnado"
+# over the chapter.  A name kept as it is ("SEBASTION") is no translation of the noun.
+TION_SOURCE = re.compile(r"^[A-Za-z]+[TS]IONS?$", re.I)
+TION_TARGET = re.compile(r"(?:ção|são|ções|sões)$", re.I)
+
+
+def wrong_noun(source, target):
+    source, target = source.strip(), target.strip()
+    return (bool(TION_SOURCE.match(source)) and " " not in target and not TION_TARGET.search(target)
+            and normalize(source) != normalize(target))
+
+
 def accept_terms(terms, page_text, pinned=()):
     """Terms whose source is on the page, short, and not overriding a pinned term."""
     page = f" {normalize(page_text)} "
@@ -93,6 +106,10 @@ def accept_terms(terms, page_text, pinned=()):
         if (not key or not target.strip() or len(source) > MAX_TERM_LEN or len(target) > MAX_TERM_LEN
                 or re.search(r"-\s|-$", source.strip())  # word cut by the lettering: "WET- SUIT"
                 or "<|" in target or key in pinned or f" {key} " not in page):
+            continue
+        if wrong_noun(source, split_gender(target)[0]):
+            print(f"Memória da obra: termo recusado {source.strip()}={target.strip()} (substantivo em -ção/-são)",
+                  flush=True)
             continue
         kept.append((source.strip(), target.strip()))
     return kept

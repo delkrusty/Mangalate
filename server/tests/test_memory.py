@@ -105,6 +105,19 @@ class MemoryTest(unittest.TestCase):
                                       "WET- SUIT AZUSA- SAN"), [])
 
 
+    def test_noun_in_tion_is_not_learned_as_a_participle(self):
+        # Manhwa teste: "INCARNATION=encarnado" was learned and spread "seu encarnado" and "a encarnado"
+        # over the chapter; an English noun in -tion/-sion is a Portuguese noun in -ção/-são.
+        page = "YOUR INCARNATION IS EVOLVING. THE STATIONS. MANY CONSTELLATIONS. DIMENSION. SEBASTION"
+        self.assertEqual(accept_terms([("INCARNATION", "encarnado"), ("DIMENSION", "dimensional")], page), [])
+        kept = accept_terms([("INCARNATION", "Encarnação"), ("STATIONS", "estações"), ("CONSTELLATIONS", "Constelações"),
+                             ("SEBASTION", "Sebastion"), ("DIMENSION", "Dimensão")], page)
+        self.assertEqual([t for _, t in kept], ["Encarnação", "estações", "Constelações", "Sebastion", "Dimensão"])
+        # Longer terms and other words keep the old rule.
+        self.assertEqual(accept_terms([("STAT RESTRICTION", "limite de atributos"), ("STATS", "atributos")],
+                                      "THE STAT RESTRICTION. STATS"),
+                         [("STAT RESTRICTION", "limite de atributos"), ("STATS", "atributos")])
+
 class WorkFieldTest(unittest.TestCase):
     def test_gateway_forwards_only_known_short_fields(self):
         forwarded = json.loads(page_work(json.dumps({"obra": " TBATE ", "capitulo": "236", "pagina": 6,

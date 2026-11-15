@@ -105,6 +105,25 @@ class Round2Test(unittest.TestCase):
         self.assertEqual(sentence_case("RAINHA MERIAL CHEGOU AQUI!", names), "Rainha Merial chegou aqui!")
         self.assertEqual(source_names("THE REAL TRAINING", "O TREINO REAL"), set())
 
+    def test_caps_answer_keeps_a_short_surname(self):
+        # A webtoon system window: "...FEELS PITY FOR INCARNATION, JUNGHYEOK YU." came back in
+        # capitals and the fix wrote "Junghyeok yu": a short word after a kept name is part of it.
+        from quality import sentence_case, source_names
+        names = source_names("PITY FOR HERO, MARIBEL KO.", "PENA DO HERÓI, MARIBEL KO.")
+        self.assertEqual(sentence_case("PENA DO HERÓI, MARIBEL KO.", names), "Pena do herói, Maribel Ko.")
+        names = source_names("VINCENT DE PAUL", "VINCENT DE PAUL")
+        self.assertEqual(sentence_case("VINCENT DE PAUL SAIU DE CASA.", names), "Vincent de Paul saiu de casa.")
+        names = source_names("I SAW MARIA DO SOMETHING", "EU VI MARIA DO LADO")
+        self.assertEqual(sentence_case("EU VI MARIA DO LADO DELE.", names), "Eu vi Maria do lado dele.")
+        names = source_names("ARTHUR NO!", "ARTHUR NO FIM!")
+        self.assertEqual(sentence_case("ARTHUR NO FIM DISSE NÃO!", names), "Arthur no fim disse não!")
+        self.assertEqual(source_names("JUDGE OF FIRE", "JUIZ DO FOGO"), set())
+        # The brackets of a window that came back as 【 】 are not CJK text: the caps are still fixed.
+        self.assertEqual(sentence_case("【CONSTELAÇÃO, JUIZ DO FOGO, ESTÁ BRAVO!】"),
+                         "【Constelação, juiz do fogo, está bravo!】")
+        self.assertEqual(sentence_case("【どうして】"), "【どうして】")
+        self.assertEqual(source_names("MANA UP", "MANA UP"), set())
+
     def test_line_below_a_credit_stays(self):
         from engine_compat import credit_followers
         credit = region(100, 100, 500, 130, "Original Art by: YOYO,")
@@ -412,3 +431,40 @@ class SystemWindowBracketsTest(unittest.TestCase):
         # A window wholly in brackets keeps them when the AI left them out; brackets inside are not added.
         self.assertEqual(square_brackets("O ajudante venceu!", "[THE HELPER WON!]"), "[O ajudante venceu!]")
         self.assertEqual(square_brackets("Ele disse sim", "HE SAID [YES]"), "Ele disse sim")
+
+    def test_window_never_keeps_the_brackets_of_the_engine(self):
+        # A system window whose brackets the OCR missed got 【 】 from the AI; the lettering of the
+        # window skips text with them (has_cjk) and the engine drew it in Arial past the frame (Manhwa
+        # teste p98).  In a window they are its [ ]; elsewhere the original rule stands.
+        from quality import square_brackets
+        self.assertEqual(square_brackets("【Seu corpo está evoluindo...】", "YOUR BODY IS EVOLVING TO A NEW STAG", window=True),
+                         "[Seu corpo está evoluindo...]")
+        self.assertEqual(square_brackets("【Nota】 do autor", "AUTHOR'S NOTE"), "【Nota】 do autor")
+        self.assertEqual(square_brackets("【通知】", "【通知】", window=True), "【通知】")
+
+
+class SystemCardReviewTest(unittest.TestCase):
+    def test_message_on_a_tinted_panel_is_counted_for_review(self):
+        # A system message lettered on a whole panel of one tint (quality.system_card) is translated
+        # over what may be a drawing in that tint: the page is marked for a look, as speech over the art.
+        from types import SimpleNamespace
+        from engine_compat import review_counts
+        card = SimpleNamespace(text="[THE STARS ARE WATCHING.]", mangalate_background={"kind": "janela", "cartao": True})
+        window = SimpleNamespace(text="[LEVEL UP!]", mangalate_background={"kind": "janela"})
+        bubble = SimpleNamespace(text="HELLO.", mangalate_background={"kind": "interior"})
+        ctx = SimpleNamespace(text_regions=[card, window, bubble], mangalate_preserved=[])
+        self.assertEqual(review_counts(ctx), {"preserved": 0, "over_art": 1})
+
+
+class WindowBracketsOnThePageTest(unittest.TestCase):
+    def test_window_whose_brackets_the_ocr_missed_gets_them_from_the_page(self):
+        # Manhwa teste p95: "[THE COINS YOU INVESTED...]" was read without its brackets, the window
+        # under it with them; the translation came out without them.
+        from quality import page_window_brackets
+        out = page_window_brackets(["As moedas passaram do limite.", "[Habilidade ativada!]", "Oi."],
+                                   ["THE COINS PASSED THE LIMIT.", "[SKILL ACTIVATED!]", "HI."],
+                                   [True, True, False])
+        self.assertEqual(out, ["[As moedas passaram do limite.]", "[Habilidade ativada!]", "Oi."])
+        # No window on the page read with brackets, or a bubble: nothing added.
+        self.assertEqual(page_window_brackets(["Subiu de nível!"], ["LEVEL UP!"], [True]), ["Subiu de nível!"])
+        self.assertEqual(page_window_brackets(["Oi.", "[Ok]"], ["HI.", "[OK]"], [False, True]), ["Oi.", "[Ok]"])

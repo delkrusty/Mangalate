@@ -76,6 +76,43 @@ class MatchingHalvesTest(unittest.TestCase):
         np.testing.assert_array_equal(top_page[-1, 100:300], bottom_page[0, 100:300])
         self.assertTrue((bottom_page[0, 100:300] == (200, 30, 30)).all())
 
+    def test_own_bubble_next_to_the_cut_one_keeps_its_translation(self):
+        # The stored half is a rectangle with a margin: it covered a bubble of the second page right
+        # under the cut one, which the first request saw only as context, still in English (Manhwa
+        # teste p37 "AREN'T YOU?" over its translation, p38 "WAS I").
+        upper, lower = slices(long_strip())
+        cache = SeamCache()
+        first = Strip(upper, below=lower)
+        rendered, regions = self.render(first, (200, 30, 30), 0)
+        finish(first, rendered, regions, cache, "cfg")
+        second = Strip(lower, above=upper)
+        rendered, regions = self.render(second, (30, 30, 200), 7)
+        own = (150, second.top + 100, 250, second.top + 125)  # wholly in the second page
+        ImageDraw.Draw(rendered).rectangle(own, fill=(30, 200, 30))
+        regions.append(SimpleNamespace(xyxy=own))
+        bottom_page = np.asarray(finish(second, rendered, regions, cache, "cfg"))
+        self.assertTrue((bottom_page[100:126, 150:251] == (30, 200, 30)).all())
+        # The cut bubble still continues with the first request's rendering.
+        self.assertTrue((bottom_page[0, 100:300] == (200, 30, 30)).all())
+
+    def test_own_bubble_touching_the_cut_one_never_mixes_its_letters(self):
+        # The own bubble's box (with its margin) runs onto the cut bubble: there the cut bubble keeps
+        # the stored half, so its letters are never half of one request and half of the other.
+        upper, lower = slices(long_strip())
+        cache = SeamCache()
+        first = Strip(upper, below=lower)
+        rendered, regions = self.render(first, (200, 30, 30), 0)
+        finish(first, rendered, regions, cache, "cfg")
+        second = Strip(lower, above=upper)
+        rendered, regions = self.render(second, (30, 30, 200), 7)
+        cut_bottom = regions[0].xyxy[3] - second.top  # the cut bubble ends here in the page
+        own = (150, second.top + cut_bottom + 4, 250, second.top + cut_bottom + 30)
+        ImageDraw.Draw(rendered).rectangle(own, fill=(30, 200, 30))
+        regions.append(SimpleNamespace(xyxy=own))
+        bottom_page = np.asarray(finish(second, rendered, regions, cache, "cfg"))
+        self.assertTrue((bottom_page[0:cut_bottom - 7, 100:300] == (200, 30, 30)).all())
+        self.assertTrue((bottom_page[cut_bottom + 4:cut_bottom + 31, 150:251] == (30, 200, 30)).all())
+
     def test_settings_change_does_not_reuse_old_halves(self):
         upper, lower = slices(long_strip())
         cache = SeamCache()

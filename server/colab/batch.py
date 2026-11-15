@@ -233,9 +233,10 @@ async def run(args):
             rescued = getattr(ctx, "mangalate_ocr_rescued", None)
             if rescued:
                 entry["ocr_rescued"] = len(rescued)
-            # Speech over the drawing translated by --art-text traduzir: worth a look.
-            over_art = sum(bool((getattr(region, "mangalate_background", None) or {}).get("sobre_arte"))
-                           for region in getattr(ctx, "text_regions", None) or [])
+            # Speech over the drawing translated by --art-text traduzir, or a message on a tinted
+            # panel (engine_compat.over_the_art): worth a look.
+            from engine_compat import over_the_art
+            over_art = sum(over_the_art(region) for region in getattr(ctx, "text_regions", None) or [])
             if over_art:
                 entry["speech_over_art"] = over_art
             if args.diagnostics:

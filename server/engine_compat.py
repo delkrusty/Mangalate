@@ -194,12 +194,18 @@ def _left_as_speech(region):
             and bool(re.search(r"[^\W_]", str(getattr(region, "text", "")))))
 
 
+def over_the_art(region):
+    """Translated over what may be the drawing: speech over the art, or a system message on a
+    whole panel of one tint (quality.system_card), where the tint may be a drawing."""
+    background = getattr(region, "mangalate_background", None) or {}
+    return bool(background.get("sobre_arte") or background.get("cartao"))
+
+
 def review_counts(ctx):
     """What on the translated page is worth a look, for the app: speech left as drawn and
     speech translated over the art. Sounds, credits, logos and drawn marks stay on purpose."""
     preserved = sum(_left_as_speech(r) for r in getattr(ctx, "mangalate_preserved", None) or [])
-    over_art = sum(bool((getattr(r, "mangalate_background", None) or {}).get("sobre_arte"))
-                   for r in getattr(ctx, "text_regions", None) or [])
+    over_art = sum(over_the_art(r) for r in getattr(ctx, "text_regions", None) or [])
     return {"preserved": preserved, "over_art": over_art}
 
 
@@ -813,18 +819,37 @@ def classify_regions(original_merge):
             # A system window of a game webtoon (quality.system_window): translated, cleaned inside
             # its frame and lettered there in the colour and size of its letters.
             if region.mangalate_background["kind"] in ("interior", "art", "tracos"):
+                card = False
                 try:
-                    from quality import system_window
+                    from quality import system_card, system_window, tilted_window
                     window = system_window(image, region.lines)
+                    if window is None and region.mangalate_background["kind"] != "interior":
+                        # A system message on a whole panel of one tint: lettered as a window, in
+                        # the room of its panel (a bubble that reads as interior keeps its path).
+                        window = system_card(image, region.lines)
+                        card = window is not None
+                    if window is None and region.mangalate_background["kind"] != "interior":
+                        window = tilted_window(image, region.lines)  # a window drawn tilted in the panel
                 except Exception as exc:  # the region goes on as before
                     print(f"System window skipped: {type(exc).__name__}", flush=True)
                     window = None
                 if window is not None:
                     region.mangalate_background["kind"] = "janela"
+                    if card:
+                        region.mangalate_background["cartao"] = True
                     region.mangalate_window = window
                     drop_window_buttons(region)
                     kept.append(region)
                     continue
+            if region.mangalate_background["kind"] == "art":
+                # Light letters glowing in a black bubble: the glow is no drawing (quality.glowing_letters).
+                try:
+                    from quality import glowing_letters
+                    if glowing_letters(image, raw, region.lines):
+                        region.mangalate_background["kind"] = "interior"
+                        region.mangalate_background["brilho"] = True
+                except Exception as exc:  # the region goes on as art
+                    print(f"Glowing letters skipped: {type(exc).__name__}", flush=True)
             if region.mangalate_background["kind"] == "interior":
                 # Light letters on a dark ground: their size and colour, for the lettering (the
                 # letters go with the cleaning).
@@ -1279,6 +1304,18 @@ def bubble_layout(rendering, text_render):
             text = text.upper()
         import cv2
         from quality import WINDOW_FRAME_LIGHT, WINDOW_LIGHTER
+        box = tuple(int(v) for v in region.xyxy)
+        turn = window.get("matrix")
+        if turn is not None:
+            # A tilted window (quality.tilted_window): planned with the page turned straight, its
+            # letters turned back when drawn; the room is its frame alone.
+            h, w = img.shape[:2]
+            img = cv2.warpAffine(np.ascontiguousarray(img[:, :, :3]), np.asarray(turn, np.float32), (w, h),
+                                 flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+            pts = cv2.transform(np.asarray(region.lines, np.float32).reshape(-1, 1, 2),
+                                np.asarray(turn, np.float32)).reshape(-1, 2)
+            box = (int(pts[:, 0].min()), int(pts[:, 1].min()), int(pts[:, 0].max()), int(pts[:, 1].max()))
+            others = []
         rx0, ry0, rx1, ry1 = (int(v) for v in window["rect"])
         body = np.asarray(window["body"], np.uint8)
         room = np.empty_like(img[:, :, :3])
@@ -1292,8 +1329,16 @@ def bubble_layout(rendering, text_render):
         room[light] = 255 - body
         size = line_height(region)
         target = window["letters"] / lettering.capital_share(font)
-        return lettering.plan_shaped(room, tuple(int(v) for v in region.xyxy), others, text, font, size, minimum,
-                                     offset=offset, scale=target / size)
+        shaped = lettering.plan_shaped(room, box, others, text, font, size, minimum, offset=offset, scale=target / size)
+        if shaped is not None and turn is not None:
+            # The box on the page (what the engine and seams.region_box read) bounds the turned block.
+            x0, y0, x1, y1 = shaped["box"]
+            corners = cv2.transform(np.float32([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]).reshape(-1, 1, 2),
+                                    np.asarray(window["inverse"], np.float32)).reshape(-1, 2)
+            shaped["turn"] = window["inverse"]
+            shaped["box"] = (int(corners[:, 0].min()), int(corners[:, 1].min()),
+                             int(np.ceil(corners[:, 0].max())), int(np.ceil(corners[:, 1].max())))
+        return shaped
 
     def render(img, region, dst_points, hyphenate, line_spacing, disable_font_border):
         halo = getattr(region, "mangalate_halo", None)
@@ -1313,7 +1358,18 @@ def bubble_layout(rendering, text_render):
         shaped = getattr(region, "mangalate_shaped", None)
         window = getattr(region, "mangalate_window", None)
         if shaped is not None and window and (getattr(region, "mangalate_background", None) or {}).get("kind") == "janela":
-            return lettering.draw_shaped(img, shaped, window["fg"], None)  # the colour of its letters, no outline
+            if shaped.get("turn") is None:
+                return lettering.draw_shaped(img, shaped, window["fg"], None)  # the colour of its letters, no outline
+            # A tilted window: the letters drawn straight, as a coverage, and turned back onto the page.
+            import cv2
+            h, w = img.shape[:2]
+            cover = np.zeros((h, w, 3), np.uint8)
+            lettering.draw_shaped(cover, shaped, (255, 255, 255), None)
+            alpha = cv2.warpAffine(cover[:, :, 0], np.asarray(shaped["turn"], np.float32), (w, h),
+                                   flags=cv2.INTER_LINEAR).astype(np.float32)[..., None] / 255.0
+            fg = np.asarray(window["fg"], np.float32)
+            img[:, :, :3] = np.clip(img[:, :, :3] * (1 - alpha) + fg * alpha, 0, 255).astype(np.uint8)
+            return img
         if shaped is not None and shaped.get("fg") is not None:  # the measured colours (a blot of ink)
             return lettering.draw_shaped(img, shaped, shaped["fg"], None if disable_font_border else shaped["bg"])
         if shaped is not None:
@@ -1591,12 +1647,40 @@ async def refine_mask_consistently(self, config, ctx):
             pad = int(max(8, region.font_size))
             x0, y0, x1, y1 = max(0, rx0 - pad), max(0, ry0 - pad), min(w, rx1 + 1 + pad), min(h, ry1 + 1 + pad)
             allowed = np.zeros((h, w), bool)
-            allowed[max(0, ry0):max(0, ry1 + 1), max(0, rx0):max(0, rx1 + 1)] = True
+            if window.get("poly") is not None:  # a tilted window: the inside of its turned frame
+                poly = np.round(np.asarray(window["poly"], np.float32)).astype(np.int32)
+                x0, y0 = max(0, int(poly[:, 0].min()) - pad), max(0, int(poly[:, 1].min()) - pad)
+                x1, y1 = min(w, int(poly[:, 0].max()) + 1 + pad), min(h, int(poly[:, 1].max()) + 1 + pad)
+                inside = np.zeros((h, w), np.uint8)
+                cv2.fillPoly(inside, [poly.reshape(-1, 1, 2)], 1)
+                allowed |= inside > 0
+            else:
+                allowed[max(0, ry0):max(0, ry1 + 1), max(0, rx0):max(0, rx1 + 1)] = True
             allowed |= other_boxes(ctx.img_rgb, ctx.text_regions, region)
             mask = mask.copy()
             mask[y0:y1, x0:x1][~allowed[y0:y1, x0:x1]] = 0
         except Exception as exc:  # never lose a page over this
             print(f"Window mask skipped: {type(exc).__name__}", flush=True)
+            continue
+        try:  # the glow of its letters past the mask goes with them (quality.window_glow)
+            from quality import window_glow
+            mask[window_glow(ctx.img_rgb, mask, window, region.lines)] = 255
+        except Exception as exc:  # cleaned as the mask says
+            print(f"Window glow skipped: {type(exc).__name__}", flush=True)
+    # Light letters on the dark ground of a bubble: their glow past the mask goes with them
+    # (quality.bubble_glow), the paper and the outline of the bubble stay.
+    for region in ctx.text_regions or []:
+        light = getattr(region, "mangalate_light", None)
+        if (getattr(region, "mangalate_background", None) or {}).get("kind") != "interior" or not light:
+            continue
+        try:
+            from quality import bubble_glow
+            extra = bubble_glow(ctx.img_rgb, mask, region.lines, light["ground"], light["letters"])
+            if extra.any():
+                mask = mask.copy()
+                mask[extra] = 255
+        except Exception as exc:  # cleaned as the mask says
+            print(f"Bubble glow skipped: {type(exc).__name__}", flush=True)
     # Outlined lettering over the art, or lettering crossed by strokes of the drawing: the
     # cleaning stays on the letters (and their outline).
     from quality import letters_area, other_boxes, outlined_area, outlined_on_lines
@@ -1673,6 +1757,15 @@ def validate_page_translations(original_translate):
                 result = [region for region in result if all(region is not mark for mark in drawn)]
                 ctx.mangalate_preserved = list(getattr(ctx, "mangalate_preserved", None) or []) + drawn
                 print(f"Drawn marks left as drawn: {len(drawn)}", flush=True)
+            # A tag in place of the line ("【SFX】") still there after the second try: the line stays
+            # as drawn and the page goes to review, never the tag lettered in the bubble.
+            from quality_translation import PLACEHOLDER
+            tagged = [region for region in result if PLACEHOLDER.match(str(getattr(region, "translation", "")))
+                      and not PLACEHOLDER.match(str(getattr(region, "text", "")))]
+            if tagged:
+                result = [region for region in result if all(region is not tag for tag in tagged)]
+                ctx.mangalate_preserved = list(getattr(ctx, "mangalate_preserved", None) or []) + tagged
+                print(f"Tag in place of the line, left as drawn: {len(tagged)}", flush=True)
             for region in result:
                 if isinstance(getattr(region, "translation", None), str):
                     # The (m)/(f) marks belong to the terms line only (memory.TERMS_INSTRUCTION);
@@ -1683,8 +1776,17 @@ def validate_page_translations(original_translate):
                     own = names | source_names(getattr(region, "text", ""), region.translation)
                     fixed = sentence_case(region.translation, own)
                     fixed = tidy_start(fixed, getattr(region, "text", ""), own)
-                    fixed = square_brackets(fixed, getattr(region, "text", ""))
+                    window = (getattr(region, "mangalate_background", None) or {}).get("kind") == "janela"
+                    fixed = square_brackets(fixed, getattr(region, "text", ""), window=window)
                     region.translation = normalize_spacing(fixed)
+            try:  # brackets the OCR missed on one window of the page (quality.page_window_brackets)
+                from quality import page_window_brackets
+                wins = [(getattr(r, "mangalate_background", None) or {}).get("kind") == "janela" for r in result]
+                for region, text in zip(result, page_window_brackets([getattr(r, "translation", None) for r in result],
+                                                                      [getattr(r, "text", "") for r in result], wins)):
+                    region.translation = text
+            except Exception as exc:  # the translations stay as they are
+                print(f"Window brackets skipped: {type(exc).__name__}", flush=True)
         blank = sum(not getattr(region, "translation", "").strip() for region in regions)
         unchanged = sum(getattr(region, "translation", "").strip().lower() == region.text.strip().lower()
                         for region in regions)

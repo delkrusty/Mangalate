@@ -146,6 +146,58 @@ def classify_region(image, text_mask, quads, line_height=None):
     return {"kind": kind, "interior_share": round(share, 4), "samples": int(len(xs)), "strokes": strokes}
 
 
+# Light letters that glow in a black bubble: the glow runs past the dilated detector mask into the
+# margin sampled above, and the bubble read as art and stayed in English (Manhwa teste p29, p36,
+# p37).  Pixels of the margin lighter than the ground and close to the letters are their glow, when
+# the margin farther out is all ground; a drawing behind the letters is everywhere in the margin.
+GLOW_GROUND = 40     # grey: the fitted ground is at most this light (a black bubble)...
+GLOW_LETTERS = 0.08  # ...and the letters, DARK_LIGHTER lighter than it, on this share of the line boxes
+GLOW_REACH = 0.4     # the glow runs this far from the detector mask, in line heights
+GLOW_LIGHTER = 8     # a pixel of glow is at least this much lighter (grey) than the ground
+
+
+def glowing_letters(image, text_mask, quads):
+    """True when the block classify_region calls art is light letters glowing on a dark interior."""
+    quads = [np.asarray(q, np.float32).reshape(4, 2) for q in quads]
+    if not quads or text_mask is None:
+        return False
+    img = np.asarray(image)[:, :, :3]
+    h, w = img.shape[:2]
+    line_height = float(np.median([max(np.ptp(q[:, 1]), 1.0) for q in quads]))
+    # The margin classify_region samples.
+    pad = int(max(4, round(line_height * 0.35)))
+    lines = _line_mask(img.shape, quads)
+    raw = (np.asarray(text_mask) > 0).astype(np.uint8)
+    grow = int(max(5, round(line_height * 0.3))) | 1
+    text = cv2.dilate(raw, np.ones((grow, grow), np.uint8))
+    inner = cv2.erode(lines, np.ones((3, 3), np.uint8))
+    near = cv2.dilate(lines, np.ones((2 * pad + 1, 2 * pad + 1), np.uint8))
+    sample = (text == 0) & (inner == 0) & (near > 0)
+    ys, xs = np.nonzero(sample)
+    if len(xs) < MIN_SAMPLES:
+        return False
+    values = img[ys, xs].astype(np.float64)
+    residual = _fit_background(np.column_stack([xs, ys]).astype(np.float64), values)
+    ground_px = residual <= BACKGROUND_TOLERANCE
+    if not ground_px.any():
+        return False
+    weights = np.array([0.299, 0.587, 0.114])
+    grey = values @ weights
+    ground = float(np.median(grey[ground_px]))
+    if ground > GLOW_GROUND:
+        return False
+    gray = cv2.cvtColor(np.ascontiguousarray(img), cv2.COLOR_RGB2GRAY).astype(int)
+    if np.mean(gray[lines > 0] >= ground + DARK_LIGHTER) < GLOW_LETTERS:
+        return False
+    distance = cv2.distanceTransform((raw == 0).astype(np.uint8), cv2.DIST_L2, 3)[ys, xs]
+    close = distance <= GLOW_REACH * line_height
+    glow = ~ground_px & close & (grey >= ground + GLOW_LIGHTER)
+    far = ~close
+    if far.sum() < MIN_SAMPLES:
+        return False
+    return bool(np.mean(ground_px | glow) >= MIN_INTERIOR_SHARE and np.mean(ground_px[far]) >= MIN_INTERIOR_SHARE)
+
+
 # Lettering written straight on a white part of the drawing (hair, a sky with speed lines) has a
 # margin that is mostly paper, but strokes of the drawing run across it into the text: the
 # cleaning erased them with the letters (One Piece 1161 p5, Grand Blue 102 p35).  A
@@ -1366,12 +1418,18 @@ WINDOW_HUE = 12           # hue distance (OpenCV 0-180) still counted as the win
 WINDOW_HUE_SHARE = 0.8    # ...on this share of the margin of the lines, the drawing showing through
 WINDOW_LIGHTER = 60       # the letters (and the frame) are this much lighter (grey) than the window...
 WINDOW_LETTERS = 0.05     # ...the letters on at least this share of the line boxes
-WINDOW_FRAME_LIGHT = 190  # a pixel of the frame is at least this light (grey)
+WINDOW_FRAME_LIGHT = 190  # a pixel of the frame is at least this light (grey)...
+WINDOW_FRAME_LIGHTER = 40 # ...and this much lighter than the window (a light, translucent window over
+                          # paper has its frame about 50 above it: Manhwa teste p73, p95)
 WINDOW_FRAME_SHARE = 0.6  # share of a row (a column) along the text that is frame: a long straight line
 WINDOW_FRAME_REACH = 6.0  # the frame is searched this many line heights from the text
 WINDOW_FRAME_THIN = 0.35  # the light line of the frame is at most this thick (line heights; 1-9 px drawn)...
 WINDOW_FRAME_PAST = 3     # ...and the rows (px) right past it...
 WINDOW_FRAME_BEYOND = 30  # ...still have this median saturation (0-255): the window's edge, not paper
+# Sides of the frame that may be missing: a window over the dark panel under it has a dim frame on
+# that side (Manhwa teste p95, p97: the bottom line ran over the panel and the window stayed in
+# English).  The lost side is put as far from the text as the opposite one; windows centre their text.
+WINDOW_LOST_SIDES = 1
 
 
 def system_window(image, lines):
@@ -1423,7 +1481,7 @@ def system_window(image, lines):
     # The frame: on each side the first row (column) along the text that is light almost all the way,
     # a thin line with colour past it.  A vivid caption box or bubble on paper has the paper there,
     # light all the way out.
-    frame = gray >= max(WINDOW_FRAME_LIGHT, ground + WINDOW_LIGHTER)
+    frame = gray >= max(WINDOW_FRAME_LIGHT, ground + WINDOW_FRAME_LIGHTER)
     vivid_map = hsv[..., 1].astype(int)
     reach = int(round(WINDOW_FRAME_REACH * line_height))
     thin = max(2, int(round(WINDOW_FRAME_THIN * line_height)))
@@ -1449,8 +1507,13 @@ def system_window(image, lines):
     bottom = first(frame[below, across], vivid_map[below, across])
     left = first(frame[along, before][:, ::-1].T, vivid_map[along, before][:, ::-1].T)
     right = first(frame[along, after].T, vivid_map[along, after].T)
-    if None in (top, bottom, left, right):
+    sides = [top, bottom, left, right]
+    lost = [k for k, side in enumerate(sides) if side is None]
+    if len(lost) > WINDOW_LOST_SIDES:
         return None
+    for k in lost:
+        sides[k] = sides[k ^ 1]  # top <-> bottom, left <-> right
+    top, bottom, left, right = sides
     core = light & (gray >= np.median(gray[light]))  # the inside of the strokes, not their soft edge
     letters = letter_height(np.where(light, 0, 255).astype(np.uint8), quads)
     return {"rect": (x0 - left + 1, y0 - top + 1, x1 + right - 1, y1 + bottom - 1),
@@ -1459,13 +1522,265 @@ def system_window(image, lines):
             "letters": letters if letters else line_height}
 
 
-def square_brackets(translation, source):
+# A system window drawn tilted in the panel: its frame runs across the rows and columns it is looked
+# for in, and it stayed in English (Manhwa teste p73).  The lines carry the tilt; the window is looked
+# for with the text turned straight, and lettered there (engine_compat turns the letters back).
+WINDOW_TILT_MIN = 3.0    # degrees: lines tilted less than this are straight (system_window finds the window)
+WINDOW_TILT_MAX = 30.0   # degrees: more than this is no window lettered across
+WINDOW_TILT_SEARCH = 2.0 # degrees: the frame is looked for this far around the tilt of the lines (they
+                         # are read about a degree off it; over 400 px that is 7 px)...
+WINDOW_TILT_STEP = 0.5   # ...in steps of this many degrees
+
+
+def line_tilt(lines):
+    """Median tilt of the text lines (degrees, image y down: negative rises to the right), or None."""
+    angles = []
+    for q in ([] if lines is None else lines):
+        q = np.asarray(q, np.float32).reshape(4, 2)
+        (x0, y0), (x1, y1) = q[0], q[1]
+        if x1 - x0 > 0:
+            angles.append(np.degrees(np.arctan2(y1 - y0, x1 - x0)))
+    return float(np.median(angles)) if angles else None
+
+
+def tilted_window(image, lines):
+    """system_window of tilted ``lines``, found with the text turned straight, or None.
+
+    Besides the keys of system_window (in the straight frame), ``angle`` is the tilt, ``matrix``
+    turns the page straight (2x3, cv2.warpAffine), ``inverse`` turns it back and ``poly`` is the
+    inside of the frame on the page (4 corners).
+    """
+    quads = [np.asarray(q, np.float32).reshape(4, 2) for q in ([] if lines is None else lines)]
+    img = np.asarray(image)
+    if not quads or img.ndim != 3:
+        return None
+    angle = line_tilt(quads)
+    if angle is None or not WINDOW_TILT_MIN <= abs(angle) <= WINDOW_TILT_MAX:
+        return None
+    img = np.ascontiguousarray(img[:, :, :3])
+    h, w = img.shape[:2]
+    centre = np.concatenate(quads).mean(axis=0)
+    steps = int(round(WINDOW_TILT_SEARCH / WINDOW_TILT_STEP))
+    for k in [0] + [sign * j for j in range(1, steps + 1) for sign in (-1, 1)]:
+        tried = angle + k * WINDOW_TILT_STEP
+        matrix = cv2.getRotationMatrix2D((float(centre[0]), float(centre[1])), tried, 1.0)
+        straight = cv2.warpAffine(img, matrix, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+        turned = [cv2.transform(q.reshape(-1, 1, 2), matrix).reshape(4, 2) for q in quads]
+        window = system_window(straight, turned)
+        if window is not None:
+            angle = tried
+            break
+    else:
+        return None
+    inverse = cv2.invertAffineTransform(matrix)
+    rx0, ry0, rx1, ry1 = window["rect"]
+    corners = np.float32([[rx0, ry0], [rx1, ry0], [rx1, ry1], [rx0, ry1]]).reshape(-1, 1, 2)
+    window.update(angle=angle, matrix=matrix, inverse=inverse,
+                  poly=cv2.transform(corners, inverse).reshape(4, 2).tolist())
+    return window
+
+
+# A system message lettered on a whole panel of one tint (a glitch effect, a glowing screen):
+# light letters, no light frame of a window, the panel closed by its dark border on the paper.
+# Its margin fits no flat plane, so it stayed in English (Manhwa teste p25, p26).  A panel with a
+# drawing in it has many hues; a sky with no border, or a grey panel, is no card.
+CARD_SATURATION = 100    # median saturation (0-255) around the letters: a tint, dimmer than a window's
+CARD_BORDER_DARK = 45    # grey: the dark line of the panel border...
+CARD_BORDER_THICK = 12   # ...at most this thick (px)...
+CARD_PAPER = 200         # ...with the paper of the page (grey) right past it...
+CARD_PAPER_GAP = 4       # ...within this many px
+CARD_SIDES = 3           # sides closed by the border; the last one may run off the image (the next slice)
+CARD_HUE_SHARE = 0.85    # share of the panel, letters aside, in the tint around the letters
+
+
+def _panel_border(profile):
+    """Offset of the first dark line followed by paper along ``profile`` (grey, outward), or None."""
+    n = len(profile)
+    for d in range(n):
+        if profile[d] > CARD_BORDER_DARK:
+            continue
+        end = d
+        while end < n and profile[end] <= CARD_BORDER_DARK and end - d < CARD_BORDER_THICK:
+            end += 1
+        if np.any(profile[end:end + CARD_PAPER_GAP] >= CARD_PAPER):
+            return d
+    return None
+
+
+def system_card(image, lines):
+    """The panel of one tint around ``lines``: {"rect", "fg", "body", "letters"} as system_window, or None.
+
+    ``rect`` is the inside of the panel border.  A card needs light letters on a vivid tint, the
+    dark border of the panel on three sides at least (the last one may be the end of the image)
+    and the whole panel, but its letters, in that tint.
+    """
+    quads = [np.asarray(q, np.float32).reshape(4, 2) for q in ([] if lines is None else lines)]
+    img = np.asarray(image)
+    if not quads or img.ndim != 3:
+        return None
+    img = np.ascontiguousarray(img[:, :, :3])
+    h, w = img.shape[:2]
+    line_height = float(np.median([np.ptp(q[:, 1]) for q in quads]))
+    if line_height < 4:
+        return None
+    x0 = int(np.clip(np.floor(min(q[:, 0].min() for q in quads)), 0, w - 1))
+    y0 = int(np.clip(np.floor(min(q[:, 1].min() for q in quads)), 0, h - 1))
+    x1 = int(np.clip(np.ceil(max(q[:, 0].max() for q in quads)), 0, w - 1))
+    y1 = int(np.clip(np.ceil(max(q[:, 1].max() for q in quads)), 0, h - 1))
+    inked = np.zeros((h, w), np.uint8)
+    for q in quads:
+        cv2.fillPoly(inked, [np.round(q).astype(np.int32)], 1)
+    pad = max(3, int(round(line_height / 2)))
+    ring = (cv2.dilate(inked, np.ones((2 * pad + 1, 2 * pad + 1), np.uint8)) > 0) & (inked == 0)
+    if ring.sum() < 4 * pad:
+        return None
+    hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+    saturation, hue = hsv[..., 1].astype(int), hsv[..., 0].astype(float)
+    if np.median(saturation[ring]) < CARD_SATURATION:
+        return None
+    angle = hue[ring][saturation[ring] >= CARD_SATURATION] * np.pi / 90  # the hue circle (0-180)
+    own = (np.degrees(np.arctan2(np.sin(angle).mean(), np.cos(angle).mean())) / 2) % 180
+    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY).astype(int)
+    ground = float(np.median(gray[ring]))
+    light = (inked > 0) & (gray >= ground + WINDOW_LIGHTER)
+    if light.sum() < WINDOW_LETTERS * (inked > 0).sum():
+        return None
+    g = gray.astype(float)
+    sides = [_panel_border(np.median(g[:y0, x0:x1 + 1], axis=1)[::-1]),
+             _panel_border(np.median(g[y1 + 1:, x0:x1 + 1], axis=1)),
+             _panel_border(np.median(g[y0:y1 + 1, :x0], axis=0)[::-1]),
+             _panel_border(np.median(g[y0:y1 + 1, x1 + 1:], axis=0))]
+    if sum(side is not None for side in sides) < CARD_SIDES:
+        return None
+    top, bottom, left, right = (side if side is not None else edge
+                                for side, edge in zip(sides, (y0, h - 1 - y1, x0, w - 1 - x1)))
+    rx0, ry0, rx1, ry1 = x0 - left, y0 - top, x1 + right, y1 + bottom
+    glyphs = cv2.dilate(((gray >= ground + WINDOW_LIGHTER) | (inked > 0)).astype(np.uint8),
+                        np.ones((5, 5), np.uint8)) > 0
+    panel = ~glyphs[ry0:ry1 + 1, rx0:rx1 + 1]
+    distance = np.abs(hue[ry0:ry1 + 1, rx0:rx1 + 1][panel] - own)
+    distance = np.minimum(distance, 180 - distance)
+    tinted = (distance <= WINDOW_HUE) & (saturation[ry0:ry1 + 1, rx0:rx1 + 1][panel] >= CARD_SATURATION / 2)
+    if not tinted.size or np.mean(tinted) < CARD_HUE_SHARE:
+        return None
+    core = light & (gray >= np.median(gray[light]))  # the inside of the strokes, not their soft edge
+    letters = letter_height(np.where(light, 0, 255).astype(np.uint8), quads)
+    return {"rect": (rx0, ry0, rx1, ry1),
+            "fg": tuple(int(c) for c in np.median(img[core], axis=0)),
+            "body": tuple(int(c) for c in np.median(img[ring], axis=0)),
+            "letters": letters if letters else line_height}
+
+
+# The letters of a window glow: their light runs past the cleaning mask and stayed as a smear
+# (Manhwa teste p25: the tip of an italic "J", which also narrowed the room of the translation).
+WINDOW_GLOW = 30          # grey: a pixel this much lighter than the window is light of its letters...
+WINDOW_GLOW_REACH = 0.5   # ...when it touches them, up to this far from the lines (capital heights)
+# Light letters in a black bubble glow too, dimmer (Manhwa teste p30, p36: a brown smear of the old
+# lines under the translation).  The paper past the bubble and its light outline are no glow.
+BUBBLE_GLOW = 5           # grey: a pixel this much lighter than the black ground is glow (it fades
+                          # out 10-12 px from the letters; a faint rest is spread back by the inpainting)
+BUBBLE_GLOW_GROW = 2      # px added around the glow found, for its faintest edge
+GLOW_PAPER = 235          # grey: paper, or the light outline of the bubble, kept with a margin of...
+GLOW_PAPER_MARGIN = 3     # ...this many px (its soft edge)
+
+
+def _glow(image, mask, lines, ground, lighter, letters, inside=None, paper=False, grow=1):
+    """Light ``lighter`` above ``ground`` (grey) near ``lines`` that touches the masked letters (bool)."""
+    img = np.ascontiguousarray(np.asarray(image)[:, :, :3])
+    h, w = img.shape[:2]
+    extra = np.zeros((h, w), bool)
+    quads = [np.asarray(q, np.float32).reshape(4, 2) for q in ([] if lines is None else lines)]
+    if not quads:
+        return extra
+    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY).astype(int)
+    reach = max(2, int(round(WINDOW_GLOW_REACH * float(letters or 0))))
+    near = cv2.dilate(_line_mask(img.shape, quads), np.ones((2 * reach + 1, 2 * reach + 1), np.uint8)) > 0
+    masked = (np.asarray(mask) > 0) & near
+    if not masked.any():
+        return extra
+    if inside is None:
+        inside = np.ones((h, w), bool)
+    if paper:  # light away from the letters (their own light, a step past the mask, is no paper)
+        margin = 2 * GLOW_PAPER_MARGIN + 1
+        kernel = np.ones((margin, margin), np.uint8)
+        page = (gray >= GLOW_PAPER) & ~(cv2.dilate(masked.astype(np.uint8), kernel) > 0)
+        inside = inside & ~(cv2.dilate(page.astype(np.uint8), kernel) > 0)
+    light = (gray >= ground + lighter) & near & inside & ~masked
+    count, labels = cv2.connectedComponents(light.astype(np.uint8), connectivity=8)
+    if count <= 1:
+        return extra
+    touching = cv2.dilate(masked.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+    keep = np.unique(labels[touching & light])
+    extra = np.isin(labels, keep[keep > 0])
+    return cv2.dilate(extra.astype(np.uint8), np.ones((2 * grow + 1, 2 * grow + 1), np.uint8)).astype(bool) & inside & ~masked
+
+
+def window_glow(image, mask, window, lines):
+    """The glow of the letters of ``window`` the cleaning ``mask`` misses (bool, image-sized).
+
+    Only light inside the frame, near the text ``lines`` (quads), that touches the masked letters:
+    the buttons in a corner (even with the mask on them), a sound effect over the window and the
+    frame itself stay.
+    """
+    h, w = np.asarray(image).shape[:2]
+    inside = np.zeros((h, w), bool)
+    if window.get("poly") is not None:  # a tilted window (tilted_window): the inside of its turned frame
+        poly = np.round(np.asarray(window["poly"], np.float32)).astype(np.int32).reshape(-1, 1, 2)
+        filled = np.zeros((h, w), np.uint8)
+        cv2.fillPoly(filled, [poly], 1)
+        inside = filled > 0
+    else:
+        rx0, ry0, rx1, ry1 = (int(v) for v in window["rect"])
+        rx0, ry0, rx1, ry1 = max(0, rx0), max(0, ry0), min(w - 1, rx1), min(h - 1, ry1)
+        if rx1 <= rx0 or ry1 <= ry0:
+            return inside
+        inside[ry0:ry1 + 1, rx0:rx1 + 1] = True
+    body = float(np.dot(np.asarray(window["body"], float), (0.299, 0.587, 0.114)))
+    return _glow(image, mask, lines, body, WINDOW_GLOW, window.get("letters"), inside)
+
+
+def bubble_glow(image, mask, lines, ground, letters):
+    """The glow of light letters on the dark ``ground`` (RGB) of a bubble the cleaning ``mask`` misses.
+
+    ``letters`` is the height of their capitals (px).  The paper and the outline of the bubble stay.
+    """
+    grey = float(np.dot(np.asarray(ground, float), (0.299, 0.587, 0.114)))
+    return _glow(image, mask, lines, grey, BUBBLE_GLOW, letters, paper=True, grow=BUBBLE_GLOW_GROW)
+
+
+def page_window_brackets(translations, sources, windows):
+    """The [ ] of the system windows of a page, also on a window the OCR read without them.
+
+    Windows of one game come all in brackets; the OCR loses them now and then (Manhwa teste p95:
+    one window of two came out without).  Only when another window of the page was read with both.
+    """
+    def bracketed(text):
+        text = str(text or "").strip()
+        return text.startswith("[") and text.endswith("]")
+    if not any(w and bracketed(s) for w, s in zip(windows, sources)):
+        return list(translations)
+    out = []
+    for text, source, window in zip(translations, sources, windows):
+        if (window and isinstance(text, str) and text.strip() and not re.search(r"[\[\]]", text)
+                and not re.search(r"[\[\]]", str(source or "")) and not has_cjk(text)):
+            text = f"[{text.strip()}]"
+        out.append(text)
+    return out
+
+
+def square_brackets(translation, source, window=False):
     """``translation`` with the [ ] of ``source``.
 
     The engine writes [ ] as 【 】, and a source wholly in brackets (a system window) came back
-    from the AI without them (Manhwa teste p50).
+    from the AI without them (Manhwa teste p50).  In a ``window`` with no CJK in the source, 【 】
+    are always its [ ]: the OCR may miss the brackets of the window, and the lettering of a window
+    skips text with 【 】 (the engine drew it in Arial past the frame, Manhwa teste p98).
     """
-    if not isinstance(translation, str) or not re.search(r"[\[\]]", source or ""):
+    if not isinstance(translation, str):
+        return translation
+    if window and not has_cjk(source or ""):
+        translation = translation.replace("【", "[").replace("】", "]")
+    if not re.search(r"[\[\]]", source or ""):
         return translation
     translation = translation.replace("【", "[").replace("】", "]")
     source = source.strip()
