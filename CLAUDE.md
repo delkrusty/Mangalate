@@ -29,7 +29,7 @@ Leitor de mangá para Android baseado no Mihon que traduz as páginas e escreve 
 
 Em conflito, a de cima vence. Uma mudança só está pronta quando melhora as páginas que a motivaram sem piorar as outras. Compilar, passar nos testes ou receber HTTP 200 não basta.
 
-1. **Preservar a arte.** Nada é apagado fora dos balões. Texto sobre o desenho fica no original e a página é marcada para revisão. Uma página que falha sai como o original, nunca em branco.
+1. **Preservar a arte.** Nada é apagado longe do texto. Texto sobre o desenho que faz parte da história (legenda, título, grito, fala) é traduzido no mesmo formato e estilo do original; para isso vale sacrificar o mínimo de arte colado às letras e ao halo delas, nunca uma faixa do desenho ou do fundo em volta. Só fica no original o texto que não dá para ler ou limpar sem estragar mais que isso, e a página é marcada para revisão. Uma página que falha sai como o original, nunca em branco. A régua é o leitor (escolha do Lucas): a página tem que ser satisfatória e fácil de entender lendo.
 2. **Limpar o balão direito.** Todo o texto original sai e o contorno fica intacto.
 3. **Não perder fala.** Nenhuma fala fica faltando, duplicada, trocada de lugar ou em inglês dentro de um balão.
 4. **Português natural.** O sentido certo (negação e gênero incluídos), com nomes e termos iguais em toda a obra e o tom do personagem em pt-BR, não uma tradução literal.
