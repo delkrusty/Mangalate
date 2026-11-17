@@ -11,14 +11,12 @@ internal data class WhatsNewRelease(val version: String?, val items: List<String
 internal object MangalateWhatsNew {
     val releases = listOf(
         WhatsNewRelease(
-            null,
+            "0.7.3",
             listOf(
-                "Mangás com muito texto e balões pequenos: falas curtas que passavam batido agora são traduzidas, e duas falas lado a lado não se misturam mais.",
-                "A letra fica maior e mais centralizada nos balões estreitos, e o balão sai limpo, sem sobras das letras em inglês nem manchas cinza.",
-                "Texto escrito no desenho fica intacto, e um parágrafo que não dá para ler inteiro fica como no original, em vez de sair traduzido pela metade.",
-                "Notas escritas de lado na margem e palavras em pé, letra por letra, agora saem traduzidas na mesma direção do original.",
-                "Falas pequenas coladas numa fala grande não se misturam mais, e o título do capítulo também é traduzido.",
-                "Títulos, legendas e gritos desenhados sobre a arte, inclinados, em curva ou com letras empilhadas, agora saem traduzidos no mesmo formato e com a mesma força, até o grito rabiscado à mão.",
+                "Mangás com muito texto e balões pequenos: falas curtas que passavam batido agora são traduzidas, e falas lado a lado ou coladas não se misturam mais.",
+                "A letra fica maior e mais centralizada nos balões estreitos, e o balão sai limpo, sem sobras do inglês nem manchas cinza.",
+                "Títulos, legendas, gritos e notas escritas sobre a arte ou de lado agora saem traduzidos no mesmo formato e direção do original, e o título do capítulo também.",
+                "O desenho fica intacto, e um parágrafo que não dá para ler inteiro fica como no original, em vez de sair traduzido pela metade.",
             ),
         ),
         WhatsNewRelease(

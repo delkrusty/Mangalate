@@ -2,7 +2,13 @@
 
 As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://github.com/mihonapp/mihon/blob/main/CHANGELOG.md).
 
-## Em teste
+## 0.7.3
+
+- **Balões pequenos e texto denso:** falas curtas que passavam batido agora são traduzidas, falas lado a lado ou coladas não se misturam mais, e o balão sai limpo, com letra maior nos balões estreitos.
+- **Texto sobre a arte:** títulos, legendas, gritos e notas de lado são traduzidos no mesmo formato, inclinação e direção do original, e o título do capítulo também.
+- **Arte preservada:** o desenho em volta fica intacto, e um parágrafo que não dá para ler inteiro fica como no original, marcado para revisão.
+
+Detalhes técnicos de cada mudança no [CHANGELOG](https://github.com/delkrusty/Mangalate/blob/main/CHANGELOG.md#073).
 
 ### Balões pequenos e texto denso
 - Fala curta que o detector principal (CTD) não marcou ("HELL?", "HALF PRICE", "NEXT") é procurada de novo com o segundo detector, numa passada a 1536 px; entram só as linhas cujas letras a máscara do primeiro deixou de fora, com os pixels delas (`engine_compat.second_opinion`, `quality.missed_lines`).
