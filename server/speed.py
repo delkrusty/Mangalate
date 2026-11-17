@@ -275,16 +275,82 @@ def paint_halos(image, mask, regions, raw):
         paint &= zone
         region.mangalate_halo = tuple(int(c) for c in np.asarray(colour).round())
         region.mangalate_halo_area = paint  # the room of the translation (engine_compat.bubble_layout)
+        whole = paint
         paint = paint & ~halo_drawing(image, paint, colour, region.lines)
         ink = halo_ink(image, paint)
         if ink is not None:  # the translation in the colour of the old letters, its border the halo
             region.fg_colors, region.bg_colors = np.array(ink), np.array(region.mangalate_halo)
-        page[paint] = region.mangalate_halo  # what stays if the model is not run
         left[zone] = 0
+        if halo_kept(region):  # flat: the model drew the art back under it as smears
+            # The letters the detector marked go even when a strand of the drawing crosses their
+            # halo: halo_drawing took a stacked "S" for the drawing and it stayed whole under the
+            # translation (Manga teste 2 p11).
+            # Only on the lines: a strand the detector marked beside them would go as a white streak.
+            edge = np.ones((2 * HALO_EDGE_PX + 1, 2 * HALO_EDGE_PX + 1), np.uint8)  # with their soft rims
+            on_lines = np.zeros(raw.shape[:2], np.uint8)
+            cv2.fillPoly(on_lines, [np.asarray(q, np.int32).reshape(-1, 1, 2) for q in region.lines], 1)
+            letters = cv2.dilate(((raw > 0) & (on_lines > 0)).astype(np.uint8), edge) > 0
+            paint = paint | (whole & letters)
+            if getattr(region, "mangalate_sticker", None):
+                page[paint | sticker_ghosts(image, paint, zone, region.lines)] = region.mangalate_halo
+            else:  # only the halo hugging the old letters: a light pattern of the ground past it stays
+                page[paint & near_letters(image, raw, paint, region.lines)] = region.mangalate_halo
+            continue
+        page[paint] = region.mangalate_halo  # what stays if the model is not run
         # With the halo's soft rim: left out, its white spread into the art the model drew back.
         edge = np.ones((2 * HALO_EDGE_PX + 1, 2 * HALO_EDGE_PX + 1), np.uint8)
-        left[(cv2.dilate(paint.astype(np.uint8), edge) > 0) & zone] = 255
+        rim = (cv2.dilate(paint.astype(np.uint8), edge) > 0) & zone
+        left[rim] = 255
     return page, left
+
+
+FLAT_REACH = 0.2   # letter widths: a turned or stacked word is painted flat this far around its old letters
+
+
+def near_letters(image, raw, paint, lines):
+    """Pixels at most FLAT_REACH letters from the old letters of a turned or stacked word: the
+    letters are the detector's mask and the dark ink inside the paint (their outline, the dots).
+    Painted flat to its whole light ground, a pattern drawn on the paper around the column
+    (flowers, small animals) was wiped white far past the letters."""
+    import cv2
+    quads = [np.asarray(q, np.float32).reshape(4, 2) for q in lines]
+    side = float(np.median([min(np.ptp(q[:, 0]), np.ptp(q[:, 1])) for q in quads])) if quads else 0.0
+    reach = max(3, int(round(FLAT_REACH * side)))
+    gray = cv2.cvtColor(np.ascontiguousarray(np.asarray(image)[:, :, :3]), cv2.COLOR_RGB2GRAY)
+    letters = ((np.asarray(raw) > 0) | (gray < 128)) & paint
+    return cv2.dilate(letters.astype(np.uint8), np.ones((2 * reach + 1, 2 * reach + 1), np.uint8)) > 0
+
+
+STICKER_CLOSE = 0.5   # line heights: the sticker is its halo with gaps this wide closed (between words, lines)
+STICKER_LIGHT = 140   # inside it, a pixel lighter than this (0-255 grey) is the soft rim of an old letter: halo
+
+
+def sticker_ghosts(image, paint, zone, lines):
+    """Pixels of a sticker caption left grey after its letters and halo were painted flat: the soft
+    outer rim of the old letters' outline, a ghost of the English.  The sticker is its painted halo
+    with the gaps closed; inside it, only light pixels go (the dark drawing the sticker lies on, a
+    jacket, stays)."""
+    import cv2
+    from quality import HALO_EDGE_PX, _quads_height
+    size = _quads_height([np.asarray(q, np.float32).reshape(4, 2) for q in lines])
+    close = 2 * max(1, int(round(STICKER_CLOSE * size / 2))) + 1
+    hull = cv2.morphologyEx(paint.astype(np.uint8), cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close, close)))
+    hull = cv2.dilate(hull, np.ones((2 * HALO_EDGE_PX + 1, 2 * HALO_EDGE_PX + 1), np.uint8)) > 0
+    gray = cv2.cvtColor(np.ascontiguousarray(np.asarray(image)[:, :, :3]), cv2.COLOR_RGB2GRAY)
+    return hull & zone & (gray > STICKER_LIGHT) & ~paint
+
+
+def halo_kept(region):
+    """True when the old letters and halo are painted flat with the halo, not drawn back.
+
+    A caption on a sticker (engine_compat sets ``mangalate_sticker``), or a column of letters
+    turned on its side or stacked (``mangalate_turn``): the translation is lettered in the same
+    place and shape, with a halo of its own, so the old halo stays as it was drawn.  The model
+    drew the art back under it as smears where the halo crossed the drawing (hair, a jacket).
+    A line along a curve too: its block is the band under the curve's chord, and the model drew
+    a hand inside it back as a smear (Manga teste 2 p3).
+    """
+    return bool(getattr(region, "mangalate_sticker", None)) or         getattr(region, "mangalate_turn", None) in ("cw", "ccw", "stack", "arc")
 
 
 def specks(image, text, colour):
@@ -337,6 +403,68 @@ def cut_marks(image, text, letters, colour, ignore=None):
     return marks
 
 
+GHOST_DARK = 110    # after the model, a pixel lighter than this (0-255 grey) inside a white bubble is paper
+GHOST_EDGE = 3      # px kept off the bubble outline
+GHOST_PAPER = 200   # the bubble's paper is at least this light in every channel
+GHOST_PLAIN = 0.85  # share of the bubble's paper within FLAT_SPREAD of its colour (screentone is far less)
+GHOST_OPEN = 0.5    # on an open side of the bubble, the interior reaches this many line heights past the text box
+
+
+def settle_ghosts(cleaned, image, mask, regions):
+    """Paper where the model left a faint ghost of the letters inside a plain bubble.
+
+    Manga teste 2 p4, p7: in narrow bubbles the mask reached the outline, the bubble was not
+    filled flat (split_flat) and the model drew grey letters back.  Inside the interior of the
+    bubble of a speech on a plain light ground (found on the page before cleaning, the letters
+    filled in), the cleaned pixels lighter than GHOST_DARK take the paper colour; dark strokes
+    the model drew back (the outline) and everything past the outline stay as it left them.
+    """
+    import cv2
+    import lettering
+    out = None
+    for region in regions or []:
+        background = getattr(region, "mangalate_background", None) or {}
+        # A speech in a bubble the frame cuts reads as strokes ("tracos" with "fala", Manga teste 2
+        # p6): its paper is checked the same way, and a drawing inside still leaves it to the model.
+        speech = background.get("kind") == "interior" or (background.get("kind") == "tracos" and background.get("fala"))
+        if not speech or getattr(region, "mangalate_light", None):
+            continue
+        try:
+            box = tuple(int(v) for v in region.xyxy)
+            # On an open side the interior stops near the text box: half a line past it, so the
+            # letters of the last line are holes of the interior (Manga teste 2 p6, "CLOSER").
+            heights = [float(np.ptp(np.asarray(q, float).reshape(-1, 2)[:, 1])) for q in getattr(region, "lines", [])]
+            margin = int(round(GHOST_OPEN * np.median(heights))) if heights else 0
+            found = lettering.bubble_mask(image, box, open_margin=margin)
+        except Exception:  # left as the model drew it
+            continue
+        if found is None:
+            continue
+        bubble, wx0, wy0 = found
+        contours, _ = cv2.findContours(bubble.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        inside = cv2.drawContours(np.zeros(bubble.shape, np.uint8), contours, -1, 1, -1)
+        inside = cv2.erode(inside, np.ones((2 * GHOST_EDGE + 1, 2 * GHOST_EDGE + 1), np.uint8)) > 0
+        h, w = inside.shape
+        part = (slice(wy0, wy0 + h), slice(wx0, wx0 + w))
+        held = mask[part] > 0
+        paper = image[part][inside & ~held]
+        if len(paper) < 50:
+            continue
+        colour = np.median(paper, axis=0)
+        # Plain paper for most of it: the rims of speed lines at an open side are a few pixels more.
+        plain = (np.abs(paper.astype(np.int16) - colour).max(axis=1) <= FLAT_SPREAD).mean()
+        if colour.min() < GHOST_PAPER or plain < GHOST_PLAIN:
+            continue  # no plain paper: screentone or a drawing inside, left to the model
+        source = cleaned if out is None else out
+        gray = cv2.cvtColor(np.ascontiguousarray(source[part]), cv2.COLOR_RGB2GRAY)
+        ghost = inside & held & (gray >= GHOST_DARK)
+        if ghost.any():
+            if out is None:
+                out = cleaned.copy()
+            out[part][ghost] = colour.round().astype(cleaned.dtype)
+    return cleaned if out is None else out
+
+
 def flat_first(original_inpaint):
     async def inpaint(self, config, ctx):
         image, mask = getattr(ctx, "img_rgb", None), getattr(ctx, "mask", None)
@@ -371,6 +499,10 @@ def flat_first(original_inpaint):
             return await original_inpaint(self, config, ctx)
         area = page[y0:y1, x0:x1]
         area[part.mask > 0] = cleaned[part.mask > 0]
+        try:
+            page = settle_ghosts(page, image, left, getattr(ctx, "text_regions", None))
+        except Exception as exc:  # the page as the model left it
+            print(f"Ghost check skipped: {type(exc).__name__}", flush=True)
         return page
     return inpaint
 

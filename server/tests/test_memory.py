@@ -162,6 +162,17 @@ class KeptNamesTest(unittest.TestCase):
         self.assertEqual(sorted(kept_names([{"original": "KOHEI, CHISA!", "translation": "Kohei, Chisa!"}])),
                          [("CHISA", "Chisa"), ("KOHEI", "Kohei")])
 
+    def test_a_common_word_kept_alone_is_no_name(self):
+        # Manga teste 2 p4, p10: the last word of a move's name, kept in the footnote and in a
+        # line that named the move, was learned as a name and written so in later speech.
+        from memory import kept_names
+        pairs = [{"original": "GRA~ND SPIN (SEE THE BOOK (GRAND SPIN)", "translation": "Golpe giratório (Grand Spin)"}]
+        self.assertEqual(sorted(kept_names(pairs)), [("GRAND SPIN", "Grand Spin")])
+        # Kept on its own somewhere on the page, it is a name; so is a name that is also a word.
+        pairs.append({"original": "SPIN, WAIT!", "translation": "Spin, espera!"})
+        self.assertEqual(sorted(kept_names(pairs)), [("GRAND SPIN", "Grand Spin"), ("SPIN", "Spin")])
+        self.assertEqual(kept_names([{"original": "ROSE, WAIT!", "translation": "Rose, espera!"}]), [("ROSE", "Rose")])
+
     def test_a_line_lettered_unchanged_teaches_no_name(self):
         # A scream the AI returned unchanged is lettered as is (engine_compat.validate_page_translations);
         # "Guha- aaa!!!" keeps "Guha" capitalized, but that is no name of the work.
@@ -202,6 +213,8 @@ class KeptNamesTest(unittest.TestCase):
         self.assertTrue(engine_compat.is_credit("thunderscans"))
         self.assertTrue(engine_compat.is_credit("READ AT ASURASCANS.COM"))
         self.assertFalse(engine_compat.is_credit("IT SCANS THE AREA"))
+        self.assertTrue(engine_compat.is_credit("THE BEGINNING AFTER™END"))
+        self.assertFalse(engine_compat.is_credit("™ SHORT"))  # a short word misread as the sign
         self.assertTrue(engine_compat.is_credit("YOU CAN READ THE CHAPTER AT"))
         self.assertTrue(engine_compat.is_credit("SUPPORT US BY READING ON OUR WEBSITE"))
         # One Piece 1153 p1: a chapter subtitle read in one block with its staff.

@@ -31,20 +31,20 @@ import numpy as np
 
 # Text stages live in their own modules; their names stay reachable as quality.<name>.
 from quality_text import (  # noqa: F401  (re-exported: callers use quality.<name>)
-    STACKED, stacked, _CJK, _LETTER, has_cjk, normalize_spacing, _median_line, same_block, same_row, join_blocks,
+    STACKED, stacked, _CJK, _LETTER, has_cjk, normalize_spacing, rejoin_numbers, _median_line, same_block, same_row, join_blocks,
     absorb_contained, _area, sentence_case, COGNATES, source_names, tidy_start, page_names, compact_symbols,
     whole_word_breaker, broken_words,
 )
 from quality_words import (  # noqa: F401  (re-exported: callers use quality.<name>)
     OCR_CONFUSIONS, OCR_FINAL_L, DIGIT_WORD_LETTERS, english_words, SLANG, _known, _contractions,
     _ocr_candidates, fix_ocr_words, misread_names, SUFFIXES, HONORIFICS, SFX_SHAPE, SAME_CRY, SOUND_WORDS,
-    english_sound_effect,
+    english_sound_effect, stray_cjk,
 )
 from quality_translation import (  # noqa: F401  (re-exported: callers use quality.<name>)
     SPEECH_WORDS, run_together, spaced_words, reads_as_speech, FEMALE_EVIDENCE, FEMININE_SELF, NT, SOURCE_NEGATION,
     NEGATION_IDIOMS, TARGET_NEGATION, added_negation, lost_negation, _has, SPANISH_WORDS, SUPERLATIVE_GENDER,
     _PARTICIPLE, PARTICIPLE_NUMBER, DOUBLED_WORD, REDUPLICATIONS, SAME_INTERJECTIONS, LAUGH, UNCHANGED_NOTE,
-    same_text, unchanged_english, portuguese_problems, translation_problems,
+    same_text, unchanged_english, portuguese_problems, translation_problems, dropped_most,
 )
 
 # Background classification -------------------------------------------------
@@ -425,6 +425,7 @@ HALO_DELTA = 12     # and is this much (0-255 grey) further from the paper, on t
 
 LETTER_WHOLE = 1.5  # a piece of ink up to this size (line heights) touching the mask is a letter, taken whole
 LETTER_CHAIN = 0.4  # a letter this close beside a taken one, on the same row, is taken too (in line heights)
+LETTER_WORD = 1.0   # or this close (a word gap) when it lies on the line boxes
 LETTER_STROKE = 0.6  # if its strokes are at least this share as thick as the letters' (hatching is thinner)
 LETTER_ON_LINE = 0.9  # a wider piece (letters joined by hand) is taken if this share of it is on the line boxes
 
@@ -462,7 +463,7 @@ def whole_letters(image, letters, lines, paper, line_height):
     joined = (touched & ~size & on_line & (stats[:, cv2.CC_STAT_HEIGHT] <= LETTER_WHOLE * lh)
               & (thick >= LETTER_STROKE * stroke))
     taken |= joined
-    gap = LETTER_CHAIN * lh
+    gap, word = LETTER_CHAIN * lh, LETTER_WORD * lh
     grew = True
     while grew:
         grew = False
@@ -474,7 +475,9 @@ def whole_letters(image, letters, lines, paper, line_height):
                 tx, ty, tw, th = stats[t, :4]
                 rows = min(ky + kh, ty + th) - max(ky, ty)
                 apart = max(kx - (tx + tw), tx - (kx + kw))
-                if rows >= 0.5 * min(kh, th) and apart <= gap:
+                # A one-letter word on the line the mask missed ("A" opening a caption, Manga teste 2
+                # p3) is a word gap away; a stroke of the drawing runs out of the line box.
+                if rows >= 0.5 * min(kh, th) and apart <= (word if on_line[k] else gap):
                     taken[k] = grew = True
                     break
     return letters | taken[labels]
@@ -570,7 +573,8 @@ PAPER_DOT = 0.2      # specks smaller than this squared (line heights) are scree
 PAPER_TILT = 3.0     # degrees: tilted lettering (a sheet of paper drawn askew) is written back level, over half-cleaned lines
 
 
-def speech_on_paper(image, text_mask, quads, line_height=None, paper_share=PAPER_SHARE, masked_share=PAPER_MASKED):
+def speech_on_paper(image, text_mask, quads, line_height=None, paper_share=PAPER_SHARE, masked_share=PAPER_MASKED,
+                    stacked_ok=False):
     """True for dark letters on clean paper, crossed by the drawing.
 
     Such a speech (One Piece 1161 p5, "WELL, CONSIDERING...": hair and hatching between the
@@ -583,6 +587,9 @@ def speech_on_paper(image, text_mask, quads, line_height=None, paper_share=PAPER
     p33: their lines interleave and one of them sits on the hair), and tilted lettering (Grand
     Blue 102 p4, a form drawn askew: the boxes missed part of it and English was left), and
     letters stacked one per row in a tall bubble (Grand Blue 102 p20).
+
+    ``stacked_ok`` lets letters stacked one per row pass: they are lettered stacked too (a word
+    stacked over the drawing in a halo, read by engine_compat.read_sideways).
 
     paper_share 0 is the reader's "translate everything" choice: the margin may be all
     drawing (dark letters with a white halo over the art), the other checks still apply.
@@ -634,7 +641,7 @@ def speech_on_paper(image, text_mask, quads, line_height=None, paper_share=PAPER
     tilt = np.median([abs(np.degrees(np.arctan2(q[1, 1] - q[0, 1], q[1, 0] - q[0, 0]))) for q in quads])
     if tilt > PAPER_TILT:
         return False
-    if any(np.ptp(q[:, 1]) > np.ptp(q[:, 0]) for q in quads):
+    if not stacked_ok and any(np.ptp(q[:, 1]) > np.ptp(q[:, 0]) for q in quads):
         return False  # letters stacked one per row (Grand Blue 102 p20 "GUYS!"): the lettering would be tiny
     boxes = [(q[:, 0].min(), q[:, 1].min(), q[:, 0].max(), q[:, 1].max()) for q in quads]
     for i, a in enumerate(boxes):
@@ -941,6 +948,31 @@ LINE_READ = 0.5  # letters read per line height of width, below which a line was
 LINE_WIDE = 3.0  # ...on a line at least this many heights wide ("LIKE" read "L" in a narrow column is a weak sign)
 
 
+UNREAD_HEIGHT = 0.3  # a line the OCR could not read is of the block when its height is within this share of the block's
+
+
+def unread_in_block(lines, unread, inside=None):
+    """True when a line of the block's paragraph is among ``unread``, boxes the OCR dropped
+    and could not read even again (engine_compat.rescue_ocr).
+
+    Manga teste 2 p14: of a note of four paragraphs in a handwritten font, the OCR read only
+    the last line or two of each; translated alone, they said something else ("Pessoal, tem mais
+    cinco pessoas pra apresentar") beside the English.  The block stays as drawn instead.  Only a
+    line as tall as the block's lines, at least LINE_WIDE heights wide, right above or below them,
+    and, when ``inside(box)`` is given, in the same bubble (not a note beside it, p5).
+    """
+    boxes = [_box(q) for q in lines]
+    height = _line_height(boxes)
+    if not height:
+        return False
+    for x0, y0, x1, y1 in unread or []:
+        tall = y1 - y0
+        if (abs(tall - height) <= UNREAD_HEIGHT * height and x1 - x0 >= LINE_WIDE * tall
+                and _near((x0, y0, x1, y1), boxes, height) and (inside is None or inside((x0, y0, x1, y1)))):
+            return True
+    return False
+
+
 def lines_unread(quads, texts):
     """True when a line of the block came back from the OCR empty or as a scrap ("DP" for
     "OPPONENT'S IS WIDE OPEN."): its letters are cleaned, but the translation lacks them.
@@ -987,6 +1019,42 @@ OUTLINE_LINES = 2      # outlined lettering is translated only as a sentence of 
 OUTLINE_LETTER = 0.4   # a dark letter in a halo that runs into a light tone is at least this tall, in line heights...
 OUTLINE_TALL = 1.3     # ...at most this tall and twice this wide (the dark ground around the halo is bigger)
 OUTLINE_HOLE = 1.0     # a hole in the cleaned area at most this many line heights across is the inside of a letter
+
+
+HALO_OUTLINE_LETTERS = 170  # grey: the letters the detector marks are lighter than this (light capitals)...
+HALO_OUTLINE_RIM = 0.04     # ...this share of the lines is dark: their thin outline and shadow...
+HALO_OUTLINE_BAND = 0.5     # ...and the band this many line heights around the lines...
+HALO_OUTLINE_AROUND = 0.6   # ...is at least this light: the halo
+
+
+def outlined_in_halo(image, text_mask, quads):
+    """(letter colour, outline colour) for light capitals with a thin dark outline inside a light
+    halo over the drawing, else None: a caption drawn as a sticker over the art, often tilted
+    (Manga teste 2 p2, "THE SECOND CHAPTER OF THE NEW SERIES BEGINS").  Its letters are light, so
+    the checks for dark letters on paper (speech_on_paper) never pass, and outlined_lettering looks
+    for letters their outline closes off from the page: here the halo runs into them where the
+    outline is thin.  The detector's own mask tells the letters: light ones, not the dark ones of a
+    speech over a light part of the drawing."""
+    quads = [np.asarray(q, np.float32).reshape(4, 2) for q in quads]
+    if text_mask is None or not quads:
+        return None
+    lines = _line_mask(np.asarray(image).shape, quads) > 0
+    gray = cv2.cvtColor(np.ascontiguousarray(np.asarray(image)[:, :, :3]), cv2.COLOR_RGB2GRAY)
+    letters = lines & (np.asarray(text_mask) > INK)
+    if not letters.any() or np.median(gray[letters]) < HALO_OUTLINE_LETTERS:
+        return None
+    dark = lines & (gray < OUTLINE_DARK)
+    if float(dark.sum()) < HALO_OUTLINE_RIM * lines.sum():
+        return None
+    lh = _quads_height(quads)
+    reach = 2 * max(2, int(round(HALO_OUTLINE_BAND * lh))) + 1
+    band = (cv2.dilate(lines.astype(np.uint8), np.ones((reach, reach), np.uint8)) > 0) & ~lines
+    if not band.any() or float((gray[band] > OUTLINE_LIGHT).mean()) < HALO_OUTLINE_AROUND:
+        return None
+    rgb = np.asarray(image)[:, :, :3]
+    fill = letters & (gray > OUTLINE_LIGHT)
+    return (tuple(int(c) for c in np.median(rgb[fill], axis=0)) if fill.any() else (255, 255, 255),
+            tuple(int(c) for c in np.median(rgb[dark], axis=0)))
 
 
 def outlined_colours(image, quads):
@@ -1803,10 +1871,20 @@ def line_symbols(image, lines):
     keep = np.zeros((h, w), bool)
     count, labels, stats, centres = cv2.connectedComponentsWithStats((gray < SYMBOL_INK).astype(np.uint8), connectivity=8)
     boxes = [_box(quad) for quad in ([] if lines is None else lines)]
+
+    def owner(k):
+        # Manga teste 2 p7: one line box reached over the "LL" of the next bubble's "I'LL", a line
+        # of its own a little higher; off the row of the wide line, they were kept as a drawing.
+        # A piece inside two line boxes belongs to the one whose middle is nearest.
+        cx, cy = centres[k]
+        holding = [b for b in boxes if b[0] <= cx <= b[2] and b[1] <= cy <= b[3]]
+        return min(holding, key=lambda b: abs((b[1] + b[3]) / 2 - cy)) if holding else None
+
     for quad in [] if lines is None else lines:
         x0, y0, x1, y1 = _box(quad)
         inside = [k for k in range(1, count) if stats[k, cv2.CC_STAT_AREA] >= 4
                   and x0 <= centres[k][0] <= x1 and y0 <= centres[k][1] <= y1
+                  and owner(k) == (x0, y0, x1, y1)
                   and stats[k, cv2.CC_STAT_WIDTH] < x1 - x0 + 1]  # not the bubble outline running past the line
         if len(inside) < 3:
             continue
@@ -1866,15 +1944,21 @@ def line_symbols(image, lines):
 
 DRAWING_SIZE = 3.0   # an ink piece this many line heights tall or wide is part of the drawing, not a letter
 DRAWING_REACH = 1.5  # looked for this far around the lines, in line heights
+STACK_LETTER = 0.4   # a piece of ink at least this many line heights tall, and at most DRAWING_SIZE, may be a letter...
+STACK_STEP = 1.2     # ...and letters one under the other, their centres at most this far apart (line heights)...
+STACK_LETTERS = 3    # ...that many or more, all out of the line boxes, are a word written on the drawing
 
 
-def drawing_around(image, lines, line_height=None):
+def drawing_around(image, lines, line_height=None, text=None):
     """Pixels of large drawn strokes near ``lines`` that lie outside the line boxes.
 
     One Piece 1161 p11: a label under a face on a map; the detector mask took the bottom
     of the face, and the bubble was cleaned over it.  Ink joined into a piece much larger
     than a letter is the drawing (or the bubble outline); outside the line boxes it is
     left out of the cleaning, while letters touching it are still cleaned inside them.
+    ``text`` holds the lines of the other speeches on the page: bold letters that touch read
+    as one wide piece (Manga teste 2 p7 "WHY?" under "WHA- / BUT"), and inside a line box
+    they are letters, never drawing.
     """
     gray = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2GRAY) if np.asarray(image).ndim == 3 else np.asarray(image)
     h, w = gray.shape[:2]
@@ -1892,15 +1976,51 @@ def drawing_around(image, lines, line_height=None):
     count, labels, stats, _ = cv2.connectedComponentsWithStats(ink.astype(np.uint8), connectivity=8)
     window = labels[y0:y1, x0:x1]
     big = [k for k in np.unique(window) if k and max(stats[k, cv2.CC_STAT_WIDTH], stats[k, cv2.CC_STAT_HEIGHT]) >= DRAWING_SIZE * lh]
+    lined = np.zeros(window.shape, bool)
+    for bx0, by0, bx1, by1 in boxes + [_box(q) for q in (text if text is not None else [])]:
+        lined[max(0, by0 - y0):max(0, by1 - y0 + 1), max(0, bx0 - x0):max(0, bx1 - x0 + 1)] = True
+    big += _stacked_outside(window, lined, stats, lh)
     if not big:
         return keep
-    part = np.isin(window, big)
-    for bx0, by0, bx1, by1 in boxes:
-        part[max(0, by0 - y0):max(0, by1 - y0 + 1), max(0, bx0 - x0):max(0, bx1 - x0 + 1)] = False
+    part = np.isin(window, big) & ~lined
     keep[y0:y1, x0:x1] = part
     if keep.any():
         keep = cv2.dilate(keep.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
     return keep
+
+
+def _stacked_outside(window, lined, stats, lh):
+    """Letters written one under the other out of the line boxes: a laugh climbing the outline.
+
+    Manga teste 2 p2: "AHAHA" runs down the outline beside a speech; its second letter, right past
+    the end of a line, went with the cleaning of the bubble.  Letter-sized pieces wholly out of the
+    line boxes, STACK_LETTERS or more chained one under the other, are a word of the drawing.  A
+    "!!" after the line stands beside it, not under it, and stays with the speech.
+    """
+    ids = [k for k in np.unique(window[~lined]) if k]
+    inside = set(np.unique(window[lined]).tolist())
+    letters = [k for k in ids if k not in inside
+               and STACK_LETTER * lh <= stats[k, cv2.CC_STAT_HEIGHT] < DRAWING_SIZE * lh
+               and stats[k, cv2.CC_STAT_WIDTH] < DRAWING_SIZE * lh]
+    if len(letters) < STACK_LETTERS:
+        return []
+    centre = {k: (stats[k, 0] + stats[k, 2] / 2.0, stats[k, 1] + stats[k, 3] / 2.0) for k in letters}
+    def under(a, b):  # one under the other: further apart in rows than half a letter
+        (ax, ay), (bx, by) = centre[a], centre[b]
+        return abs(ay - by) >= 0.5 * min(stats[a, 3], stats[b, 3]) and np.hypot(ax - bx, ay - by) <= STACK_STEP * lh
+    group = {k: k for k in letters}
+    def root(k):
+        while group[k] != k:
+            k = group[k]
+        return k
+    for i, a in enumerate(letters):
+        for b in letters[i + 1:]:
+            if under(a, b):
+                group[root(a)] = root(b)
+    sizes = {}
+    for k in letters:
+        sizes.setdefault(root(k), []).append(k)
+    return [k for members in sizes.values() if len(members) >= STACK_LETTERS for k in members]
 
 
 def _x_gap(stats, group, k):
@@ -2030,6 +2150,9 @@ ORPHAN_EDGE = 1 / 3   # read on the middle of the line: its top and bottom may l
 NEAR_LINES = 1.6      # an orphan line must sit this many line heights from a known one
 ORPHAN_MIN = 0.5      # an orphan line is at least this many line heights tall
 ORPHAN_LETTERS = 2    # a larger or chained orphan line holds this many letters of its height (a drawn head, one kana: one)
+ORPHAN_STACK = 1.3    # an orphan this many line heights tall...
+ORPHAN_UPRIGHT = 2.0  # ...and this many times taller than wide is letters stacked upright, not a line
+ORPHAN_NARROW = 0.5   # a word narrower than a line is at least this many of its heights wide ("IT")
 ORPHAN_ALIKE = 0.3    # a chained orphan line is this close in height (share) to the added line it joins
 SMALL_LINE = 0.3      # smaller orphans, from this many line heights, may still be a paragraph of small lettering
 SMALL_LINE_PX = 8     # never below this height in pixels
@@ -2038,6 +2161,7 @@ FIT_SIDE = 0.3        # ink running past the box end this far (line heights) wid
 FIT_OVERLAP = 0.5     # boxes sharing this many line heights of rows are cut again line by line
 FIT_TALL = 2.0       # boxes are cut again only when one of them is this many line heights tall
 FIT_VALLEY = 0.12     # a row with less ink than this share of a line's usual row is a gap between lines
+FIT_GRAZE = 0.5       # ink past the box end in fewer of the line's rows than this share, running on past them, is not the line's
 FIT_GAP = 0.3         # a box grows over letters at most this far (line heights) from its own
 FIT_LARGE = 4.0       # a run of ink with no gap between rows up to this many line heights is one line of larger letters
 FIT_FILL = 0.7        # ...when its letters stand at least this share of the height of its ink (median by ink)
@@ -2051,6 +2175,65 @@ def _box(points):
     x0, y0 = pts.min(axis=0)
     x1, y1 = pts.max(axis=0)
     return int(round(x0)), int(round(y0)), int(round(x1)), int(round(y1))
+
+
+OWN_SMALLER = 0.6  # a box whose rows of letters are under this share of the page's line height
+
+
+WORD_UPRIGHT = 2.0  # an added line up to this many times taller than wide is a short word, not a column
+
+
+def _wider(box, width):
+    """``box`` widened on both sides to a little wider than tall, within the page's ``width``."""
+    x0, y0, x1, y1 = box
+    extra = (y1 - y0) - (x1 - x0)
+    if extra < 0:
+        return box
+    return (max(0, x0 - extra // 2 - 1), y0, min(width, x1 + extra - extra // 2 + 1), y1)
+
+
+def _own_height(ink, height):
+    """The line height to split a box by: the page's, or the height of the box's own rows of
+    letters when they are all much smaller (Manga teste 2 p9: a bubble of 26 px lines on a page
+    whose shout set the line height at 66; its rows were each too short to count as a line, and
+    one box over its four lines was never split)."""
+    found = [b - a for a, b in _runs(ink.any(axis=1)) if b - a >= 4]
+    # Rows of dots or of the feet of a line cut by the box are no line of their own.
+    runs = [r for r in found if r >= MIN_PART * max(found)] if found else []
+    if len(runs) == 1 and len(found) >= 2 and runs[0] < OWN_SMALLER * height:
+        return float(runs[0])  # one line of its own and a sliver of the next
+    if len(runs) < 2:
+        return height
+    own = float(np.median(runs))
+    # Rows of one size only.
+    if (own < OWN_SMALLER * height and max(runs) < OWN_SMALLER * height * SPLIT_FACTOR
+            and min(runs) >= OWN_SMALLER * own and max(runs) <= own / OWN_SMALLER):
+        return own
+    return height
+
+
+def _lettering_runs(flags, height):
+    """Runs of rows of lettering, as _runs; a run as tall as two lines is cut at its blank rows.
+
+    Manga teste 2 p7: "HEY, / NEXT / TERM!" with tight leading, only two blank rows between
+    "HEY," and "NEXT" (ROW_GAP tolerates them inside one line): the two read as one line twice
+    as tall as "TERM!", and the OCR lost "NEXT".  A run taller than SPLIT_FACTOR times the
+    shortest line of the box, or the page's line, is cut where no row has ink, when every
+    piece is a line of its own (MIN_PART).
+    """
+    runs = _runs(flags)
+    lines = [b - a for a, b in runs if b - a >= MIN_PART * height]
+    if not lines:
+        return runs
+    shortest = min(min(lines), height)
+    out = []
+    for a, b in runs:
+        pieces = _runs(flags[a:b], gap=0) if b - a > SPLIT_FACTOR * shortest else []
+        if len(pieces) >= 2 and all(d - c >= MIN_PART * height for c, d in pieces):
+            out.extend((a + c, a + d) for c, d in pieces)
+        else:
+            out.append((a, b))
+    return out
 
 
 def _runs(flags, gap=ROW_GAP):
@@ -2073,6 +2256,29 @@ def _runs(flags, gap=ROW_GAP):
 def _line_height(boxes):
     heights = [y1 - y0 for x0, y0, x1, y1 in boxes if (x1 - x0) >= 1.5 * (y1 - y0) > 0]
     return float(np.median(heights)) if heights else None
+
+
+MISSED_SHARE = 0.3  # a line of the second detector is new when the first one's mask holds less than this share of its letters
+
+
+def missed_lines(second, first_mask, gray):
+    """Indexes of the boxes of ``second`` whose letters the first detector's mask left out.
+
+    Manga teste 2 p7: CTD's mask had no pixel on "HELL?" under "WHAT / THE", on the "NEXT"
+    of "HEY, / NEXT / TERM!" or on the bubble "HALF / PRICE".  A line it masked, even boxed
+    or grouped otherwise, stays with it (its mask splits lines better than the second one's).
+    """
+    mask = np.asarray(first_mask) > 127
+    gray = np.asarray(gray)
+    found = []
+    for i, (x0, y0, x1, y1) in enumerate(second):
+        x0, y0 = max(0, int(x0)), max(0, int(y0))
+        letters = gray[y0:int(y1), x0:int(x1)] < INK_LEVEL
+        if not letters.any():
+            continue
+        if mask[y0:int(y1), x0:int(x1)][letters].mean() < MISSED_SHARE:
+            found.append(i)
+    return found
 
 
 def _covered(box, others):
@@ -2109,6 +2315,52 @@ def _same_box(a, b):
     inter = ix * iy
     union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
     return inter >= SAME_BOX * union
+
+
+ROW_SHARE = 0.7  # boxes sharing this share of the shorter one's rows are on one row...
+ROW_ALIKE = 0.3  # ...of letters as tall as each other, give or take this share...
+ROW_TOUCH = 0.3  # ...one starting at most this many line heights past the other's end: one line
+ROW_WALL = 0.25  # a stroke between them running this many line heights past their rows is an outline
+
+
+def _join_row_pieces(items, gray, changes):
+    """Boxes the detector cut inside a line, end to end on one row, joined into one.
+
+    Manga teste 2 p3: a long caption came as "LIVELY AND ENJOYABLE FOU" and "R-PANEL STORY...",
+    two speeches read and translated apart.  Boxes of one row that touch or overlap, of letters
+    of one size and with no stroke between them (two bubbles side by side), are one line.
+    """
+    items = list(items)
+    joined = True
+    while joined:
+        joined = False
+        for i in range(len(items)):
+            a = items[i][0]
+            for j in range(len(items)):
+                b = items[j][0]
+                if i == j or b[0] < a[0]:
+                    continue
+                ha, hb = a[3] - a[1], b[3] - b[1]
+                low = min(ha, hb)
+                rows = min(a[3], b[3]) - max(a[1], b[1])
+                if (low <= 0 or rows < ROW_SHARE * low or abs(ha - hb) > ROW_ALIKE * max(ha, hb)
+                        or b[0] - a[2] > ROW_TOUCH * low or b[0] <= a[0] + low or b[2] <= a[2]):
+                    continue
+                # An outline between two bubbles runs on above and below the letters; a letter
+                # stroke at the cut does not.
+                pad = int(round(ROW_WALL * low))
+                if gray is not None and _wall_between(gray, (a[0], a[1] - pad, a[2], a[3] + pad),
+                                                      (b[0], b[1] - pad, b[2], b[3] + pad)):
+                    continue
+                union = (a[0], min(a[1], b[1]), b[2], max(a[3], b[3]))
+                changes.append(("join", a, [union]))
+                items[i] = (union, items[i][1])
+                del items[j]
+                joined = True
+                break
+            if joined:
+                break
+    return items
 
 
 TRIM_EDGE = 0.5  # a dropped box is trimmed only over at most this share of the kept line it runs onto
@@ -2206,25 +2458,41 @@ def repair_lines(mask, boxes, gray=None, rebuild=False):
         return [(b, i) for i, b in enumerate(boxes)], []
     h, w = ink.shape
     result, changes = [], []
+    page_height = height
     for index, (x0, y0, x1, y1) in enumerate(boxes):
         x0, x1, y0, y1 = max(0, x0), min(w, x1), max(0, y0), min(h, y1)
+        height = _own_height(ink[y0:y1, x0:x1], page_height)
         others = [b for j, b in enumerate(boxes) if j != index]
         if y1 - y0 < SPLIT_CHECK * height:
             result.append(((x0, y0, x1, y1), index))
             continue
         tall = x1 - x0 <= y1 - y0
-        parts = []
+        parts, boxed = [], 0
         # A line the box cuts in half still counts (Grand Blue p25: one box over
         # "DON'T" and the top of "TELL ME"), so the rows are read a little past the box.
         reach = int(round(SPLIT_REACH * height))
         wy0, wy1 = max(0, y0 - reach), min(h, y1 + reach)
-        for r0, r1 in _runs(ink[wy0:wy1, x0:x1].any(axis=1)):
+        for r0, r1 in _lettering_runs(ink[wy0:wy1, x0:x1].any(axis=1), height):
             if r1 - r0 < MIN_PART * height or min(wy0 + r1, y1) - max(wy0 + r0, y0) < SPLIT_INSIDE * height:
                 continue
             cols = np.flatnonzero(ink[wy0 + r0:wy0 + r1, x0:x1].any(axis=0))
             part = (x0 + int(cols[0]), wy0 + r0, x0 + int(cols[-1]) + 1, wy0 + r1)
-            if _covered(part, others) < 0.5:
+            # A line two boxes overlap is the one that holds more of it (Manga teste 2 p9: the box of
+            # the lines under "NEXT" started halfway down it).
+            held = _covered(part, others)
+            if held < 0.5 or _covered(part, [(x0, y0, x1, y1)]) > held:
                 parts.append(part)
+            else:
+                boxed += 1
+        if (len(parts) == 1 and boxed and not tall and y1 - y0 >= SPLIT_FACTOR * height
+                and parts[0][3] - parts[0][1] <= SPLIT_FACTOR * height):
+            # One line of its own and the top or bottom of a line another box holds (Manga teste 2
+            # p9: "NEXT" boxed with the top of "IS THE" under it, a box twice its letters' height):
+            # read as larger letters, it was left out of its speech and kept as art.  The box is
+            # cut to its own line.
+            result.append((parts[0], index))
+            changes.append(("trim", (x0, y0, x1, y1), [parts[0]]))
+            continue
         rows = float(np.median([p[3] - p[1] for p in parts])) if parts else 0.0
         if tall and (len(parts) < 2 or max(p[2] - p[0] for p in parts) < STACK_WIDE * rows
                      or rows > SPLIT_FACTOR * height):
@@ -2256,6 +2524,7 @@ def repair_lines(mask, boxes, gray=None, rebuild=False):
             changes.append(("split", (x0, y0, x1, y1), parts))
         else:
             result.append(((x0, y0, x1, y1), index))
+    height = page_height
     result = fit_lines(ink, result, height, changes, gray, valley=rebuild)
     # Two detector boxes over the same line (a small one inside a large one) fit to the same
     # letters: one is enough, or the line is read twice ("PIRATES PIRATES", One Piece 1161 p4).
@@ -2271,7 +2540,7 @@ def repair_lines(mask, boxes, gray=None, rebuild=False):
                 break
         else:
             unique.append((box, source))
-    result = unique
+    result = _join_row_pieces(unique, gray, changes)
     # Lines of the mask that no box covers.
     known = np.zeros_like(ink)
     for (x0, y0, x1, y1), _ in result:
@@ -2281,6 +2550,7 @@ def repair_lines(mask, boxes, gray=None, rebuild=False):
     count, labels, stats, _ = cv2.connectedComponentsWithStats(lines, connectivity=8)
     current = [b for b, _ in result]
     lonely = []  # line-shaped orphans far from any box: kept only as a paragraph (below)
+    narrow = []  # orphans narrower than a line: kept only beside an added line of their size
     small = []   # lines in smaller letters than the page's (a quiet bubble beside a shout): same rule
     for label in range(1, count):
         x, y, bw, bh = (int(v) for v in stats[label, :4])
@@ -2292,9 +2562,16 @@ def repair_lines(mask, boxes, gray=None, rebuild=False):
                     and known[y:y + bh, x:x + bw][pixels].mean() <= ORPHAN_COVERED:
                 small.append((x + int(cols[0]), y, x + int(cols[-1]) + 1, y + bh))
             continue
-        if not (ORPHAN_MIN * height <= bh <= STAIR_FACTOR * height and bw >= height):
+        if not (ORPHAN_MIN * height <= bh <= STAIR_FACTOR * height):
             continue
         pixels = (labels[y:y + bh, x:x + bw] == label) & ink[y:y + bh, x:x + bw]
+        if bw < height:
+            # A short word ("IT" over "WAS / LIKE...", Manga teste 2 p10) is narrower than a line:
+            # it only joins lines added beside it in letters of its size (below).
+            cols = np.flatnonzero(pixels.any(axis=0))
+            if len(cols) and known[y:y + bh, x:x + bw][pixels].mean() <= ORPHAN_COVERED                     and cols[-1] - cols[0] + 1 >= ORPHAN_NARROW * bh:
+                narrow.append((x + int(cols[0]), y, x + int(cols[-1]) + 1, y + bh))
+            continue
         # On the middle of the line: the loose box of the next line covered the feet of "I'LL", 36% of
         # its ink, and the line was taken as read and lost (Grand Blue 102 p33).
         middle = pixels.copy()
@@ -2311,9 +2588,17 @@ def repair_lines(mask, boxes, gray=None, rebuild=False):
                 # One line of larger letters, not a staircase (Grand Blue 106 p25: "MY" over a
                 # shout in letters a half taller than the page's speech was lost).
                 boxes_here = [whole]
+            elif not boxes_here:
+                # Otherwise it joins only lines added beside it in letters of its size ("IT" over
+                # "WAS / LIKE..." in a shout, Manga teste 2 p10).
+                narrow.append(whole)
         else:
             cols = np.flatnonzero(pixels.any(axis=0))
             boxes_here = [(x + int(cols[0]), y, x + int(cols[-1]) + 1, y + bh)]
+            if bh >= ORPHAN_STACK * height and bh >= ORPHAN_UPRIGHT * (cols[-1] - cols[0] + 1):
+                # Letters written one over the other on the drawing (Manga teste 2 p7: "A / SET /
+                # MEAL" beside a shout), not a line: added, they joined the shout and were cleaned.
+                continue
         # The two halves of a staircase stand or fall together.
         if boxes_here and any(_near(b, current, height) for b in boxes_here):
             result.extend((box, None) for box in boxes_here)
@@ -2328,10 +2613,17 @@ def repair_lines(mask, boxes, gray=None, rebuild=False):
         return any(_near(box, [b], height) and abs((box[3] - box[1]) - (b[3] - b[1])) <= ORPHAN_ALIKE * (b[3] - b[1])
                    for b in added)
     while gray is not None:
+        # A short word may be one piece of ink ("IT" in a hand where the letters touch): it has to
+        # stand over or under the line it joins, its middle within that line's width.
+        def under(box):
+            middle = (box[0] + box[2]) / 2
+            return any(b[0] <= middle <= b[2] and _near(box, [b], height) for b in added)
         joined = [b for b in lonely if alike(b) and _letters(gray, b) >= ORPHAN_LETTERS]
+        joined += [b for b in narrow if alike(b) and under(b) and _letters(gray, b) >= 1]
         if not joined:
             break
         lonely = [b for b in lonely if b not in joined]
+        narrow = [b for b in narrow if b not in joined]
         added += joined
         result.extend((box, None) for box in joined)
         changes.append(("added", None, joined))
@@ -2357,6 +2649,10 @@ def repair_lines(mask, boxes, gray=None, rebuild=False):
                 same = [k for k, (b, _) in enumerate(result)
                         if max(box[0], b[0]) - min(box[2], b[2]) <= min(box[3] - box[1], b[3] - b[1])
                         and min(box[3], b[3]) - max(box[1], b[1]) >= 0.5 * min(box[3] - box[1], b[3] - b[1])]
+                # Not across a stroke from the top to the bottom of the row: the frame of a caption
+                # box between them makes the word past it another speech (Manga teste 2 p11: "IT",
+                # outside the box, joined to "GETTING" inside it and read with the wrong speech).
+                same = [k for k in same if not _wall_between(gray, result[k][0], box)]
                 if len(same) == 1:
                     b, source = result[same[0]]
                     union = (min(b[0], box[0]), min(b[1], box[1]), max(b[2], box[2]), max(b[3], box[3]))
@@ -2367,7 +2663,35 @@ def repair_lines(mask, boxes, gray=None, rebuild=False):
             if edges:
                 result.extend((box, None) for box in edges)
                 changes.append((kind, None, edges))
+    # A short word of tall letters added as a line ("IT" over "WAS", Manga teste 2 p10) is a little
+    # taller than wide: the engine read it as vertical text and lost it.  It goes in a little wider
+    # than tall, as the row of one letter cut from a box does; a real column is much taller.
+    result = [(_wider(box, w), source) if source is None and box[2] - box[0] < box[3] - box[1]
+              <= WORD_UPRIGHT * (box[2] - box[0]) else (box, source) for box, source in result]
     return result, changes
+
+
+WALL_TALL = 0.9  # a column dark over this share of a row's height is a stroke across it
+WALL_PAST = 0.25  # line heights: in boxes that touch, the stroke also runs this far above and below the row
+
+
+def _wall_between(gray, a, b):
+    """True when a stroke crosses the whole row between boxes ``a`` (a line) and ``b`` side by side."""
+    left, right = (a, b) if a[0] <= b[0] else (b, a)
+    x0, x1 = int(left[2]), int(right[0])
+    y0, y1 = int(max(a[1], b[1])), int(min(a[3], b[3]))
+    if x1 - x0 < 1:
+        # ``b`` starts on the line: its last letter overhung its box and was taken in (Manga teste 2
+        # p11, "GETTING" and "IT" past a caption's frame).  The wall is looked for in the part of
+        # ``b`` past the line, as a stroke running above and below the row, as a frame does; a
+        # letter of the row (an "I") is only a row tall.
+        x0, x1 = (int(a[2]), int(b[2])) if b[2] > a[2] else (int(b[0]), int(a[0]))
+        past = int(round(WALL_PAST * (y1 - y0)))
+        y0, y1 = max(0, y0 - past), min(np.asarray(gray).shape[0], y1 + past)
+    if x1 - x0 < 1 or y1 - y0 < 2:
+        return False
+    dark = np.asarray(gray)[y0:y1, x0:x1] < INK_LEVEL
+    return bool((dark.mean(axis=0) >= WALL_TALL).any())
 
 
 EDGE_MIN = 0.25  # a strip of mask this many line heights tall, right above or below a line...
@@ -2767,7 +3091,19 @@ def _ink_span(ink, x0, x1, y0, y1, height, others):
                 lo = max(lo, ox1)
             elif ox0 >= x1:
                 hi = min(hi, ox0)
-    cols = ink[y0:y1, lo:hi].any(axis=0)
+    band = ink[y0:y1, lo:hi]
+    cols = band.any(axis=0)
+    # Outside the box, ink that only grazes the top or bottom rows of the line and runs on past
+    # them is a letter of another line or of the drawing, not of this one (Manga teste 2 p7: the
+    # "M" of "A / SET / MEAL", stacked upright beside "HELL?", was taken in and cleaned off).
+    if y1 > y0:
+        crosses = np.zeros_like(cols)
+        if y0 > 0:
+            crosses |= ink[y0 - 1, lo:hi] & ink[y0, lo:hi]
+        if y1 < ink.shape[0]:
+            crosses |= ink[y1, lo:hi] & ink[y1 - 1, lo:hi]
+        outside = (np.arange(lo, hi) < x0) | (np.arange(lo, hi) >= x1)
+        cols &= ~(crosses & outside & (band.sum(axis=0) < FIT_GRAZE * (y1 - y0)))
     # Letter spacing only: a mark beyond a word gap (a sound effect on the bubble outline) stays out.
     gap = max(3, int(round(height * FIT_GAP)))
     on = np.flatnonzero(cols)
@@ -2788,6 +3124,8 @@ def _ink_span(ink, x0, x1, y0, y1, height, others):
 
 GLYPH_FILL = 0.15  # a letter fills at least this share of its box; a thin slanted stroke of the art does not
 GLYPH_PAPER = 0.6  # and at least this share of the pixels just around it is paper
+GLYPH_ALIGN = 0.1  # a letter whose top and bottom are this share of the line height from the line's...
+GLYPH_WORD = 1.0   # ...is taken in this many line heights away (a word gap), not just a letter gap
 
 
 def _on_paper(window, labels, label, stat):
@@ -2803,7 +3141,7 @@ def _on_paper(window, labels, label, stat):
     return bool(ring.any()) and float(np.mean(window[y0:y1, x0:x1][ring] >= PAPER_LIGHT)) >= GLYPH_PAPER
 
 
-def _glyph_span(gray, x0, x1, r0, r1, height, lo, hi):
+def _glyph_span(gray, x0, x1, r0, r1, height, lo, hi, others=()):
     """Widen x0..x1 over dark glyphs of the image that sit inside the row band r0..r1.
 
     The detector mask can miss the first letter of a bold italic word (the "A" of
@@ -2823,18 +3161,55 @@ def _glyph_span(gray, x0, x1, r0, r1, height, lo, hi):
     window = gray[wy0:wy1, wx0:wx1]
     dark = (window < INK_LEVEL).astype(np.uint8)
     count, labels, stats, _ = cv2.connectedComponentsWithStats(dark, connectivity=8)
-    glyphs = [(wx0 + int(sx), wx0 + int(sx + sw)) for k, (sx, sy, sw, sh, area) in enumerate(stats[1:], 1)
-              if sy > 0 and sy + sh < wy1 - wy0 and sh >= 0.3 * (r1 - r0) and area >= GLYPH_FILL * sw * sh
-              and _on_paper(window, labels, k, stats[k])]
+    found = [(int(sx), int(sy), int(sx + sw), int(sy + sh)) for k, (sx, sy, sw, sh, area) in enumerate(stats[1:], 1)
+             if sy > 0 and sy + sh < wy1 - wy0 and sh >= 0.3 * (r1 - r0) and area >= GLYPH_FILL * sw * sh
+             and _on_paper(window, labels, k, stats[k])]
+    # Two letters of one line never stand one over the other: those are letters written upright,
+    # down the drawing beside the line (Manga teste 2 p7: the "M" and "E" of "A / SET / MEAL"
+    # beside "HELL?" were taken in and cleaned off the art).
+    def stacked(a, b):
+        return (a is not b and min(a[2], b[2]) - max(a[0], b[0]) > 0.5 * min(a[2] - a[0], b[2] - b[0])
+                and (a[3] <= b[1] or b[3] <= a[1]))
+    # The letter over or under one may stand past the rows of the line: a laugh written down a
+    # bubble outline beside the line (Manga teste 2 p2, "AHAHA" beside "I'M ALWAYS"), its letters
+    # stepping down.  Pieces a line height above and below count too, save those inside the other
+    # lines' boxes (the line above, over a letter the detector missed).
+    ty0, ty1 = max(0, wy0 - int(round(height))), min(h, wy1 + int(round(height)))
+    near = list(found)
+    if ty0 < wy0 or ty1 > wy1:
+        tall = (gray[ty0:ty1, wx0:wx1] < INK_LEVEL).astype(np.uint8)
+        tcount, _, tstats, _ = cv2.connectedComponentsWithStats(tall, connectivity=8)
+        for sx, sy, sw, sh, area in tstats[1:]:
+            box = (wx0 + int(sx), ty0 + int(sy), wx0 + int(sx + sw), ty0 + int(sy + sh))
+            # Letter-sized only: a rule under the line or a panel border is no letter over it.
+            if (sh < 0.3 * (r1 - r0) or sh > 2 * (r1 - r0) or sw > 2 * (r1 - r0)
+                    or area < GLYPH_FILL * sw * sh):
+                continue
+            cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+            if any(ox0 <= cx <= ox1 and oy0 <= cy <= oy1 for ox0, oy0, ox1, oy1 in others):
+                continue
+            near.append((box[0] - wx0, box[1] - wy0, box[2] - wx0, box[3] - wy0))
+    loose = [a for a in found if not any(stacked(a, b) for b in near)]
     gap = max(3, int(round(height * FIT_GAP)))
+    # A letter standing on the line's own top and bottom rows is of the line a word gap off too
+    # (Manga teste 2 p3: the "A" of "A LIVELY AND ENJOYABLE..." was left on the page).
+    align = max(2, int(round(GLYPH_ALIGN * (r1 - r0))))
+    word = max(gap, int(round(height * GLYPH_WORD)))
+    glyphs = [(wx0 + a[0], wx0 + a[2],
+               word if (abs(wy0 + a[1] - r0) <= align and abs(wy0 + a[3] - r1) <= align) else gap)
+              for a in loose]
+    start = (x0, x1)
     changed = True
     while changed:
         changed = False
-        for g0, g1 in glyphs:
-            if g0 < x0 and x0 - g1 <= gap:
+        for g0, g1, step in glyphs:
+            if g0 < x0 and x0 - g1 <= step:
                 x0, changed = g0, True
-            if g1 > x1 and g0 - x1 <= gap:
+            if g1 > x1 and g0 - x1 <= step:
                 x1, changed = g1, True
+    # Grown to the edge of the window: the line may run on past it.
+    if (x0, x1) != start and (x0 - wx0 < reach // 2 < x0 - lo or wx1 - x1 < reach // 2 < hi - x1):
+        return _glyph_span(gray, x0, x1, r0, r1, height, lo, hi, others)
     return x0, x1
 
 
@@ -2901,12 +3276,25 @@ def fit_lines(ink, items, height, changes, gray=None, valley=False):
         while parent[i] != i:
             i = parent[i]
         return i
+    def local(box):
+        # The lines of a bubble much smaller than the page's (Manga teste 2 p9: 26 px lines on a
+        # page whose shout set 66) are measured on their own rows.
+        x0, y0, x1, y1 = (max(0, int(v)) for v in box)
+        return _own_height(ink[y0:y1, x0:x1], height)
     for i in range(n):
         for j in range(i + 1, n):
             a, b = boxes[i], boxes[j]
             rows = min(a[3], b[3]) - max(a[1], b[1])
             cols = min(a[2], b[2]) - max(a[0], b[0])
-            if rows >= FIT_OVERLAP * height and cols > 0.3 * min(a[2] - a[0], b[2] - b[0]) \
+            pair = local((min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]))) if rows > 0 else height
+            if rows > 0 and cols > 0 and pair < height:
+                # Measured on its own small lines, only the shared rows that hold lettering count: two
+                # slanted boxes of a small bubble reach a few empty rows into each other ("TO" over
+                # "WORKING", Manga teste 2 p4), and cutting them again left boxes too tight for the OCR.
+                sy0, sy1 = max(int(a[1]), int(b[1]), 0), max(0, int(min(a[3], b[3])))
+                sx0, sx1 = max(int(a[0]), int(b[0]), 0), max(0, int(min(a[2], b[2])))
+                rows = int(ink[sy0:sy1, sx0:sx1].any(axis=1).sum())
+            if rows >= FIT_OVERLAP * pair and cols > 0.3 * min(a[2] - a[0], b[2] - b[0]) \
                     and a[2] - a[0] > a[3] - a[1] and b[2] - b[0] > b[3] - b[1]:
                 parent[root(i)] = root(j)
     groups = {}
@@ -2915,21 +3303,22 @@ def fit_lines(ink, items, height, changes, gray=None, valley=False):
     out = []
     for members in groups.values():
         # Only when a box holds two lines or more: boxes of a tilted paragraph overlap a little anyway.
-        if len(members) >= 2 and max(boxes[i][3] - boxes[i][1] for i in members) >= FIT_TALL * height:
-            union = (min(boxes[i][0] for i in members), min(boxes[i][1] for i in members),
-                     max(boxes[i][2] for i in members), max(boxes[i][3] for i in members))
+        union = (min(boxes[i][0] for i in members), min(boxes[i][1] for i in members),
+                 max(boxes[i][2] for i in members), max(boxes[i][3] for i in members))
+        group_height = local(union) if len(members) >= 2 else height
+        if len(members) >= 2 and max(boxes[i][3] - boxes[i][1] for i in members) >= FIT_TALL * group_height:
             x0, y0, x1, y1 = union
             parts = []
             counts = ink[y0:y1, x0:x1].sum(axis=1)
             rows = counts > 0
             runs = []
             for r0, r1 in _runs(rows):
-                if r1 - r0 <= SPLIT_FACTOR * height:
+                if r1 - r0 <= SPLIT_FACTOR * group_height:
                     runs.append((r0, r1))
                     continue
                 runs.extend(_valley_runs(counts, r0, r1))
             for r0, r1 in runs:
-                if r1 - r0 < MIN_PART * height:
+                if r1 - r0 < MIN_PART * group_height:
                     continue
                 cols = np.flatnonzero(ink[y0 + r0:y0 + r1, x0:x1].any(axis=0))
                 # The row keeps its letters past the boxes ("ISN'T IT?" lost "IT?").
@@ -2965,6 +3354,16 @@ def fit_lines(ink, items, height, changes, gray=None, valley=False):
                 continue
             r0, r1 = runs[0]
             others = [b for j, b in enumerate(boxes) if j != i]
+            # Lines with tight leading touch, and the run of ink goes on into the next line: the box
+            # never takes the rows of the box of the line above or below it (Manga teste 2 p7: "WHY
+            # CAN'T YOU" grew over "AFFORD TO SPEND", which, cut to a sliver, was never read).
+            for ox0, oy0, ox1, oy1 in others:
+                if min(x1, ox1) - max(x0, ox0) <= OVERLAP_SIDE * min(x1 - x0, ox1 - ox0):
+                    continue
+                if oy0 + oy1 > y0 + y1 and oy0 < r1:
+                    r1 = max(y1, oy0)
+                elif oy0 + oy1 < y0 + y1 and oy1 > r0:
+                    r0 = min(y0, oy1)
             # Even a row of the letters left outside the box makes the OCR drop the line.
             tall = r0 < y0 or r1 > y1
             if gray is not None:
@@ -2974,7 +3373,7 @@ def fit_lines(ink, items, height, changes, gray=None, valley=False):
             for line in ((max(height, r1 - r0), height) if large else (height,)):  # larger letters, wider spacing
                 nx0, nx1 = _ink_span(ink, x0, x1, r0, r1, line, others)
                 if gray is not None:
-                    nx0, nx1 = _glyph_span(gray, nx0, nx1, r0, r1, line, lo, hi)
+                    nx0, nx1 = _glyph_span(gray, nx0, nx1, r0, r1, line, lo, hi, others)
                 # Larger letters have paper right above them and a little below them (the tail of a
                 # comma) to the ends of the line: a drawing that runs past the line (a face beside
                 # "ANYHOW,") falls back to the usual spacing.
@@ -3091,6 +3490,63 @@ def column_cuts(gray, boxes):
             for i in idx:
                 if boxes[i][0] < gx0 and boxes[i][2] > gx1:
                     cuts[i] = (gx0, gx1)
+        else:
+            cuts.update(_row_gutters(ink, [boxes[i] for i in idx], idx, x0, height))
+    return cuts
+
+
+COLUMN_SLANT_ROWS = 3  # rows in a row whose gutters line up make two columns without a straight blank stripe
+COLUMN_SLANT_DRIFT = 0.6  # a gutter lines up with the one above when they share columns or lie this close, in line heights
+
+
+def _row_gutters(ink, boxes, idx, x0, height):
+    """{line index: (x0, x1)} for two columns whose gutter is no straight stripe through the stack.
+
+    Manga teste 2 p4: italic columns side by side, the gutter drifting a few pixels a row and
+    the left column running on under the right one.  Each row's widest blank, much wider than
+    its word spaces, is its gutter; three rows or more one under the other whose gutters line
+    up are two columns, and each of those rows is cut at its own gutter.  A line with no
+    gutter of its own breaks the chain only when its ink crosses the gutter above.
+    """
+    rows = []
+    for k in range(len(boxes)):
+        cols = np.flatnonzero(ink[k])
+        gaps = [(int(a) + 1, int(b)) for a, b in zip(cols, cols[1:]) if b - a > 1]
+        if not gaps:
+            rows.append(None)
+            continue
+        widest = max(gaps, key=lambda g: g[1] - g[0])
+        words = [b - a for a, b in gaps if (a, b) != widest]
+        width = widest[1] - widest[0]
+        if width < COLUMN_ROW_GAP * height or (words and width < COLUMN_WORD_GAP * max(words)):
+            rows.append(None)
+        else:
+            rows.append(widest)
+    order = sorted(range(len(boxes)), key=lambda k: boxes[k][1])
+    cuts, chain = {}, []
+
+    def close(chain):
+        if len(chain) >= COLUMN_SLANT_ROWS:
+            for k in chain:
+                cuts[idx[k]] = (x0 + rows[k][0], x0 + rows[k][1])
+
+    for k in order:
+        gap = rows[k]
+        if gap is None:
+            # A line wholly on one side of the gutter (a column's own line the detector boxed
+            # alone) leaves the chain going; a line across it ends the columns.
+            if chain and ink[k, rows[chain[-1]][0]:rows[chain[-1]][1]].any():
+                close(chain)
+                chain = []
+            continue
+        if chain:
+            prev = rows[chain[-1]]
+            drift = max(gap[0] - prev[1], prev[0] - gap[1])
+            if drift > COLUMN_SLANT_DRIFT * height:
+                close(chain)
+                chain = []
+        chain.append(k)
+    close(chain)
     return cuts
 
 
@@ -3253,6 +3709,144 @@ def gap_cuts(mask, gray, boxes):
                 cuts[i].append((x0 + a, max(y0, y0 + int(rows[0]) - GAP_PAD), x0 + b,
                                 min(y1, y0 + int(rows[-1]) + 1 + GAP_PAD)))
     return cuts
+
+
+SIZE_JUMP = 1.8   # words this many times taller than the next one on a line are another speech
+SIZE_GAP = 1.0    # ... when the blank between them is at least this many small-letter heights
+SIZE_ALIKE = 0.25 # letters of a word are about as tall as each other: within this share of their height
+SIZE_WORD = 0.33  # letters closer than this share of the line box height are one word
+SIZE_LETTER = 8   # px: smaller pieces are dots and specks, not letters
+
+
+def size_cuts(gray, boxes):
+    """{line index: [(x0, y0, x1, y1), ...]} for line boxes over two speeches in letters of very
+    different sizes side by side.
+
+    Manga teste 2 p2: "IN SHORT," in small letters in a lobe of the bubble beside "NEED TO" in big
+    ones; the detector drew one box over both, and the two speeches were read and translated as
+    one.  Each part is as tall as its own letters.  Dots, commas and dashes ride with their word.
+    """
+    gray = np.asarray(gray)
+    cuts = {}
+    for i, (x0, y0, x1, y1) in enumerate(boxes):
+        x0, y0, x1, y1 = max(0, int(x0)), max(0, int(y0)), int(x1), int(y1)
+        ink = gray[y0:y1, x0:x1] < INK_LEVEL
+        if not ink.size or x1 - x0 <= y1 - y0:
+            continue
+        # Words: letters closer than a third of the box height (spaced-out capitals stay one word).
+        words = _runs(ink.any(axis=0), max(GAP_SPECK, int(SIZE_WORD * (y1 - y0))))
+        if len(words) < 2:
+            continue
+        # A word's height is the usual height of its letters: a word of the next line poking
+        # into the box above or below it does not count.
+        count, _, stats, _ = cv2.connectedComponentsWithStats(ink.astype(np.uint8), connectivity=8)
+        heights, letters = [], []
+        for a, b in words:
+            own = [stats[c, cv2.CC_STAT_HEIGHT] for c in range(1, count)
+                   if a <= stats[c, cv2.CC_STAT_LEFT] + stats[c, cv2.CC_STAT_WIDTH] / 2 < b]
+            h = float(np.median(own)) if own else 0.0
+            heights.append(h)
+            # A word of clean letters: at least two pieces about as tall as each other (screentone
+            # or a halo breaks letters into specks of every size, and a lone "I" says little).
+            alike = sum(1 for v in own if abs(v - h) <= SIZE_ALIKE * h)
+            letters.append(h >= SIZE_LETTER and alike >= 2)
+        parts = [[0]]
+        for k in range(1, len(words)):
+            left = next((j for j in reversed(parts[-1]) if letters[j]), None)
+            if left is not None and letters[k]:
+                big, small = max(heights[left], heights[k]), min(heights[left], heights[k])
+                if big >= SIZE_JUMP * small and words[k][0] - words[left][1] >= SIZE_GAP * small:
+                    parts.append([k])
+                    continue
+            parts[-1].append(k)
+        if len(parts) < 2:
+            continue
+        cuts[i] = []
+        tallest = max(heights[k] for k in range(len(words)) if letters[k])
+        for part in parts:
+            a, b = words[part[0]][0], words[part[-1]][1]
+            own = [heights[k] for k in part if letters[k]]
+            small = float(np.median(own)) if own else 0.0
+            if small and tallest >= SIZE_JUMP * small:
+                rows = _small_rows(gray, boxes, i, x0 + a, x0 + b, y0, y1, small)
+                if rows:
+                    cuts[i].extend(rows)
+                    continue
+            # The rows of its own letters: its pieces across its busiest row (a word of the line
+            # above poking into the box, "IN" over "SHORT,", stays out).
+            busiest = int(np.argmax(ink[:, a:b].sum(axis=1)))
+            rows = [(stats[c, cv2.CC_STAT_TOP], stats[c, cv2.CC_STAT_TOP] + stats[c, cv2.CC_STAT_HEIGHT])
+                    for c in range(1, count)
+                    if a <= stats[c, cv2.CC_STAT_LEFT] + stats[c, cv2.CC_STAT_WIDTH] / 2 < b
+                    and stats[c, cv2.CC_STAT_TOP] <= busiest < stats[c, cv2.CC_STAT_TOP] + stats[c, cv2.CC_STAT_HEIGHT]]
+            r0 = min(r for r, _ in rows) if rows else 0
+            r1 = max(r for _, r in rows) if rows else y1 - y0
+            cuts[i].append((x0 + a, max(y0, y0 + int(r0) - GAP_PAD), x0 + b, min(y1, y0 + int(r1) + GAP_PAD)))
+    return cuts
+
+
+SIZE_PAD = 0.3     # margin round a line of the small speech, in its letter heights
+SIZE_REACH = 2.0   # the small speech's other lines are looked for this many of its letter heights past the box
+
+
+def _small_rows(gray, boxes, i, a, b, y0, y1, small):
+    """Boxes of the lines of small letters in columns a..b of the page around box ``i``.
+
+    The small speech of a box cut by size may run on above or below the box: "IN" over
+    "SHORT," (Manga teste 2 p2) poked half into the box over "NEED TO", and keeping only the row
+    of "SHORT," left "IN" on the page, read by nobody.  Letters about as tall as the small ones,
+    within SIZE_REACH heights and in no other box, are lines of it.  Dots and commas ride with
+    the line whose rows they touch.  [] when no row of such letters is found.
+    """
+    h = gray.shape[0]
+    reach = int(round(SIZE_REACH * small))
+    t0, t1 = max(0, y0 - reach), min(h, y1 + reach)
+    ink = (gray[t0:t1, a:b] < INK_LEVEL).astype(np.uint8)
+    if not ink.size:
+        return []
+    count, _, stats, _ = cv2.connectedComponentsWithStats(ink, connectivity=8)
+    others = [box for j, box in enumerate(boxes) if j != i]
+    letters, marks = [], []
+    for c in range(1, count):
+        x, y, w, hh = (int(v) for v in stats[c, :4])
+        piece = (a + x, t0 + y, a + x + w, t0 + y + hh)
+        cx, cy = (piece[0] + piece[2]) / 2, (piece[1] + piece[3]) / 2
+        if any(ox0 <= cx <= ox1 and oy0 <= cy <= oy1 for ox0, oy0, ox1, oy1 in others):
+            continue
+        if y == 0 or y + hh >= t1 - t0:  # cut by the window: not a whole letter
+            continue
+        if abs(hh - small) <= SIZE_ALIKE * small * 2:
+            letters.append(piece)
+        elif hh < small:
+            marks.append(piece)
+    rows = []
+    for piece in sorted(letters, key=lambda p: p[1]):
+        if rows and piece[1] < rows[-1][3] - 0.3 * small:
+            r = rows[-1]
+            rows[-1] = (min(r[0], piece[0]), min(r[1], piece[1]), max(r[2], piece[2]), max(r[3], piece[3]))
+        else:
+            rows.append(piece)
+    # Lines of the speech only: rows of two letters or more, in the box's rows or a line gap
+    # from one that is.
+    rows = [r for r in rows if sum(1 for p in letters if p[1] < r[3] and p[3] > r[1]) >= 2]
+    kept = [r for r in rows if r[1] < y1 and r[3] > y0]
+    grown = True
+    while grown and kept:
+        grown = False
+        for r in rows:
+            if r not in kept and any(max(r[1] - k[3], k[1] - r[3]) <= small for k in kept):
+                kept.append(r)
+                grown = True
+    out = []
+    for r in sorted(kept, key=lambda r: r[1]):
+        x_0, y_0, x_1, y_1 = r
+        for m in marks:
+            if m[1] < y_1 + 0.3 * small and m[3] > y_0 and m[0] <= x_1 + small and m[2] >= x_0 - small:
+                x_0, y_0, x_1, y_1 = min(x_0, m[0]), min(y_0, m[1]), max(x_1, m[2]), max(y_1, m[3])
+        # A margin round the letters: boxed tight, a short word ("IN") was read as a symbol ("™").
+        pad = max(GAP_PAD, int(round(SIZE_PAD * small)))
+        out.append((max(0, x_0 - pad), max(0, y_0 - pad), min(gray.shape[1], x_1 + pad), min(h, y_1 + pad)))
+    return out
 
 
 def paragraph_of(blocks, boxes):
@@ -3651,3 +4245,565 @@ def _rows_below(gray, rows, letters, span, bottom):
         letters[row[1]:row[3], row[0]:row[2]] |= ink[b:d, a:c]
         bottom = max(bottom, row[3] + 6)
     return rows, bottom
+
+
+# Sideways text ---------------------------------------------------------------
+# A label down the margin or along a sign, written turned a quarter: the OCR reads a vertical box
+# turned one way only (the engine's), so text that runs up the page came out as noise, and capitals
+# stacked one per row were read lying down (Manga teste 2 p3, p8: margins; p2 "MAYBE").  Each tall
+# box is read three ways (sideways_readings) and keeps the surest; the translation is lettered
+# turned the same way (engine_compat.bubble_layout).
+
+SIDEWAYS_TALL = 3.0   # a vertical box this many times taller than wide may be a turned line (a narrow
+                      # bubble of short lines, Manga teste 2 p4 "AH / I SEE, / WELL", is about 2)
+SIDEWAYS_JOIN = 0.5   # tall boxes closer than this many column widths side by side are one block
+STACK_GAP = 1.6       # in a column of stacked letters, a gap this many times the usual one is a space
+INSIDE_COLUMN = 0.6   # an added line this share (of its area) inside a tall vertical line is one of its letters
+TURNED_ROW = 0.4      # a run of rows this share of the tallest in a turned block is a line of it
+PIECE_LONG = 14       # a line longer than this many line heights is read in pieces (word_pieces)
+STACK_TOUCH = 1.6     # a piece of a stacked column this many letters tall is letters that touch
+STACK_PAD = 0.25      # room around and between the letters laid in a row, in letter heights
+STACK_REACH = 1.5     # letter heights: a stacked column grows over a letter of its own size this far past its end...
+STACK_ALIKE = 0.6     # ...as tall as its usual letter within this share either way, and no wider than the column
+TURNED_LETTER = 1.3   # a piece of ink at most this many column widths across may be turned letters...
+TURNED_RUN = 3.0      # ...and at most this many along the line (letters that touch, Manga teste 2 p4 "OOL")...
+TURNED_GAP = 1.0      # ...and one this many column widths or less past a block's end is its next letter
+TURNED_SPECK = 0.3    # pieces smaller than this many column widths do not carry the block on
+TURNED_WALL = 0.5     # a row where bigger pieces (a frame, the drawing) cover this share of the columns stops it
+TURNED_BAND = 1.5     # the end of a block goes on only over paper: this many column widths past it...
+TURNED_PAPER = 0.75   # ...this share of the page there (the letters left out) lighter than PAPER_LIGHT
+TURNED_RULE = 0.8     # a darker-than-paper run across this share of a block's columns is a frame (ruled_rows)
+
+
+def turn_page(image, way):
+    """The page turned so a line that runs up ('cw') or down ('ccw') it reads left to right."""
+    return cv2.rotate(np.ascontiguousarray(image), cv2.ROTATE_90_CLOCKWISE if way == "cw" else cv2.ROTATE_90_COUNTERCLOCKWISE)
+
+
+def turn_points(points, way, shape):
+    """Points (x, y) of a page of ``shape`` (h, w, ...) where they land on turn_page(page, way)."""
+    h, w = shape[:2]
+    pts = np.asarray(points, np.float64).reshape(-1, 2)
+    if way == "cw":
+        return np.stack([h - 1 - pts[:, 1], pts[:, 0]], axis=1)
+    return np.stack([pts[:, 1], w - 1 - pts[:, 0]], axis=1)
+
+
+def unturn_points(points, way, shape):
+    """Points on turn_page(page, way) back on the page of ``shape`` (the page's own h, w)."""
+    h, w = shape[:2]
+    pts = np.asarray(points, np.float64).reshape(-1, 2)
+    if way == "cw":
+        return np.stack([pts[:, 1], h - 1 - pts[:, 0]], axis=1)
+    return np.stack([w - 1 - pts[:, 1], pts[:, 0]], axis=1)
+
+
+def turn_box(box, way, shape):
+    """A box (x0, y0, x1, y1) of the page as a box of turn_page(page, way)."""
+    x0, y0, x1, y1 = box
+    pts = turn_points([[x0, y0], [x1, y1]], way, shape)
+    return (int(round(pts[:, 0].min())), int(round(pts[:, 1].min())),
+            int(round(pts[:, 0].max())), int(round(pts[:, 1].max())))
+
+
+def unturn_box(box, way, shape):
+    """A box of turn_page(page, way) as a box of the page."""
+    x0, y0, x1, y1 = box
+    pts = unturn_points([[x0, y0], [x1, y1]], way, shape)
+    return (int(round(pts[:, 0].min())), int(round(pts[:, 1].min())),
+            int(round(pts[:, 0].max())), int(round(pts[:, 1].max())))
+
+
+def _overlap_share(box, other):
+    """Share of ``box``'s area that lies inside ``other``."""
+    x0, y0, x1, y1 = box
+    ox0, oy0, ox1, oy1 = other
+    w, h = min(x1, ox1) - max(x0, ox0), min(y1, oy1) - max(y0, oy0)
+    return 0.0 if w <= 0 or h <= 0 else w * h / float(max(1, (x1 - x0) * (y1 - y0)))
+
+
+def tall_box(box):
+    """True for a box much taller than wide: a column that may hold a turned line."""
+    x0, y0, x1, y1 = box
+    return y1 - y0 >= SIDEWAYS_TALL * max(1, x1 - x0)
+
+
+def word_pieces(gray, box, longest=PIECE_LONG):
+    """A long line (x0, y0, x1, y1) of the page cut at the spaces between words into pieces no
+    longer than ``longest`` line heights: the OCR reads only the start of a very long line (Manga
+    teste 2 p3, a margin label 44 heights long read as "NAES,").  A piece without a space to cut
+    at stays whole."""
+    x0, y0, x1, y1 = (int(v) for v in box)
+    height = max(1, y1 - y0)
+    if x1 - x0 <= longest * height:
+        return [(x0, y0, x1, y1)]
+    crop = np.asarray(gray)[max(0, y0):y1, max(0, x0):x1]
+    ink = (crop < 128).any(axis=0)
+    # Spaces: runs of blank columns at least a third of the line height wide.
+    spaces, start = [], None
+    for k in range(len(ink) + 1):
+        on = k < len(ink) and not ink[k]
+        if on and start is None:
+            start = k
+        elif not on and start is not None:
+            if k - start >= max(2, height // 3):
+                spaces.append((start + k) // 2)
+            start = None
+    pieces, left = [], 0
+    while (x1 - x0) - left > longest * height:
+        cuts = [c for c in spaces if left < c <= left + longest * height]
+        if not cuts:
+            break
+        pieces.append((x0 + left, y0, x0 + cuts[-1], y1))
+        left = cuts[-1]
+    pieces.append((x0 + left, y0, x1, y1))
+    return pieces
+
+
+def sideways_blocks(boxes):
+    """[(box, [indices])]: tall vertical boxes side by side (overlapping rows, columns closer than
+    SIDEWAYS_JOIN widths) grouped into one block each, in the order of ``boxes``."""
+    groups = [[k] for k in range(len(boxes))]
+
+    def near(a, b):
+        width = min(a[2] - a[0], b[2] - b[0])
+        return (min(a[3], b[3]) > max(a[1], b[1])
+                and max(a[0], b[0]) - min(a[2], b[2]) <= SIDEWAYS_JOIN * width)
+    merged = True
+    while merged:
+        merged = False
+        for i in range(len(groups)):
+            for j in range(i + 1, len(groups)):
+                if any(near(boxes[a], boxes[b]) for a in groups[i] for b in groups[j]):
+                    groups[i] = sorted(groups[i] + groups[j])
+                    del groups[j]
+                    merged = True
+                    break
+            if merged:
+                break
+    return [((min(boxes[k][0] for k in group), min(boxes[k][1] for k in group),
+              max(boxes[k][2] for k in group), max(boxes[k][3] for k in group)), group) for group in sorted(groups)]
+
+
+def reach_letters(gray, box, width):
+    """``box`` (x0, y0, x1, y1), a block of turned lines down the page, grown along its length over
+    the letters past its ends: the detector boxes of a margin note stopped a word short of the end
+    of its longest line, and that word stayed in English over the translation (Manga teste 2 p4).
+    ``width`` is the width of one of its columns.  Only letter-sized pieces whose middle lies in
+    the block's columns count, each at most TURNED_GAP widths past the last; a frame or a drawing
+    stops the growth."""
+    x0, y0, x1, y1 = (int(v) for v in box)
+    g = np.asarray(gray)
+    width = max(1.0, float(width))
+    left, right = max(0, x0 - int(width)), min(g.shape[1], x1 + int(width))
+    strip = (g[:, left:right] < 128).astype(np.uint8)
+    if not strip.size:
+        return (x0, y0, x1, y1)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(strip, connectivity=8)
+    pieces, big = [], np.zeros(count, bool)
+    for label in range(1, count):
+        x, y, w, h = (int(v) for v in stats[label, :4])
+        if w > TURNED_LETTER * width or h > TURNED_RUN * width:
+            big[label] = True
+            continue
+        if max(w, h) < TURNED_SPECK * width or not x0 <= left + x + w / 2.0 <= x1:
+            continue
+        pieces.append((y, y + h))
+    # Walls: rows where a piece too big for a letter (a frame, the drawing) crosses the columns, or
+    # a rule lighter than ink runs across them (the thin grey frame of a portrait, Manga teste 2 p6).
+    inside = big[labels[:, x0 - left:x1 - left]]
+    wall = inside.mean(axis=1) >= TURNED_WALL if inside.size else np.zeros(len(strip), bool)
+    wall = wall | ruled_rows(g, x0, x1)
+
+    def walled(a, b):
+        return bool(wall[max(0, a):max(0, b)].any())
+
+    def paper(a, b):
+        band = g[max(0, a):max(0, b), x0:x1]
+        ground = band[band >= 128]  # the letters themselves left out
+        return ground.size > 0 and float((ground > PAPER_LIGHT).mean()) >= TURNED_PAPER
+    # Only an end that cuts through a letter, with paper past it, goes on: a box that stops short
+    # of a sign or of the drawing beside it, or a column written over the drawing, stays as it is.
+    band = int(round(TURNED_BAND * width))
+    grow_top = paper(y0 - band, y0) and any(a < y0 < b for a, b in pieces)
+    grow_bottom = paper(y1, y1 + band) and any(a < y1 < b for a, b in pieces)
+    gap = TURNED_GAP * width
+    grown = True
+    while grown:
+        grown = False
+        for a, b in pieces:
+            if grow_top and a < y0 and b >= y0 - gap and not walled(a, y0):
+                y0, grown = a, True
+            if grow_bottom and b > y1 and a <= y1 + gap and not walled(y1, b):
+                y1, grown = b, True
+    return (x0, y0, x1, y1)
+
+
+def ruled_rows(gray, x0, x1):
+    """Rows of ``gray`` (a bool per row) crossed between columns ``x0`` and ``x1`` by one unbroken run
+    of pixels darker than paper at least TURNED_RULE of that width long: a frame or a rule, even a
+    light grey one.  Letters side by side leave the paper between them."""
+    band = np.asarray(gray)[:, max(0, int(x0)):max(0, int(x1))] <= PAPER_LIGHT
+    if not band.size:
+        return np.zeros(np.asarray(gray).shape[0], bool)
+    longest = np.zeros(band.shape[0], int)
+    run = np.zeros(band.shape[0], int)
+    for k in range(band.shape[1]):
+        run = np.where(band[:, k], run + 1, 0)
+        longest = np.maximum(longest, run)
+    return longest >= TURNED_RULE * band.shape[1]
+
+
+def turned_rows(gray, box):
+    """Lines of text (x0, y0, x1, y1) in ``box`` of a turned page, top to bottom: its runs of rows
+    with ink, each as wide as its letters.  The box itself when there is no clear run."""
+    x0, y0, x1, y1 = (int(v) for v in box)
+    crop = np.asarray(gray)[max(0, y0):y1, max(0, x0):x1] < 128
+    if not crop.size:
+        return [box]
+    runs = _runs(crop.any(axis=1), gap=1)
+    if not runs:
+        return [box]
+    tallest = max(b - a for a, b in runs)
+    rows = []
+    for a, b in runs:
+        if b - a < TURNED_ROW * tallest:
+            continue
+        cols = np.flatnonzero(crop[a:b].any(axis=0))
+        rows.append((x0 + int(cols[0]), y0 + a - 1, x0 + int(cols[-1]) + 1, y0 + b + 1))
+    return rows or [box]
+
+
+def without_columns(ink, vertical):
+    """``ink`` (bool) without its pieces lying inside tall vertical boxes (their letters)."""
+    tall = [box for box in vertical if tall_box(box)]
+    if not tall:
+        return ink
+    ink = np.asarray(ink, bool)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(ink.astype(np.uint8), connectivity=8)
+    out = ink.copy()
+    for label in range(1, count):
+        x, y, w, h = (int(v) for v in stats[label, :4])
+        if any(_overlap_share((x, y, x + w, y + h), column) >= INSIDE_COLUMN for column in tall):
+            out[labels == label] = False
+    return out
+
+
+def letters_of_columns(repaired, vertical):
+    """``repaired`` (box, source) without the added lines (source None) that lie inside a tall
+    vertical line: they are its letters, cut one by one (Manga teste 2 p3, p8)."""
+    tall = [box for box in vertical if tall_box(box)]
+    return [(box, source) for box, source in repaired
+            if source is not None or not any(_overlap_share(box, column) >= INSIDE_COLUMN for column in tall)]
+
+
+ARC_LETTERS = 4    # a dropped line of this many letters or more may be written along a curve...
+ARC_ALIKE = 0.5    # ...letters as tall as their median within this share either way (smaller pieces join one)...
+ARC_STEP = 2.5     # ...each at most this many letter heights from the next...
+ARC_TILT = 15.0    # ...and somewhere tilted at least this many degrees (a level line is the OCR's own)
+ARC_PAD = 0.25     # room around and between the letters laid in a row, in letter heights
+
+
+def arc_letters(gray, text_mask, quad):
+    """The letters of a line written along a curve ("CHAPTER 2!!" bent around a figure, Manga teste
+    2 p3), or None.  The OCR reads a box level and dropped it; the detector's mask holds each letter
+    apart.  Returns {"row": the letters turned upright and laid side by side on white (a line the
+    OCR reads), "centres": [(x, y)], "angles": [degrees], "height": letter height}, in reading order
+    (left to right along the curve).  Each letter is turned by the direction from the letter before
+    it to the one after it."""
+    g = np.asarray(gray)
+    q = np.asarray(quad, np.float32).reshape(4, 2)
+    if text_mask is None:
+        return None
+    area = _line_mask(g.shape, [q]) > 0
+    ink = area & (np.asarray(text_mask) > INK)
+    count, labels, stats, cents = cv2.connectedComponentsWithStats(ink.astype(np.uint8), connectivity=8)
+    if count - 1 < ARC_LETTERS:
+        return None
+    size = np.maximum(stats[1:, cv2.CC_STAT_WIDTH], stats[1:, cv2.CC_STAT_HEIGHT]).astype(float)
+    usual = float(np.median(size[size >= 0.3 * size.max()]))
+    big = [k + 1 for k in range(count - 1) if ARC_ALIKE * usual <= size[k] <= usual / ARC_ALIKE]
+    if len(big) < ARC_LETTERS:
+        return None
+    # A small piece (the dot of a "!") belongs to the letter nearest to it.
+    owner = {k: k for k in big}
+    for k in range(1, count):
+        if k in owner or size[k - 1] > usual / ARC_ALIKE:
+            continue
+        near = min(big, key=lambda b: float(np.hypot(*(cents[k] - cents[b]))))
+        if np.hypot(*(cents[k] - cents[near])) <= usual:
+            owner[k] = near
+    letters = {b: [k for k, o in owner.items() if o == b] for b in big}
+    centre = {b: np.mean([cents[k] for k in parts], axis=0) for b, parts in letters.items()}
+    pts = np.array([centre[b] for b in big])
+    # Reading order: along the main direction of the letters, left to right (top to bottom when
+    # they run down the page).
+    _, _, axis = np.linalg.svd(pts - pts.mean(axis=0))
+    way = axis[0]
+    if way[0] < 0 or (abs(way[0]) < 1e-6 and way[1] < 0):
+        way = -way
+    order = [big[i] for i in np.argsort((pts - pts.mean(axis=0)) @ way)]
+    path = np.array([centre[b] for b in order])
+    steps = np.hypot(*np.diff(path, axis=0).T)
+    if steps.max() > ARC_STEP * usual:
+        return None
+    angles = []
+    for i in range(len(path)):
+        a, b = path[max(0, i - 1)], path[min(len(path) - 1, i + 1)]
+        angles.append(float(np.degrees(np.arctan2(b[1] - a[1], b[0] - a[0]))))
+    if max(abs(a) for a in angles) < ARC_TILT:
+        return None
+    pad = max(2, int(round(ARC_PAD * usual)))
+    gap = float(np.median(steps))
+    cells = []
+    for i, b in enumerate(order):
+        mask = np.isin(labels, letters[b])
+        mask = cv2.dilate(mask.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+        ys, xs = np.nonzero(mask)
+        y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+        m = int(usual)
+        y0, y1, x0, x1 = max(0, y0 - m), min(g.shape[0], y1 + m), max(0, x0 - m), min(g.shape[1], x1 + m)
+        crop = np.where(mask[y0:y1, x0:x1], g[y0:y1, x0:x1], 255).astype(np.uint8)
+        cx, cy = centre[b][0] - x0, centre[b][1] - y0
+        turn = cv2.getRotationMatrix2D((float(cx), float(cy)), angles[i], 1.0)
+        level = cv2.warpAffine(crop, turn, (crop.shape[1], crop.shape[0]), flags=cv2.INTER_LINEAR,
+                               borderMode=cv2.BORDER_CONSTANT, borderValue=255)
+        dark = np.nonzero(level < 128)
+        if not len(dark[0]):
+            continue
+        piece = level[dark[0].min():dark[0].max() + 1, dark[1].min():dark[1].max() + 1]
+        if i and steps[i - 1] > STACK_GAP * gap:
+            cells.append(np.full((int(usual), 3 * pad), 255, np.uint8))  # a space
+        cells.append(piece)
+    if len(cells) < ARC_LETTERS:
+        return None
+    tall = max(c.shape[0] for c in cells)
+    row = np.hstack([np.pad(c, ((( tall - c.shape[0]) // 2, tall - c.shape[0] - (tall - c.shape[0]) // 2), (0, pad)),
+                            constant_values=255) for c in cells])
+    row = cv2.copyMakeBorder(row, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=255)
+    return {"row": row, "centres": [tuple(float(v) for v in p) for p in path], "angles": angles, "height": usual}
+
+
+STACK_PIECE_WIDE = 1.4  # a letter of a stacked column is at most this many times as wide as the box (an "M")
+STACK_SEED = 4          # a box the detector gave one letter of a column, with this many letters in it once grown...
+STACK_SEED_WIDE = 1.3   # ...is at most this many times as wide as tall (one letter, not a line of a speech)
+
+
+def _column_pieces(g, box, loose=False):
+    """Pieces of ink (x, y, w, h, label, labels, left) in the column of ``box`` that do not run out of it."""
+    x0, y0, x1, y1 = (int(v) for v in box)
+    width = max(1, x1 - x0)
+    left, right = max(0, x0 - width // 2), min(g.shape[1], x1 + width // 2)
+    strip = (g[:, left:right] < 128).astype(np.uint8)
+    if not strip.size:
+        return [], None, left
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(strip, connectivity=8)
+    pieces = []
+    for label in range(1, count):
+        x, y, w, h = (int(v) for v in stats[label, :4])
+        reach = width / 2.0 if loose else 0.0  # loose: a "?" beside its "!", its middle past the column
+        if x == 0 or x + w >= strip.shape[1] or w > STACK_PIECE_WIDE * width or not x0 - reach <= left + x + w / 2.0 <= x1 + reach:
+            continue  # it runs out of the column: no letter of it
+        pieces.append((left + x, y, w, h, label))
+    return pieces, labels, left
+
+
+def stacked_reach(gray, box):
+    """``box`` (x0, y0, x1, y1), a column of letters stacked one per row, grown up and down over the
+    letters of its own size that follow in the column: the detector box of a word stacked on the
+    drawing began under its first word ("A" over "MAN'S", Manga teste 2 p11), or held one letter of
+    a shout scrawled down a bubble (p5).  ``gray`` is a page where only letters are dark around the
+    column (halo_reading, or plain paper): there a piece of letter size in the column is a letter.
+    Each added letter at most STACK_REACH letters past the last; a letter half in the box counts."""
+    x0, y0, x1, y1 = (int(v) for v in box)
+    g = np.asarray(gray)
+    pieces, _, _ = _column_pieces(g, box)
+    spans = [(y, y + h) for _, y, _, h, _ in pieces]
+    inside = [b - a for a, b in spans if a < y1 and b > y0]
+    if not inside:
+        return (x0, y0, x1, y1)
+    tallest = max(inside)
+    usual = float(np.median([h for h in inside if h >= 0.3 * tallest]))
+    alike = [(a, b) for a, b in spans if STACK_ALIKE * usual <= b - a <= usual / STACK_ALIKE]
+    gap = STACK_REACH * usual
+    grown = True
+    while grown:
+        grown = False
+        for a, b in alike:
+            if a < y0 and y0 - gap <= b <= y1:
+                y0, grown = a, True
+            if b > y1 and y0 <= a <= y1 + gap:
+                y1, grown = b, True
+    return (x0, y0, x1, y1)
+
+
+def stacked_letters(gray, box):
+    """(count, mask) of the letters of a stacked column ``box``: pieces of letter size inside it.
+    The mask holds them for the cleaning when the detector marked only one (p5)."""
+    g = np.asarray(gray)
+    x0, y0, x1, y1 = (int(v) for v in box)
+    pieces, labels, left = _column_pieces(g, box, loose=True)
+    inside = [p for p in pieces if p[1] >= y0 - 1 and p[1] + p[3] <= y1 + 1]
+    mask = np.zeros(g.shape[:2], bool)
+    if not inside:
+        return 0, mask
+    usual = float(np.median([p[3] for p in inside if p[3] >= 0.3 * max(q[3] for q in inside)]))
+    # A dot of a "!" just past the box goes too; a frame or bubble outline running down beside it is no letter.
+    inside = [p for p in pieces if p[1] >= y0 - usual / 2 and p[1] + p[3] <= y1 + usual / 2 and p[3] <= usual / STACK_ALIKE]
+    inside = [p for p in inside if p[1] + p[3] > y0 and p[1] < y1 or p[3] < STACK_ALIKE * usual]
+    letters = [p for p in inside if p[3] >= STACK_ALIKE * usual]
+
+    def under_a_letter(x, y, w, h):  # the dot of a "!" or "?": over or under a letter, not a speck beside one
+        return any(lx <= x + w / 2.0 <= lx + lw and ly - usual <= y <= ly + lh + usual for lx, ly, lw, lh, _ in letters)
+    for x, y, w, h, label in inside:
+        if h >= STACK_ALIKE * usual or under_a_letter(x, y, w, h):
+            mask[y:y + h, x:x + w] |= labels[y:y + h, x - left:x - left + w] == label
+    return len(letters), mask
+
+
+def letters_box(mask, box):
+    """``box`` widened to the letters in ``mask`` (a "?" beside its "!" runs past the column)."""
+    ys, xs = np.nonzero(mask)
+    if not len(xs):
+        return tuple(int(v) for v in box)
+    return (min(int(box[0]), int(xs.min())), min(int(box[1]), int(ys.min())), max(int(box[2]), int(xs.max()) + 1),
+            max(int(box[3]), int(ys.max()) + 1))
+
+
+def stacked_row(gray, box):
+    """The letters of a column stacked one per row, laid side by side on white: a line the OCR reads.
+
+    None when the column has fewer than two pieces of ink one under the other.  A gap between
+    pieces much wider than the usual one becomes a space.
+    """
+    x0, y0, x1, y1 = (int(v) for v in box)
+    crop = np.asarray(gray)[max(0, y0):y1, max(0, x0):x1]
+    if crop.size == 0:
+        return None
+    ink = crop < 128
+    rows = _runs(ink.any(axis=1), gap=0)
+    rows = [(a, b) for a, b in rows if b - a >= 2]
+    if len(rows) < 2:
+        return None
+    # Two letters that touch (the tail of a Y on a B) are one piece twice as tall: cut at the
+    # row with the least ink near its middle.
+    usual_letter = float(np.median([b - a for a, b in rows if b - a >= 0.3 * max(b - a for a, b in rows)]))
+    split = []
+    for a, b in rows:
+        while b - a >= STACK_TOUCH * usual_letter:
+            count = round((b - a) / usual_letter)
+            lo, hi = a + int(0.6 * (b - a) / count), a + int(1.4 * (b - a) / count)
+            cut = lo + int(np.argmin(ink[lo:hi].sum(axis=1)))
+            split.append((a, cut))
+            a = cut + 1
+        split.append((a, b))
+    rows = [(a, b) for a, b in split if b - a >= 2 and ink[a:b].any()]
+    tall = max(b - a for a, b in rows)
+    gaps = [rows[k + 1][0] - rows[k][1] for k in range(len(rows) - 1)]
+    usual = float(np.median(gaps)) if gaps else 0.0
+    pad = max(2, int(round(STACK_PAD * tall)))
+    pieces = []
+    for k, (a, b) in enumerate(rows):
+        cols = np.flatnonzero(ink[a:b].any(axis=0))
+        piece = crop[a:b, cols.min():cols.max() + 1]
+        if k and gaps[k - 1] > STACK_GAP * max(usual, 1.0) + 1:
+            pieces.append(np.full((tall, 3 * pad), 255, np.uint8))  # a space
+        cell = np.full((tall, piece.shape[1] + pad), 255, np.uint8)
+        top = (tall - piece.shape[0]) // 2
+        cell[top:top + piece.shape[0], pad // 2:pad // 2 + piece.shape[1]] = piece
+        pieces.append(cell)
+    row = np.hstack(pieces)
+    return cv2.copyMakeBorder(row, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=255)
+
+
+STUTTER_LETTERS = 4   # a first line of at most this many letters that the next line begins with ("WHA" / "WHAT")...
+STUTTER_AXIS = 0.6    # ...its middle at least this many line heights off the axis of the other lines: its own lobe
+
+
+def stutter_split(boxes, texts):
+    """[[indices], [indices]] when the first line of a speech is a stutter set apart in a lobe of its
+    own ("WHA-" up in the small lobe, "WHAT / IS / IT?" in the big one, Manga teste 2 p8), else None.
+    Read as one speech, the stutter was lost and the two lobes got one translation between them.  The
+    other lines have to share an axis (centred lines), and the stutter's middle is off it."""
+    if len(boxes) < 3 or len(texts) != len(boxes):
+        return None
+    order = sorted(range(len(boxes)), key=lambda i: boxes[i][1])
+    first, rest = order[0], order[1:]
+    head = re.sub(r"[^A-Z]", "", str(texts[first]).upper())
+    nxt = re.sub(r"[^A-Z]", "", str(texts[rest[0]]).upper())
+    if not head or len(head) > STUTTER_LETTERS or len(nxt) <= len(head) or not nxt.startswith(head):
+        return None
+    height = float(np.median([b[3] - b[1] for b in boxes]))
+    middles = [(boxes[i][0] + boxes[i][2]) / 2.0 for i in rest]
+    axis = float(np.median(middles))
+    if max(abs(m - axis) for m in middles) > STUTTER_AXIS * height:
+        return None  # the other lines are not centred on one axis: no lobe to tell apart
+    if abs((boxes[first][0] + boxes[first][2]) / 2.0 - axis) < STUTTER_AXIS * height:
+        return None
+    return [[first], rest]
+
+
+HEAVY_STROKE = 0.17   # letters whose strokes are this share of the line height or thicker are bold (a shout, a caption)
+
+
+def heavy_letters(image, quads):
+    """True when the dark letters in the line boxes are bold: their stroke (twice the usual
+    deepest distance into the ink) is at least HEAVY_STROKE of the line height.  Bold capitals
+    with a halo over the drawing were lettered thin and small (Manga teste 2 p11, "WAS HOT,
+    RUGGED AND BIG"), the weight of the original lost."""
+    quads = [np.asarray(q, np.float32).reshape(4, 2) for q in quads]
+    if not quads:
+        return False
+    gray = cv2.cvtColor(np.ascontiguousarray(np.asarray(image)[:, :, :3]), cv2.COLOR_RGB2GRAY)
+    ink = ((gray < 128) & (_line_mask(gray.shape + (3,), quads) > 0)).astype(np.uint8)
+    if ink.sum() < 20:
+        return False
+    dist = cv2.distanceTransform(ink, cv2.DIST_L2, 3)
+    ridge = (dist >= cv2.dilate(dist, np.ones((3, 3), np.uint8))) & (dist > 0)
+    if not ridge.any():
+        return False
+    stroke = 2.0 * float(np.median(dist[ridge]))
+    return stroke >= HEAVY_STROKE * _quads_height(quads)
+
+
+STACK_ALONE = 0.75   # share of a stacked column's letters with no letter of their size beside them in their row
+
+
+def letters_alone(gray, box):
+    """Share of the letters of a column ``box`` that stand alone in their row: no piece of ink of
+    their height within a letter of them to the left or right.  A word stacked letter under letter
+    has them alone; a column cut down a paragraph has the rest of each line beside them (Manga
+    teste 2 p5: a box over a few letters of a speech grew down its lines)."""
+    g = np.asarray(gray)
+    x0, y0, x1, y1 = (int(v) for v in box)
+    pieces, _, _ = _column_pieces(g, box, loose=True)
+    inside = [p for p in pieces if p[1] + p[3] > y0 and p[1] < y1]
+    if not inside:
+        return 0.0
+    usual = float(np.median([p[3] for p in inside if p[3] >= 0.3 * max(q[3] for q in inside)]))
+    letters = [p for p in inside if STACK_ALIKE * usual <= p[3] <= usual / STACK_ALIKE]
+    if not letters:
+        return 0.0
+    reach = int(round(usual))
+    left, right = max(0, x0 - 2 * reach), min(g.shape[1], x1 + 2 * reach)
+    count, _, stats, _ = cv2.connectedComponentsWithStats((g[max(0, y0):y1, left:right] < 128).astype(np.uint8), connectivity=8)
+    others = []
+    for k in range(1, count):
+        x, y, w, h = (int(v) for v in stats[k, :4])
+        if STACK_ALIKE * usual <= h <= usual / STACK_ALIKE and not x0 <= left + x + w / 2.0 <= x1:
+            others.append((left + x, max(0, y0) + y, w, h))
+    alone = 0
+    for lx, ly, lw, lh, _ in letters:
+        beside = any(min(ly + lh, oy + oh) - max(ly, oy) > 0.5 * lh
+                     and (0 <= lx - (ox + ow) <= reach or 0 <= ox - (lx + lw) <= reach) for ox, oy, ow, oh in others)
+        alone += not beside
+    return alone / len(letters)
+
+
+def stacked_text(text):
+    """The reading of letters stacked one per row, laid in a row, put right: single letters with
+    spaces between them are one word ("M Y" for "MY"), and an "I" right before the closing "?" or
+    "!" of a word is its "!" ("IPADI?" for "IPAD!?"), as the OCR reads a stacked "!" (Manga teste
+    2 p5)."""
+    text = re.sub(r"\b([A-Za-z])((?:\s[A-Za-z]\b)+)", lambda m: m.group(1) + m.group(2).replace(" ", ""), str(text))
+    return re.sub(r"(?<=[A-Za-z]{2})I(?=[?!]+$)|(?<=[A-Za-z]{2})I(?=[?!]+\s)", "!", text)

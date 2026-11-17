@@ -23,6 +23,17 @@ _CJK = re.compile(r"[　-ヿ㐀-鿿가-힯＀-￯]")
 _LETTER = r"[^\W\d_]"
 
 
+# Fullwidth forms of ASCII signs ("～", "！", "？") and the ideographic space: a translation that
+# kept one from the OCR was taken for Japanese and lettered by the engine (Manga teste 2 p5).
+_FULLWIDTH = {code: code - 0xFEE0 for code in range(0xFF01, 0xFF5F)}
+_FULLWIDTH[0x3000] = 0x20
+
+
+def plain_width(text):
+    """``text`` with fullwidth ASCII signs and the ideographic space made plain."""
+    return str(text or "").translate(_FULLWIDTH)
+
+
 def has_cjk(text):
     return bool(_CJK.search(text or ""))
 
@@ -49,6 +60,23 @@ def normalize_spacing(text):
     text = re.sub(rf"(?<={_LETTER}{{2}})\.(?=[A-ZÀ-Ý])", ". ", text)
     text = re.sub(rf"^([.…]+) +(?={_LETTER})", r"\1", text.strip())  # "… mas" (TBATE 240 p30)
     return text
+
+
+def rejoin_numbers(text, source):
+    """Undo the space the engine puts after a point or comma inside a number ("4.014" -> "4. 014").
+
+    The engine's translation cleanup spaces every mark followed by a letter or digit (Manga teste
+    2 p6, p7: "3,67" and "4.014" were lettered "3, 67" and "4. 014").  Only digits that stand
+    together in ``source`` are joined again: "1, 2, 3!" stays a count.
+    """
+    together = {re.sub(r"\D", "", n) for n in re.findall(r"\d[\d.,]*\d", str(source or ""))}
+    # "40K" is written out as "40.000" (Manga teste 2 p7 lettered "40. 000").
+    together |= {m.group(1) + ("000" if m.group(2) in "Kk" else "000000")
+                 for m in re.finditer(r"\b(\d{1,3}) ?([KkMm])\b", str(source or ""))}
+    if not text or not together:
+        return text
+    return re.sub(r"(\d+)([.,]) (\d+)", lambda m: m.group(1) + m.group(2) + m.group(3)
+                  if m.group(1) + m.group(3) in together else m.group(0), text)
 
 
 def _median_line(region):
@@ -93,14 +121,17 @@ def same_row(a, b, line):
     """``b`` continues ``a``'s last line to the right: "THE REAL" | "TRAINING" (OF 237 p62).
 
     A block that starts higher than that last line is a column beside it (One Piece 1161 p4,
-    a caption box with columns side by side), not its last word.
+    a caption box with columns side by side), not its last word; so is one that runs on more
+    than a line below it (Manga teste 2 p7: "CAN'T / FEED / THEM / ANY- / -MORE" beside
+    "RATHER", in the other lobe of a double bubble).
     """
     bx0, by0, bx1, by1 = (float(v) for v in b.xyxy)
     last = max(np.asarray(a.lines, dtype=float), key=lambda q: q[:, 1].mean())
     lx0, ly0, lx1, ly1 = last[:, 0].min(), last[:, 1].min(), last[:, 0].max(), last[:, 1].max()
     shared = min(ly1, by1) - max(ly0, by0)
     gap = bx0 - lx1
-    return shared >= 0.6 * line and -0.5 * line <= gap <= 1.2 * line and by0 >= ly0 - 0.5 * line
+    return (shared >= 0.6 * line and -0.5 * line <= gap <= 1.2 * line and by0 >= ly0 - 0.5 * line
+            and by1 <= ly1 + line)
 
 
 def join_blocks(regions, make, inside=None):

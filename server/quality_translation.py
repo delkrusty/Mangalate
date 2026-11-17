@@ -60,7 +60,9 @@ def reads_as_speech(text, several_rows=False, joined=False):
     words = re.findall(r"[A-Za-z']+", text or "")
     if joined and len(words) == 1:  # "THISIS": two words the OCR ran together
         words = run_together(words[0], common)
-    if not words or not any(len(w) >= 2 and (w.lower() in common or w.lower().replace("'", "") in _contractions(common))
+    # A possessive is its word ("MAN'S" stacked on the drawing, Manga teste 2 p11).
+    if not words or not any(len(w) >= 2 and (w.lower() in common or w.lower().replace("'", "") in _contractions(common)
+                                             or re.sub(r"'s$", "", w.lower()) in common)
                             for w in words):
         return False
     # A comma ends a line that goes on in the next caption (webtoon p36: "NO," alone in a box).
@@ -210,6 +212,24 @@ def unchanged_english(source, names=()):
     return found
 
 
+# English words no Portuguese sentence has (not "as", "me", "no", "a", "do", "for", nor "to", the
+# informal "tô"): two of the source's still in the answer are a sentence left half in English.
+ENGLISH_ONLY = set("the of and you your yours is are was were with this that these those it its what which "
+                   "who my our their his her he she we they have has had from by if but just about would "
+                   "could should will been being there here where when why how january february march april "
+                   "june july august september october november december".split())
+ENGLISH_KEPT = 2
+
+
+def kept_english(source, text, names=()):
+    """English-only words of ``source`` still in ``text`` (outside the names), when ENGLISH_KEPT or more."""
+    named = {w.lower() for name in names for w in re.findall(r"[^\W\d_]+", str(name))}
+    said = {w.lower() for w in re.findall(r"[^\W\d_]+", str(source or ""))}
+    found = [w for w in re.findall(r"[^\W\d_]+", str(text or ""))
+             if w.lower() in ENGLISH_ONLY and w.lower() in said and w.lower() not in named]
+    return found if len(found) >= ENGLISH_KEPT else []
+
+
 def portuguese_problems(source, text):
     """Notes for Spanish words, a superlative with the wrong gender and a word written twice."""
     notes = []
@@ -232,6 +252,31 @@ def portuguese_problems(source, text):
                 notes.append(f"writes \"{match.group(0)}\", the same word twice: write it once")
                 break
     return notes
+
+
+DROPPED_WORDS = 8     # a source of this many English words or more...
+DROPPED_SHARE = 0.35  # ...translated in fewer words than this share of them lost most of its lines
+ASIDE_WORDS = 4       # an aside in brackets of this many words or more...
+ASIDE_SHARE = 0.6     # ...missing from a translation of fewer words than this share was left out
+
+
+def dropped_most(source, text):
+    """True when the translation of a long source has only a small share of its words, or left
+    out a long aside in brackets and much of the rest (Manga teste 2 p4: a footnote of a name, a
+    long aside and the name again came back as the name and its repetition)."""
+    source, text = str(source or ""), str(text or "")
+    said = len(re.findall(r"[A-Za-z]+(?:'[A-Za-z]+)?", source))
+    written = len(re.findall(r"[^\W\d_]+", text))
+    if said < DROPPED_WORDS:
+        return False
+    if written < DROPPED_SHARE * said:
+        return True
+    asides = [re.findall(r"[A-Za-z]+", part) for part in re.findall(r"\(([^()]*)", source)]
+    return (any(len(words) >= ASIDE_WORDS for words in asides) and text.count("(") < source.count("(")
+            and written < ASIDE_SHARE * said)
+
+
+TAG = re.compile(r"<[^<>|]{1,20}>|\[[a-z ]{2,20}\]")  # <gasp>, [sigh]: a stage direction, not speech
 
 
 # A label in place of the line ("【SFX】" for "WHAT SAY YOU?", Manga teste p9): it was lettered in
@@ -261,8 +306,19 @@ def translation_problems(sources, translations, glossary=(), earlier=""):
             # or caption: unchanged, the engine drops it and the English stays on the page.
             notes.append(f"<|{number}|> {UNCHANGED_NOTE}")
             continue
+        # Only the glossary's names: a capital in the answer ("July") would excuse itself.
+        kept = kept_english(source, text, [g.get("target", "") for g in glossary]) if not same_text(source, text) else []
+        if kept:
+            # Manga teste 2 p6: "...US$ as of 24 July 2022" was lettered half in English.
+            notes.append(f"<|{number}|> keeps English words ({', '.join(kept)}): translate the whole line")
+            continue
         if PLACEHOLDER.match(text) and not PLACEHOLDER.match(str(source)):
             notes.append(f"<|{number}|> is a placeholder tag, not a translation; translate the whole line")
+            continue
+        tag = TAG.search(text)
+        if tag and not TAG.search(str(source)):
+            # Manga teste 2 p4: "EH?" came back "<gasp>" and was lettered so.
+            notes.append(f"<|{number}|> writes the tag {tag.group(0)}: write the line as spoken Portuguese")
             continue
         letters = re.findall(r"[^\W\d_]", text)
         if len(letters) == 1 and letters[0].lower() not in "aeoéóô" and len(re.findall(r"[^\W\d_]", str(source))) > 2:
@@ -274,6 +330,10 @@ def translation_problems(sources, translations, glossary=(), earlier=""):
             key = normalize(g.get("source", ""))
             if key and target[:1].isupper() and f" {key} " in here and not _has(target, text):
                 notes.append(f"<|{number}|> must keep the name {target}")
+        if dropped_most(source, text):
+            # Manga teste 2 p4: a note of three lines came back as its first two words; the other
+            # lines were cleaned off and never lettered.
+            notes.append(f"<|{number}|> leaves out most of the original: translate every line of it")
         if lost_negation(source, text):
             notes.append(f"<|{number}|> drops the negation of the original (not/no/never): keep the meaning")
         elif added_negation(source, text):

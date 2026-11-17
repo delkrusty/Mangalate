@@ -19,6 +19,18 @@ O diff (ou o intervalo de commits), a ficha do problema, a tabela antes e depois
 
 O objetivo é uma página que um leitor aceitaria como scan bem feito: arte intacta, limpeza de ponta, tradução confortável de ler e letra de tamanho legível. Compilar, passar nos testes, ter pixels iguais nos controles ou números bons na tabela **não prova nada sobre isso**. A prova é olhar a página traduzida. Seja crítico: na dúvida sobre um balão, ele está reprovado.
 
+## Como o Lucas revisa (siga este olhar)
+
+O Lucas revisa como leitor, e o veredito tem que bater com o dele:
+- **Página inteira primeiro.** Abra a página traduzida inteira, no tamanho de leitura, ao lado da original, e leia como um leitor leria. Só depois amplie os detalhes. Recorte ampliado sozinho deixa escapar problemas (balão que virou dois, ênfase perdida, ordem de leitura).
+- **O leitor pesa mais que o pixel.** Texto da história em inglês (legenda, título, grito, fala desenhada sobre a arte) é defeito, não "caminho seguro". Um pouco de arte refeita ou pintada colada às letras e ao halo delas, para traduzir, é aceitável e não bloqueia. Bloqueia arte apagada **longe** do texto: uma faixa de fundo ou padrão que some, um retângulo branco sobre cabelo ou rosto, traço importante (rosto, mão) desfeito.
+- **Formato e força do original.** Texto inclinado, em curva, empilhado ou deitado sai do mesmo jeito; grito rascunhado sai rascunhado; letra grande em negrito sai grande e em negrito. Letra fina e pequena onde o original tem destaque é reprovada no letreiramento.
+- **Cada balão com a sua parte.** Dois balões encostados (um pequeno com a gagueira "WHA-", o grande com a frase) são dois: cada um recebe a sua tradução ("O qu-" / "O que é isso?"). Juntar os dois num só ou perder a gagueira é reprovado na fala.
+- **Colunas retas e letra cheia.** Letras empilhadas alinhadas no mesmo eixo, sem zigue-zague, com altura próxima à original.
+- **Resto de letra antiga** (contorno cinza, fantasma) dentro de um adesivo ou halo branco é reprovado na limpeza: o branco tem que ficar branco.
+
+Separe sempre "bloqueante para o leitor" de "perda mínima de arte aceitável". Na dúvida entre deixar em inglês e traduzir com uma perda pequena colada ao texto, a tradução vence.
+
 ## Inspeção visual (obrigatória, antes de qualquer veredito)
 
 1. **Monte você mesmo as comparações.** Para cada região que a mudança toca, no motivador e em qualquer outra página que mudou, use Python e OpenCV, só leitura, saída no scratchpad que quem chamou indicar. Recorte e amplie lado a lado: `originals/` | `translated/` de antes | `translated/` de depois. Abra as imagens com Read. Não aceite como prova:
@@ -31,7 +43,7 @@ O objetivo é uma página que um leitor aceitaria como scan bem feito: arte inta
 2. **Descubra o que mudou de verdade.** Compare `translated/` antes e depois, página a página. Toda página com diferença fora do ruído da IA tem que ser inspecionada, e não só as que a ficha cita. Se a mudança afeta um passo usado em todas as páginas (máscara, limpeza, letreiramento), peça ou faça uma varredura nas rodadas antigas de `server/teste-curto/` para achar os casos que mudam.
 3. **Confira as amostras de quem chamou.** A legenda descreve o que a imagem mostra? A coluna "depois" é a página traduzida final? Legenda trocada ou amostra só de limpeza é um achado.
 4. **Para cada balão ou região tocada, dê aprovado ou reprovado em cada item:**
-   - **Arte:** nenhum traço, símbolo, retícula ou onomatopeia desenhada foi apagado ou borrado. Texto sobre a arte que deveria ficar no original ficou.
+   - **Arte:** nenhum traço, símbolo, retícula ou onomatopeia desenhada foi apagado ou borrado longe do texto. Perda mínima colada às letras e ao halo de um texto traduzido é aceitável (diga qual foi). Onomatopeia desenhada que não é fala continua no original.
    - **Limpeza:** nenhum fantasma, borrão cinza, mancha, "dente" de contorno, pedaço de letra ou pontuação em inglês. O contorno do balão está intacto.
    - **Fala:** todo balão limpo tem texto em português escrito. Nenhuma fala sumiu, ficou em inglês, foi cortada pela metade ou trocou de lugar. Um balão limpo e vazio é **bloqueante**.
    - **Tradução:** o sentido está certo (negação, gênero, quem fala com quem), em pt-BR natural e no tom do personagem. Interjeição e grito traduzidos do jeito que um brasileiro escreve ("I KNEW IT." vira "Eu sabia!", "YES, MAJESTY!!" vira "Sim, Majestade!!").
@@ -109,7 +121,8 @@ Responda em português, curto, nesta ordem:
 1. **Veredito:** `aprovar`, `reverter` ou `revisão humana`, com a razão em uma frase. Só `aprovar` quando todo balão tocado passa nos cinco itens da inspeção visual, ou quando o que reprova já existia antes, está listado e não piorou.
 2. **Inspeção visual:** uma linha por balão ou região tocada (obra, página e texto original), com aprovado ou reprovado em arte, limpeza, fala, tradução e letreiramento, e o defeito em poucas palavras. Diga onde salvou os recortes.
 3. **Bloqueantes:** cada um com `arquivo:linha` (ou página e região), o cenário concreto que quebra e o que mudaria. São bloqueantes:
-   - arte apagada;
+   - arte apagada longe do texto (faixa de fundo, retângulo sobre o desenho, traço de rosto ou mão desfeito);
+   - texto da história em inglês que o original deixava ler;
    - balão limpo sem texto;
    - fala em inglês nova;
    - fantasma ou mancha nova;

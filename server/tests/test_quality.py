@@ -386,6 +386,21 @@ class BackgroundTest(unittest.TestCase):
         self.assertFalse(allowed[100:, 150:200].any())
         self.assertFalse(allowed[70, 175:200].any())  # past the rim of the mask
 
+    def test_one_letter_word_the_mask_missed_is_cleaned(self):
+        # Manga teste 2 p3: the "A" opening a caption over a panel frame was left out of the
+        # detector mask, a word gap from the next word, and stayed alone on the page.
+        image, letters = page(size=(300, 130)), page(size=(300, 130))
+        for canvas in (image, letters):
+            cv2.putText(canvas, "A", (40, 80), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 3, cv2.LINE_AA)
+            cv2.putText(canvas, "WORD", (80, 80), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 3, cv2.LINE_AA)
+        mask = text_mask(letters, (255, 255, 255))
+        mask[:, :70] = 0                                   # the detector missed the "A"
+        # The neighbour that stays: a stroke as far from the word on the other side, out of the box.
+        cv2.line(image, (186, 62), (196, 112), (0, 0, 0), 3)
+        allowed = quality.letters_area(image, mask, [quad(36, 54, 182, 84)])
+        self.assertTrue(allowed[:, :70][image[:, :70].min(axis=2) < 128].all())
+        self.assertFalse(allowed[95:112, 188:200].any())
+
     def test_stroke_right_after_joined_letters_stays(self):
         # One Piece 1161 p5: a stroke of hatching right after a word of joined letters, half out
         # of the line box, was taken as the next letter on the row and smeared.
@@ -1024,6 +1039,49 @@ class LineRepairTest(unittest.TestCase):
             boxes.append((x - 2, y - h - 3, x + w + 2, y + 6))
         return np.ascontiguousarray(image[:, :, 0]), boxes
 
+    def test_lines_two_blank_rows_apart_are_split(self):
+        # Manga teste 2 p7: one box over "HEY, / NEXT / TERM!" with tight leading: only two blank
+        # rows between "HEY," and "NEXT" (blank rows inside one line are tolerated up to ROW_GAP),
+        # so they stayed one line twice as tall as "TERM!"; the OCR read "HEY," and "NEXT" was lost.
+        mask = np.zeros((300, 300), np.uint8)
+        for y0, y1 in ((137, 154), (156, 171), (175, 191)):
+            for x in range(120, 170, 12):
+                mask[y0:y1, x:x + 8] = 255
+        others = []
+        for y in (220, 250):  # other speeches of the page, letters of the same size
+            mask[y:y + 17, 20:90] = 255
+            others.append((18, y, 92, y + 17))
+        repaired, changes = repair_lines(mask, [(109, 123, 177, 203)] + others)
+        lines = sorted(box for box, source in repaired if source == 0)
+        self.assertEqual([(b[1], b[3]) for b in lines], [(137, 154), (156, 171), (175, 191)], lines)
+        # Lines of one row with a blank row or two inside (a broken stroke) stay whole.
+        mask2 = np.zeros((300, 300), np.uint8)
+        mask2[137:146, 120:170] = 255
+        mask2[148:156, 120:170] = 255
+        mask2[220:237, 20:90] = 255
+        repaired, _ = repair_lines(mask2, [(110, 130, 180, 162), (18, 220, 92, 237)])
+        self.assertEqual(len([b for b, source in repaired if source == 0]), 1)
+
+    def test_box_of_small_lines_on_a_page_of_big_ones_is_split(self):
+        # Manga teste 2 p9: a shout set the page's line height at 66 px; one detector box over a
+        # bubble of four 26 px lines was never split (each row too short to count as a line), and
+        # the OCR read two of the four lines.
+        mask = np.zeros((900, 700), np.uint8)
+        shout = []
+        for k in range(6):  # the shout: six lines 66 px tall
+            y = 300 + k * 80
+            mask[y:y + 66, 380:640] = 255
+            shout.append((378, y, 642, y + 66))
+        rows = [(100, 126), (140, 166), (180, 206), (220, 246)]
+        for y0, y1 in rows:
+            for x in range(80, 200, 22):
+                mask[y0:y1, x:x + 16] = 255
+        repaired, changes = repair_lines(mask, [(70, 92, 210, 254)] + shout)
+        lines = sorted(box for box, source in repaired if source == 0)
+        self.assertEqual([(b[1], b[3]) for b in lines], rows, lines)
+        # The shout's own lines stay as they were.
+        self.assertEqual(sorted(box for box, source in repaired if source and source > 0), shout)
+
     def test_missing_line_is_added(self):
         mask, boxes = self.bubble_mask()
         repaired, changes = repair_lines(mask, boxes[:2] + boxes[3:])
@@ -1031,6 +1089,20 @@ class LineRepairTest(unittest.TestCase):
         added = [box for box, source in repaired if source is None]
         self.assertEqual(len(added), 1)
         self.assertTrue(boxes[2][1] <= added[0][1] < added[0][3] <= boxes[2][3])
+
+    def test_stack_of_upright_letters_is_not_added_as_a_line(self):
+        # Manga teste 2 p7: "A / SET / MEAL" written letter over letter on the drawing beside a
+        # shout; three stacked letters, 12 px wide and 1.4 line heights tall, were added as one
+        # line, joined to the shout and cleaned off the art.
+        mask, boxes = self.bubble_mask()
+        mask[174:220, 130:146] = 255   # the stack, under the speech: one letter wide, taller than a line
+        repaired, changes = repair_lines(mask, boxes)
+        self.assertEqual([box for box, source in repaired if source is None], [])
+        # A short word just as tall, wider than one letter, is still a line the detector missed.
+        mask2, _ = self.bubble_mask()
+        mask2[174:220, 130:166] = 255
+        repaired, _ = repair_lines(mask2, boxes)
+        self.assertEqual(len([box for box, source in repaired if source is None]), 1)
 
     def test_line_whose_feet_a_loose_box_covers_is_added(self):
         # Grand Blue 102 p33: no box for "I'LL", and the loose box of "HAVE THE" under it covered its
@@ -1041,9 +1113,11 @@ class LineRepairTest(unittest.TestCase):
         top, bottom = int(ink[0]), int(ink[ink < boxes[1][1]][-1])
         loose = (boxes[1][0], bottom - (bottom - top) // 4, boxes[1][2], boxes[1][3])
         repaired, changes = repair_lines(mask, [loose] + boxes[2:])
-        added = [box for box, source in repaired if source is None]
-        self.assertEqual(len(added), 1)
-        self.assertTrue(boxes[0][1] <= added[0][1] and added[0][3] <= boxes[0][3] + 1)
+        # The line gets a box of its own rows, added or cut from the loose box: read once, whole.
+        own = [box for box, _ in repaired if box[3] <= boxes[1][1] + 2]
+        self.assertEqual(len(own), 1, repaired)
+        self.assertTrue(boxes[0][1] <= own[0][1] and own[0][3] <= boxes[0][3] + 1, own)
+        self.assertLessEqual(own[0][1], top + 1)
         # With a box of its own the line is read once, the loose box beside it or not.
         repaired, changes = repair_lines(mask, boxes[:1] + [loose] + boxes[2:])
         self.assertEqual([box for box, source in repaired if source is None], [])
@@ -1163,6 +1237,100 @@ class LineRepairTest(unittest.TestCase):
         fitted = repaired[1][0]
         self.assertTrue(fitted[1] <= y0 and fitted[3] >= y1, fitted)
         self.assertLess(fitted[3] - fitted[1], (y1 - y0) + 4)  # still one line, not two
+
+    def test_fitted_line_does_not_take_in_letters_stacked_beside_it(self):
+        # Manga teste 2 p7: "A / SET / MEAL", letters stacked upright on the drawing, ran down
+        # beside "HELL?"; the fitted box took in the "M" and "E" next to it (and the "M" of the
+        # mask, grazing its last rows), and the cleaning wiped them off the art.
+        gray, mask, ink = self.lettered(["THE KI", "RESTRAINER", "FUNCTIONED."])
+        x0, y0, x1, y1 = ink[1]
+        boxes = [ink[0], (x0, y0 + 2, x1, y1 - 3), ink[2]]
+        stacked = gray.copy()
+        for top in (y0, y0 + 11):   # two small letters, one over the other, inside the line's rows
+            cv2.rectangle(stacked, (x0 - 10, top), (x0 - 4, top + 6), 0, 2)
+        graze = mask.copy()
+        graze[y1 - 3:y1 + 8, x0 - 13:x0 - 3] = 255   # mask ink in the last rows, running on below
+        repaired, _ = repair_lines(graze, boxes, stacked)
+        self.assertGreaterEqual(repaired[1][0][0], x0 - 2, repaired[1][0])
+        # One letter the mask missed at the start of the line is still taken in ("MOUN" -> "AMOUNT").
+        missed = gray.copy()
+        cv2.putText(missed, "A", (x0 - 20, y1), cv2.FONT_HERSHEY_SIMPLEX, 0.9, 0, 2)
+        repaired, _ = repair_lines(mask, boxes, missed)
+        self.assertLessEqual(repaired[1][0][0], x0 - 15, repaired[1][0])
+
+    def test_fitted_line_does_not_take_a_letter_of_a_slanted_stack_beside_it(self):
+        # Manga teste 2 p2: "AHAHA" ran down a bubble outline beside "I'M ALWAYS", each letter
+        # a step down and to the right; the fitted box took in the one in the line's rows, and
+        # the cleaning wiped the laugh off.  The letters over it stand above the line's rows.
+        gray, mask, ink = self.lettered(["THE KI", "RESTRAINER", "FUNCTIONED."])
+        x0, y0, x1, y1 = ink[1]
+        boxes = [ink[0], (x0, y0 + 2, x1, y1 - 3), ink[2]]
+        laugh = gray.copy()
+        h = y1 - y0
+        for k in range(4):   # letter-sized blocks stepping down to the line's rows, past its end
+            top = y0 + 2 - (3 - k) * 13
+            left = x1 + 3 - (3 - k) * 3
+            cv2.rectangle(laugh, (left, top), (left + 6, top + 8), 0, -1)
+        repaired, _ = repair_lines(mask, boxes, laugh)
+        self.assertLessEqual(repaired[1][0][2], x1 + 2, repaired[1][0])
+
+    def test_line_cut_inside_a_word_is_one_line(self):
+        # Manga teste 2 p3: a long caption came as "...ENJOYABLE FOU" and "R-PANEL STORY...", two
+        # boxes end to end, read and translated as two speeches.
+        gray, mask, ink = self.lettered(["REMARKABLE LONG-RANGE"])
+        x0, y0, x1, y1 = ink[0]
+        cut = (x0 + x1) // 2
+        repaired, changes = repair_lines(mask, [(x0, y0, cut, y1), (cut + 1, y0 - 1, x1, y1 + 1)], gray)
+        self.assertEqual(len(repaired), 1, repaired)
+        self.assertIn("join", [kind for kind, _, _ in changes])
+        # Two bubbles side by side, an outline between them, stay two lines even with boxes
+        # reaching the outline.
+        gray, mask, ink = self.lettered(["REMARKABLE          RANGE"])
+        x0, y0, x1, y1 = ink[0]
+        cols = np.flatnonzero((gray[y0:y1] < 128).any(axis=0))
+        gaps = np.flatnonzero(np.diff(cols) > 30)
+        left_end, right_start = int(cols[gaps[0]]) + 1, int(cols[gaps[0] + 1])
+        wall = (left_end + right_start) // 2
+        gray[y0 - 30:y1 + 30, wall:wall + 2] = 0
+        apart = [(x0, y0, wall - 1, y1), (wall + 3, y0, x1, y1)]
+        repaired, _ = repair_lines(np.where(gray < 128, 255, 0).astype(np.uint8), apart, gray)
+        self.assertEqual(len(repaired), 2, repaired)
+
+    def test_lone_letter_on_the_line_rows_a_word_gap_off_is_taken(self):
+        # Manga teste 2 p3: the "A" of "A LIVELY AND ENJOYABLE..." stood a wide word gap before the
+        # detector box and was left on the page.  A smaller mark that far off stays out.
+        gray, mask, ink = self.lettered(["", "QUIET WATER", ""])
+        x0, y0, x1, y1 = ink[1]
+        page = gray.copy()
+        h = y1 - y0
+        page[y0:y1, x0 - h - 4:x0 - h + 6] = 0   # a full letter on the line's rows, ~a word gap off
+        repaired, _ = repair_lines(mask, [ink[1]], page)
+        self.assertLessEqual(repaired[0][0][0], x0 - h - 3, repaired[0][0])
+        mark = gray.copy()
+        mark[y0 + h // 3:y1 - h // 3, x0 - h - 4:x0 - h + 6] = 0   # a dash, not on the line's rows
+        repaired, _ = repair_lines(mask, [ink[1]], mark)
+        self.assertGreaterEqual(repaired[0][0][0], x0 - 2, repaired[0][0])
+
+    def test_fitted_line_does_not_take_the_rows_of_the_next_line(self):
+        # Manga teste 2 p7: two small lines with tight leading touch through a stroke; "WHY CAN'T
+        # YOU" was fitted over the top of "AFFORD TO SPEND", whose box, cut to a sliver, was never read.
+        mask = np.zeros((320, 420), np.uint8)
+        big = []
+        for i in range(3):  # the page's usual lines, taller than these two
+            y = 30 + i * 30
+            mask[y:y + 21, 60:360:9] = 255
+            mask[y:y + 21, 61:360:9] = 255
+            big.append((58, y, 362, y + 21))
+        for y0, y1 in ((200, 214), (216, 230)):
+            for x in range(100, 220, 8):
+                mask[y0:y1, x:x + 4] = 255
+        mask[212:218, 148:150] = 255  # the stroke joining them
+        top, below = (100, 203, 220, 211), (100, 216, 220, 230)
+        repaired, _ = repair_lines(mask, big + [top, below], 255 - mask)
+        fitted = [box for box, _ in repaired][3:]
+        self.assertLessEqual(fitted[0][3], below[1] + 1, fitted)  # the pixel of margin of every fit
+        self.assertLessEqual(fitted[0][1], 200, fitted)       # its own first row is still taken in
+        self.assertGreaterEqual(fitted[1][1], top[3] - 1, fitted)
 
     def test_lone_line_in_larger_letters_is_fitted(self):
         # Webtoon p26 and p36: "HOWEVER..." and "NO," alone in a caption, in letters larger than the
@@ -1302,7 +1470,9 @@ class LineRepairTest(unittest.TestCase):
                                          rebuild=True)
         row = [box for box, _ in repaired if box[1] < y1 and box[3] > y0]
         self.assertEqual(len(row), 1, repaired)
-        self.assertIn(("edge", first, [row[0]]), changes)
+        # Widened by the letters on the line's rows past the word gap, or by the mask's strip.
+        self.assertTrue(any(kind in ("edge", "fit") and before == first and after == [row[0]]
+                            for kind, before, after in changes), changes)
         self.assertGreaterEqual(row[0][2], x1 - 1)
 
     def test_strip_of_art_at_the_edge_of_a_block_is_not_a_line(self):
@@ -1397,12 +1567,59 @@ class LineRepairTest(unittest.TestCase):
         second = (min(ink[1][0], ink[2][0]) - 4, ink[0][3] - 6, max(ink[1][2], ink[2][2]) + 4, ink[2][3] + 12)
         others = [(x0 - 1, y0 - 1, x1 + 1, y1 + 1) for x0, y0, x1, y1 in ink[3:]]  # one-line boxes elsewhere
         repaired, changes = repair_lines(mask, [first, second] + others)
-        self.assertIn("refit", [kind for kind, _, _ in changes])
+        self.assertTrue({"refit", "trim"} & {kind for kind, _, _ in changes}, changes)
         boxes = sorted((box for box, _ in repaired if box[1] < ink[3][1] - 10), key=lambda b: b[1])
         self.assertEqual(len(boxes), 3)
         for box, line in zip(boxes, ink):
             self.assertTrue(box[1] <= line[1] + 1 and box[3] >= line[3] - 1 and box[3] - box[1] < 1.5 * (line[3] - line[1]),
                             (box, line))
+
+    def test_box_of_one_line_and_a_sliver_of_the_next_is_cut_to_its_line(self):
+        # Manga teste 2 p9: "NEXT" boxed with the top of "IS THE", and the box of "IS THE / RED"
+        # starting halfway down "NEXT"; on a page whose shout set a large line height, "NEXT" kept
+        # its tall box, was read as larger letters apart from its speech and left as art.
+        gray, mask, ink = self.lettered(["", "", "", "", "SHOUT"], step=26)
+        shout = cv2.resize(mask[ink[4][1] - 2:ink[4][3] + 2, ink[4][0] - 2:ink[4][2] + 2], None, fx=3, fy=3,
+                           interpolation=cv2.INTER_NEAREST)
+        _, small, lines = self.lettered(["THEN", "IT IS", "DONE"], step=26)
+        page = np.zeros((450, 420), np.uint8)
+        page[:120] = small[:120]
+        shouts = []
+        for y in (150, 225, 300, 375):   # the page's usual line is a shout's
+            page[y:y + shout.shape[0], 10:10 + min(400, shout.shape[1])] = shout[:, :400]
+            shouts.append((10, y, 10 + min(400, shout.shape[1]), y + shout.shape[0]))
+        nxt, mid, low = lines
+        own = (nxt[0] - 2, nxt[1] - 8, nxt[2] + 2, mid[1] + 6)   # with the top rows of the next line
+        rest = (min(mid[0], low[0]) - 2, nxt[1] + 4, max(mid[2], low[2]) + 2, low[3] + 3)  # over most of the first line
+        repaired, changes = repair_lines(page, [own, rest] + shouts)
+        top = [box for box, _ in repaired if box[1] < nxt[3]]
+        self.assertEqual(len(top), 1, repaired)
+        self.assertLess(top[0][3] - top[0][1], 1.5 * (nxt[3] - nxt[1]), top)
+        self.assertEqual(len([box for box, _ in repaired if box[1] < low[3] and box[3] > nxt[3]]), 2, repaired)
+
+    def test_small_boxes_reaching_into_empty_rows_are_not_cut_again(self):
+        # Manga teste 2 p4: in a small bubble on a page of shouts, the slanted boxes of two short
+        # lines reached into the empty rows between them; cutting them again left boxes as tight
+        # as the letters, the OCR dropped both and half of the speech stayed in English.
+        gray, mask, ink = self.lettered(["", "", "", "", "SHOUT"], step=26)
+        shout = cv2.resize(mask[ink[4][1] - 2:ink[4][3] + 2, ink[4][0] - 2:ink[4][2] + 2], None, fx=3, fy=3,
+                           interpolation=cv2.INTER_NEAREST)
+        _, small, lines = self.lettered(["GO ON TO", "SOMEWHERE"], step=50)
+        page = np.zeros((450, 420), np.uint8)
+        page[:120] = small[:120]
+        shouts = []
+        for y in (150, 225, 300, 375):   # the page's usual line is a shout's
+            page[y:y + shout.shape[0], 10:10 + min(400, shout.shape[1])] = shout[:, :400]
+            shouts.append((10, y, 10 + min(400, shout.shape[1]), y + shout.shape[0]))
+        top, low = lines
+        gap = low[1] - top[3]
+        first = (top[0] - 2, top[1] - 2, top[2] + 2, top[3] + gap - 2)       # down into the gap
+        second = (low[0] - 2, top[3] - 1, low[2] + 2, low[3] + 2)            # up to the end of the line above
+        repaired, changes = repair_lines(page, [first, second] + shouts)
+        self.assertNotIn("refit", [kind for kind, _, _ in changes])
+        for line in lines:
+            self.assertTrue(any(b[1] < line[1] - 1 and b[3] > line[3] + 1 and b[0] <= line[0] and b[2] >= line[2]
+                                for b, _ in repaired), (line, repaired))
 
     def test_tilted_paragraph_boxes_are_left_alone(self):
         # Grand Blue 102 p3: boxes of a tilted paragraph overlap a little; none holds two lines.
@@ -2314,6 +2531,70 @@ class GoldStandardTextTest(unittest.TestCase):
                              ("I CANNOT ALLOW THIS", "Isso é inaceitável."), ("HELLO", "Olá.")):
             self.assertFalse(quality.lost_negation(source, text), source)
 
+    def test_stage_direction_tag_asks_again(self):
+        # Manga teste 2 p4: "EH?" came back "<gasp>" and was lettered so.
+        notes = quality.translation_problems(["EH?", "IS THIS LIKE A TOUR"], ["<gasp>", "Isso é tipo um tour?"])
+        self.assertEqual(len(notes), 1, notes)
+        self.assertTrue(notes[0].startswith("<|1|>"), notes)
+        self.assertEqual(quality.translation_problems(["EH?"], ["Hã?"]), [])
+
+    def test_translation_leaving_out_most_lines_asks_again(self):
+        # Manga teste 2 p4: a note of three lines came back as its first two words, and the other
+        # lines were cleaned off and never lettered.
+        source = "SOME KIND OF MOVE (LOOK IT UP IN THE BOOK, I WILL SAY NO MORE) (THE MOVE)"
+        notes = quality.translation_problems([source], ["Algum golpe"])
+        self.assertTrue(any("leaves out most" in n for n in notes), notes)
+        for source, text in (("SO THEN, WHY NOT BEGIN WITH THE RED ONE", "Então, por que não começar pelo vermelho?"),
+                             ("HERE'S WHAT WE'RE DOING TODAY", "Eis o plano."), ("LE- LEAVE IT!", "Dei- Deixa isso!")):
+            self.assertFalse(quality.dropped_most(source, text), source)
+        # Manga teste 2 p4: the long aside of a footnote left out, the name and its repetition kept.
+        source = "GRAND SPIN MOVE (SEE THE OLD BOOK FOR IT, I WILL SAY NO MORE (THE SPIN)"
+        self.assertTrue(quality.dropped_most(source, "Grande golpe do giro (O Giro)"))
+        # The aside translated without its brackets, or with them, is no loss.
+        self.assertFalse(quality.dropped_most(source, "Grande giro: veja o livro antigo, não direi mais. O giro"))
+        self.assertFalse(quality.dropped_most(source, "Grande giro (veja o livro antigo (O giro)"))
+        # A short aside dropped from a long line is the AI's choice of words.
+        self.assertFalse(quality.dropped_most("SO THEN, WHY NOT ALL BEGIN WITH THE RED ONE (SIGH)",
+                                              "Então, por que não começamos todos pelo vermelho?"))
+
+    def test_block_with_a_line_the_ocr_could_not_read_stays_as_drawn(self):
+        # Manga teste 2 p14: a note in a handwritten font; only its last line was read, and
+        # translated alone it said something else beside the English lines above it.
+        read = [np.array([[30, 140], [600, 140], [600, 162], [30, 162]])]
+        above = [(30, 90, 640, 112), (30, 115, 620, 137)]
+        self.assertTrue(quality.unread_in_block(read, above))
+        # A small mark beside the bubble, a line of another size, or one far away is no reason.
+        for unread in ([(610, 140, 640, 162)], [(30, 70, 640, 110)], [(30, 400, 640, 422)]):
+            self.assertFalse(quality.unread_in_block(read, unread), unread)
+        self.assertFalse(quality.unread_in_block(read, []))
+        # A note beside the bubble, in letters of the same size, is another block (p5).
+        self.assertFalse(quality.unread_in_block(read, above, inside=lambda box: False))
+        self.assertTrue(quality.unread_in_block(read, above, inside=lambda box: True))
+
+    def test_numbers_spaced_by_the_engine_are_joined_again(self):
+        # Manga teste 2 p6, p7: the engine's cleanup spaced "3,67" and "4.014".
+        self.assertEqual(quality.rejoin_numbers("(500¥=3, 67US$ em 24/07/2022)", "(500¥=3.67US$ AS OF"),
+                         "(500¥=3,67US$ em 24/07/2022)")
+        self.assertEqual(quality.rejoin_numbers("Redução de 4. 014 ienes", "4014 YEN REDUCTION"),
+                         "Redução de 4.014 ienes")
+        self.assertEqual(quality.rejoin_numbers("1, 2, 3, já!", "1, 2, 3, GO!"), "1, 2, 3, já!")
+        self.assertEqual(quality.rejoin_numbers("Às 10, 30 pessoas", "AT 10, 30 PEOPLE"), "Às 10, 30 pessoas")
+        # A count written with K is spelled out in thousands.
+        self.assertEqual(quality.rejoin_numbers("Desconto de 25. 000 pontos", "25K POINTS OFF"),
+                         "Desconto de 25.000 pontos")
+        self.assertEqual(quality.rejoin_numbers("Às 25, 000 pessoas", "AT 25, NO ONE"), "Às 25, 000 pessoas")
+
+    def test_english_kept_in_the_answer_asks_again(self):
+        # Manga teste 2 p6: a currency note with its date came back with the date still in English,
+        # and was lettered so.
+        notes = quality.translation_problems(["(200€=9.10US$ AS OF 3 MARCH 2019)"],
+                                             ["(200€=9,10US$ as of 3 March 2019)"])
+        self.assertTrue(any("English" in n for n in notes), notes)
+        # Words both languages have ("as", "me", "no"), names and one stray word are no reason.
+        for source, text in (("AS OF TODAY", "A partir de hoje, as aulas"), ("TELL ME NO LIES", "Não me minta"),
+                             ("THE GREEN LEAF STORE", "A loja Green Leaf"), ("THE END", "The End")):
+            self.assertFalse(any("English" in n for n in quality.translation_problems([source], [text])), source)
+
     def test_a_bare_no_is_a_negation(self):
         for source, text in (("NO,", "Ora,"), ("OH NO!", "Ah!"), ("NO, ME!!", "Eu!!")):
             self.assertTrue(quality.lost_negation(source, text), source)
@@ -2340,11 +2621,17 @@ class OuroTwoTest(unittest.TestCase):
             "I BORE L/TTLE FONDNESS": "I BORE LITTLE FONDNESS",
             "PRAISEO YOUR STRATEGIO ACUMEN": "PRAISED YOUR STRATEGIC ACUMEN",
             "THEY COVERED /T UP.": "THEY COVERED IT UP.",
+            "BVT JVST ONCE": "BUT JUST ONCE",          # Manga teste 2: a "U" drawn like a "V"
+            # Manga teste 2 p5, p7: the hyphen repeated, or only at the start of the next line.
+            "WAS TREMEN- -DOUS !?": "WAS TREMENDOUS !?",
+            "PERH -APS THIS": "PERHAPS THIS",
+            "THEIR SUN- -LIGHT ROOM": "THEIR SUNLIGHT ROOM",
         }
         for source, expected in cases.items():
             self.assertEqual(quality.fix_ocr_words(source)[0], expected)
         for kept in ("OOH! CARIA LOVES THOSE.", "THATS OKAY. SHOULDNT YOU", "COMMANDER VIRION",
-                     "ALBOLD, BACK TO ELSHIRE", "Mixed case words like Pulleo", "HUH?"):
+                     "ALBOLD, BACK TO ELSHIRE", "Mixed case words like Pulleo", "HUH?",
+                     "VIVID VELVET VOWS", "SCORE 3 -2"):
             self.assertEqual(quality.fix_ocr_words(kept)[0], kept)
         self.assertEqual(quality.fix_ocr_words("THE PULLEO", keep=["PULLEO"])[0], "THE PULLEO")
 
@@ -2875,6 +3162,19 @@ class DrawnSymbolTest(unittest.TestCase):
         self.assertLessEqual(abs(quality.letter_height(gray, [box]) - capital), 1)
         self.assertIsNone(quality.letter_height(gray, [[[6, 66], [250, 66], [250, 78], [6, 78]]]))  # no letters
 
+    def test_letters_of_an_overlapping_line_are_not_symbols(self):
+        # Manga teste 2 p7: the box of one line reached into the next bubble, over the "LL" of its
+        # "I'LL" (a line of its own, a little higher); off the row of the wide line, they were kept
+        # as a drawing and stayed in English.  A piece belongs to the line whose middle is nearest.
+        gray = np.full((140, 360), 255, np.uint8)
+        cv2.putText(gray, "I'LL GO", (60, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.8, 0, 2)
+        cv2.putText(gray, "I'LL", (196, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, 0, 2)
+        # The wide box takes in the "LL" (their middles are inside it) but not the "I'".
+        wide = [[56, 73], [240, 73], [240, 96], [56, 96]]
+        own = [[194, 58], [240, 58], [240, 84], [194, 84]]
+        keep = quality.line_symbols(gray, np.array([own, wide]))
+        self.assertFalse((keep & (gray < 110)).any())
+
     def test_letters_and_punctuation_are_not_symbols(self):
         for text in ("AH...", "...TO FIND", "WE   GO", "...?"):
             gray, quad, _ = self.line(text)
@@ -2904,6 +3204,41 @@ class DrawnSymbolTest(unittest.TestCase):
     def test_dark_bubble_is_left_as_before(self):
         gray, quad = self.label(dark=True)
         self.assertFalse(quality.drawing_around(gray, [quad]).any())
+
+    def test_letters_stacked_past_the_line_are_kept(self):
+        # Manga teste 2 p2: a laugh written letter under letter down the outline, right past the
+        # end of a line; its second letter went with the cleaning of the bubble.
+        gray = np.full((200, 240), 255, np.uint8)
+        cv2.putText(gray, "WORD", (60, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.6, 0, 2)
+        line = [[56, 84], [118, 84], [118, 104], [56, 104]]
+        for i, letter in enumerate("HAHA"):
+            cv2.putText(gray, letter, (122 + 3 * i, 66 + 18 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.5, 0, 2)
+        keep = quality.drawing_around(gray, [line], 18)
+        stack = gray[50:130, 120:150] < 110
+        self.assertTrue(keep[50:130, 120:150][stack].all())
+        self.assertFalse(keep[84:105, 56:119].any())               # the letters of the line are cleaned
+        # The neighbour: "!!" right after the line, beside it and not under it, goes with the line.
+        gray = np.full((200, 240), 255, np.uint8)
+        cv2.putText(gray, "WORD", (60, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.6, 0, 2)
+        cv2.putText(gray, "! ! !", (122, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.6, 0, 2)
+        self.assertFalse(quality.drawing_around(gray, [line], 18).any())
+
+    def test_bold_letters_of_the_next_speech_are_not_drawing(self):
+        # Manga teste 2 p7: "WHA- / BUT" over "WHY?" in bold italics whose letters touch; the
+        # joined "WHY?" was three line heights wide, read as a drawing beside "BUT" and left out
+        # of the cleaning, and "Por quê?" was written over it.
+        gray = np.full((160, 240), 255, np.uint8)
+        cv2.putText(gray, "BUT", (90, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, 0, 2)
+        cv2.rectangle(gray, (70, 70), (170, 92), 0, -1)  # the joined bold letters of the next line
+        above = [[86, 34], [140, 34], [140, 54], [86, 54]]
+        below = [[66, 66], [174, 66], [174, 96], [66, 96]]
+        self.assertTrue(quality.drawing_around(gray, [above], 18)[72:80, 80:130].all())  # as before, alone
+        keep = quality.drawing_around(gray, [above], 18, text=[below])
+        self.assertFalse(keep[66:97, 66:175].any())
+        # A real drawing beside the label stays out of the cleaning with other text on the page.
+        gray, quad = self.label()
+        keep = quality.drawing_around(gray, np.array([quad]), text=[[[0, 140], [40, 140], [40, 158], [0, 158]]])
+        self.assertTrue(keep[85:92, 100:131].any())
 
 
 class GapCutTest(unittest.TestCase):
@@ -3173,6 +3508,36 @@ class ColumnTest(unittest.TestCase):
             d.text((205 - w // 2, y), text, fill=0, font=font)
             boxes.append((205 - w // 2, y + 3, 205 - w // 2 + w, y + 23))
         self.assertEqual(quality.column_cuts(np.array(img), boxes), {})
+
+    def test_staggered_columns_are_cut_row_by_row(self):
+        # Manga teste 2 p4: "HERE'S / WHAT / WE'RE / DOING / TODAY" beside "FIRST, / YOU'RE / GOING
+        # / TO GET A / TASTE OF / EVERYONE'S / JOB." in one bubble; the detector boxed each row
+        # across both columns, and the left column runs on under the right one ("EVERYONE'S"),
+        # so no blank stripe crosses the whole stack.  The OCR read "HERE'S FIRST, WHAT YOU'RE...".
+        from PIL import Image, ImageDraw, ImageFont
+        img = Image.new("RGB", (420, 300), "white")
+        d = ImageDraw.Draw(img)
+        font = ImageFont.truetype(str(Path(__file__).resolve().parents[1] / "fonts" / "ComicNeue-Bold.ttf"), 20)
+        left = ["FIRST,", "YOU'RE", "GOING", "TO GET A", "TASTE OF", "EVERYONE'S JOB."]
+        right = ["WHAT", "WE'RE", "DOING", "TODAY"]
+        boxes = []
+        for row, text in enumerate(left):
+            y = 40 + 24 * row
+            w = int(d.textlength(text, font=font))
+            x = 190 - w // 2 + (40 if row == 5 else 0)  # the last row runs under the right column
+            d.text((x, y), text, fill="black", font=font)
+            spans = [(x, x + w)]
+            if row < len(right):
+                rx = 245 + 4 * row  # italics: the right column drifts as it goes down
+                rw = int(d.textlength(right[row], font=font))
+                d.text((rx, y + 6), right[row], fill="black", font=font)
+                spans.append((rx, rx + rw))
+            boxes.append((min(a for a, _ in spans), y + 3, max(b for _, b in spans), y + 29))
+        gray = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY)
+        cuts = quality.column_cuts(gray, boxes)
+        self.assertEqual(sorted(cuts), [0, 1, 2, 3])
+        for row, (gx0, gx1) in cuts.items():
+            self.assertTrue(gx0 >= 190 + int(d.textlength(left[row], font=font)) // 2 - 22 and gx1 <= 245 + 4 * row + 4, cuts)
 
     def test_column_groups(self):
         self.assertEqual(quality.column_groups([(0, 0, 50, 10), (60, 0, 120, 10), (10, 12, 40, 22), (70, 12, 110, 22)]),
@@ -3809,3 +4174,552 @@ class LightOnDarkTest(unittest.TestCase):
         cv2.ellipse(image, (250, 150), (120, 40), 0, 0, 360, (255, 255, 255), -1)
         write(image, "NO WAY!", (190, 162), (0, 0, 0))
         self.assertIsNone(quality.light_on_dark(image, [quad(186, 136, 314, 168)]))
+
+
+class MissedLinesTest(unittest.TestCase):
+    """Manga teste 2 p7: CTD's mask had no pixel on the bubble "HALF / PRICE" nor on "HELL?"."""
+
+    def test_a_line_the_first_mask_left_out_is_added(self):
+        gray = np.full((200, 400), 255, np.uint8)
+        cv2.putText(gray, "OH", (100, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, 0, 2)
+        cv2.putText(gray, "REALLY?", (100, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.8, 0, 2)
+        cv2.putText(gray, "SALE", (280, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, 0, 2)
+        mask = np.zeros_like(gray)
+        mask[18:45, 95:180] = 255  # the first detector masked only "OH"
+        second = [(95, 18, 180, 45), (95, 58, 190, 85), (275, 18, 350, 45), (20, 150, 60, 180)]
+        # "OH" stays with the first detector, and a box over blank paper is nothing.
+        self.assertEqual(quality.missed_lines(second, mask, gray), [1, 2])
+
+
+class SidewaysTest(unittest.TestCase):
+    """Text written turned a quarter: margin labels and capitals stacked one per row (Manga teste 2
+    p2, p3, p8).  The engine read vertical boxes one way only and cut them into loose letters."""
+
+    def page(self, word, way):
+        """A white page with ``word`` written left to right, turned so it runs up ('cw') or down."""
+        flat = np.full((60, 400, 3), 255, np.uint8)
+        cv2.putText(flat, word, (10, 45), cv2.FONT_HERSHEY_SIMPLEX, 1.4, (0, 0, 0), 3)
+        turn = cv2.ROTATE_90_COUNTERCLOCKWISE if way == "cw" else cv2.ROTATE_90_CLOCKWISE
+        return flat, cv2.rotate(flat, turn)
+
+    def test_turned_page_reads_left_to_right_and_boxes_come_back(self):
+        from quality import turn_page, turn_box, unturn_box
+        for way in ("cw", "ccw"):
+            flat, page = self.page("LABEL", way)
+            self.assertTrue(np.array_equal(turn_page(page, way), flat))
+            box = (12, 30, 40, 300)
+            turned = turn_box(box, way, page.shape)
+            self.assertGreater(turned[2] - turned[0], turned[3] - turned[1])  # a line lying down
+            self.assertEqual(unturn_box(turned, way, page.shape), box)
+
+    def test_stacked_capitals_are_laid_in_a_row(self):
+        from quality import stacked_row
+        gray = np.full((400, 60), 255, np.uint8)
+        tops = [20, 60, 100, 200, 240]  # two words: a wide gap after the third letter
+        for top in tops:
+            cv2.putText(gray, "M", (12, top + 28), cv2.FONT_HERSHEY_SIMPLEX, 1.0, 0, 3)
+        row = stacked_row(gray, (0, 0, 60, 400))
+        self.assertIsNotNone(row)
+        self.assertGreater(row.shape[1], 3 * row.shape[0])
+        cols = (row < 128).any(axis=0)
+        gaps = [len(g) for g in "".join("1" if c else "0" for c in cols).strip("0").split("1") if g]
+        self.assertEqual(len(gaps), 4)
+        self.assertGreater(max(gaps), 2 * sorted(gaps)[0])  # the space between the words
+        # One piece of ink is not a stack.
+        lone = np.full((100, 60), 255, np.uint8)
+        cv2.rectangle(lone, (20, 10), (40, 90), 0, -1)
+        self.assertIsNone(stacked_row(lone, (0, 0, 60, 100)))
+
+    def test_letters_of_a_tall_column_are_not_added_as_lines(self):
+        from quality import letters_of_columns
+        column = (20, 100, 44, 900)
+        repaired = [((22, 120, 42, 140), None), ((22, 150, 42, 170), None),  # its letters
+                    ((300, 120, 500, 140), None),                           # a real orphan line
+                    ((22, 120, 42, 140), 0)]                                # a detector line stays
+        kept = letters_of_columns(repaired, [column])
+        self.assertEqual(kept, [((300, 120, 500, 140), None), ((22, 120, 42, 140), 0)])
+        # A short vertical box (a word turned in a bubble, about square) keeps what was added in it.
+        self.assertEqual(len(letters_of_columns(repaired, [(20, 100, 44, 130)])), 4)
+
+    def run_ocr(self, page, lines, engine_reads):
+        import asyncio
+        import types
+        from types import SimpleNamespace
+        from engine_compat import rescue_ocr
+        marker = page.copy()
+        async def dispatch(name, image, textlines, config, device, verbose):
+            # Reads "LABEL" surely only on the page turned so the word lies left to right.
+            from quality import turn_page
+            for line in textlines:
+                ok = image.shape == flat.shape and np.array_equal(image, flat)
+                line.text, line.prob = ("LABEL", 0.9) if ok else ("XQZ", 0.05)
+            return list(textlines)
+        flat = self.flat
+        module = types.ModuleType("manga_translator.ocr")
+        module.dispatch = dispatch
+        async def original(self, config, ctx):
+            for line, (text, prob) in zip(ctx.textlines, engine_reads):
+                line.text, line.prob = text, prob
+            return [line for line, (text, prob) in zip(ctx.textlines, engine_reads) if prob >= 0.2]
+        ocr_config = SimpleNamespace(ocr="48px", prob=None, model_copy=lambda deep: SimpleNamespace(ocr="48px", prob=None))
+        config = SimpleNamespace(ocr=ocr_config, render=SimpleNamespace(font_color_fg=None, font_color_bg=None))
+        ctx = SimpleNamespace(textlines=lines, img_rgb=marker)
+        translator = SimpleNamespace(device="cpu", verbose=False)
+        saved = sys.modules.get("manga_translator.ocr")
+        sys.modules["manga_translator.ocr"] = module
+        try:
+            result = asyncio.run(rescue_ocr(original)(translator, config, ctx))
+        finally:
+            if saved is None:
+                sys.modules.pop("manga_translator.ocr", None)
+            else:
+                sys.modules["manga_translator.ocr"] = saved
+        return result, ctx
+
+    class Line:
+        def __init__(self, box, direction):
+            self.pts, self.text, self.prob, self.direction = np.asarray(quad(*box)), "", 0.0, direction
+
+    def test_line_running_up_the_page_is_read_turned(self):
+        import sys as _sys
+        if "manga_translator.utils" not in _sys.modules:
+            import types
+            utils = types.ModuleType("manga_translator.utils")
+            class Quadrilateral:
+                def __init__(self, pts, text, prob):
+                    self.pts, self.text, self.prob = np.asarray(pts), text, prob
+            utils.Quadrilateral = Quadrilateral
+            _sys.modules["manga_translator.utils"] = utils
+            self.addCleanup(_sys.modules.pop, "manga_translator.utils", None)
+        self.flat, page = self.page("LABEL", "cw")
+        line = self.Line((5, 150, 58, 395), "v")
+        # The engine read it lying the wrong way, under its bar: dropped.
+        result, ctx = self.run_ocr(page, [line], [("HI HI 03d", 0.1)])
+        self.assertEqual([l.text for l in result], ["LABEL"])
+        self.assertEqual(list(ctx.mangalate_turns.values()), ["cw"])
+        # A line running down: read the other way; the engine's own surer reading of it stays.
+        self.flat, page = self.page("LABEL", "ccw")
+        line = self.Line((5, 5, 58, 250), "v")
+        result, ctx = self.run_ocr(page, [line], [("LABEL", 0.9)])
+        self.assertEqual(list(ctx.mangalate_turns.values()), ["ccw"])
+        # A horizontal line is never read turned.
+        self.flat, page = self.page("LABEL", "cw")
+        flat_line = self.Line((10, 10, 300, 40), "h")
+        result, ctx = self.run_ocr(page, [flat_line], [("WORDS", 0.9)])
+        self.assertEqual(ctx.mangalate_turns, {})
+
+    def test_block_of_lines_running_up_is_read_left_to_right(self):
+        from engine_compat import mark_turned
+        from types import SimpleNamespace
+        left, right = quad(10, 100, 30, 400), quad(40, 100, 60, 400)
+        region = SimpleNamespace(lines=np.asarray([right, left]), texts=["SECOND", "FIRST"], text="SECOND FIRST")
+        from engine_compat import _box_key
+        mark_turned([region], {_box_key(left): "cw", _box_key(right): "cw"})
+        self.assertEqual(region.mangalate_turn, "cw")
+        self.assertEqual(region.text, "FIRST SECOND")
+        # Lines read different ways are not a turned block.
+        other = SimpleNamespace(lines=np.asarray([right, left]), texts=["A", "B"], text="A B")
+        mark_turned([other], {_box_key(left): "cw", _box_key(right): "ccw"})
+        self.assertIsNone(other.mangalate_turn)
+
+
+class SizeCutTest(unittest.TestCase):
+    """Manga teste 2 p2: a small aside in a lobe beside big letters, under one detector box, was
+    read and translated as one speech."""
+
+    def line(self, words):
+        gray = np.full((80, 600), 255, np.uint8)
+        x = 10
+        for text, scale, gap in words:
+            (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, 3)
+            cv2.putText(gray, text, (x, 65), cv2.FONT_HERSHEY_SIMPLEX, scale, 0, 3)
+            x += w + gap
+        return gray, (5, 10, x, 72)
+
+    def test_big_and_small_words_side_by_side_are_cut(self):
+        from quality import size_cuts
+        gray, box = self.line([("LOOK AT", 1.6, 40), ("WELL,", 0.6, 0)])
+        cuts = size_cuts(gray, [box])
+        self.assertEqual(len(cuts.get(0, [])), 2)
+        big, small = cuts[0]
+        self.assertLess(big[2], small[0])
+        self.assertLess(small[3] - small[1], 0.6 * (big[3] - big[1]))  # as tall as its own letters
+
+    def test_line_of_the_small_speech_poking_out_of_the_box_is_kept(self):
+        from quality import size_cuts
+        # A short word over the small line, half above the box: it is a line of the small speech, not left out.
+        gray, box = self.line([("LOOK AT", 1.6, 40), ("WELL,", 0.6, 0)])
+        gray = np.vstack([np.full((40, gray.shape[1]), 255, np.uint8), gray])
+        box = (box[0], box[1] + 40, box[2], box[3] + 40)
+        small_x = box[2] - 70
+        cv2.putText(gray, "SO", (small_x, 58), cv2.FONT_HERSHEY_SIMPLEX, 0.6, 0, 3)
+        box = (box[0], 50, box[2], box[3])   # the box starts inside "SO"
+        cuts = size_cuts(gray, [box])
+        self.assertEqual(len(cuts.get(0, [])), 3, cuts)
+        upper = cuts[0][1]
+        top = int(np.flatnonzero((gray[:, small_x:small_x + 30] < 128).any(axis=1))[0])
+        self.assertLessEqual(upper[1], top)   # all of the word, above the box
+        self.assertLess(upper[3], cuts[0][2][1] + 3)
+        # A word of another box there stays that box's.
+        self.assertEqual(len(size_cuts(gray, [box, (small_x - 5, 35, small_x + 40, 62)])[0]), 2)
+
+    def test_one_speech_is_not_cut(self):
+        from quality import size_cuts
+        # Same letters with ordinary word spaces; a big word with a comma; mixed case.
+        for words in ([("WE ARE", 1.0, 14), ("HERE", 1.0, 0)],
+                      [("WHAT", 1.6, 4), (",", 1.6, 0)],
+                      [("Hello", 1.0, 16), ("world", 1.0, 0)],
+                      [("LOOK AT", 1.6, 8), ("WELL,", 0.6, 0)]):  # too close: one line
+            gray, box = self.line(words)
+            self.assertEqual(size_cuts(gray, [box]), {}, words)
+
+
+class SidewaysBlockTest(unittest.TestCase):
+    """Manga teste 2 p4, p6: a note of two or three lines down the margin, its detector boxes
+    overlapping; each was read alone and came out as slices of its neighbours."""
+
+    def test_columns_side_by_side_are_one_block(self):
+        from quality import sideways_blocks
+        boxes = [(30, 300, 50, 780), (42, 320, 66, 690), (62, 390, 78, 630),  # one note
+                 (500, 100, 520, 600)]                                     # another, far off
+        blocks = sideways_blocks(boxes)
+        self.assertEqual(blocks, [((30, 300, 78, 780), [0, 1, 2]), ((500, 100, 520, 600), [3])])
+        # Columns one above the other are not side by side.
+        self.assertEqual(len(sideways_blocks([(10, 0, 30, 300), (10, 320, 30, 600)])), 2)
+
+    def test_block_reaches_the_word_its_boxes_stopped_short_of(self):
+        # Manga teste 2 p4: the boxes of a margin note stopped a word short of the top of its
+        # longest line, under a framed portrait; that word stayed in English over the translation.
+        from quality import reach_letters
+        line = np.full((40, 420), 255, np.uint8)
+        cv2.putText(line, "ONE LONG LINE OF TEXT", (5, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, 0, 2)
+        column = cv2.rotate(line, cv2.ROTATE_90_COUNTERCLOCKWISE)  # runs up the page, 40 wide
+        gray = np.full((700, 200), 255, np.uint8)
+        gray[150:570, 60:100] = column
+        ink = np.flatnonzero((gray[:, 60:100] < 128).any(axis=1))
+        top, bottom = int(ink[0]), int(ink[-1]) + 1
+        # The box starts inside the last word, the end of the line, at the top.
+        piece = np.flatnonzero((gray[top:top + 60, 60:100] < 128).any(axis=1))
+        cut = top + int(piece[len(piece) // 2])
+        grown = reach_letters(gray, (60, cut, 100, bottom), 30)
+        self.assertLessEqual(grown[1], top + 1)
+        self.assertEqual((grown[0], grown[2], grown[3]), (60, 100, bottom))
+        # A frame across the column just above the word stops it: the drawing past the frame,
+        # letter-sized too, is no part of the line.
+        framed = gray.copy()
+        framed[top - 9:top - 6, 30:130] = 0
+        framed[top - 40:top - 6, 30:33] = 0
+        framed[top - 24:top - 13, 75:86] = 0
+        self.assertEqual(reach_letters(framed, (60, cut, 100, bottom), 30)[1], top)
+        # Manga teste 2 p6: the frame of the portrait was a thin grey line, lighter than ink; past
+        # it the drawing joined the note, its two lines read as one and the note stayed in English.
+        grey = gray.copy()
+        grey[top - 9:top - 7, 30:130] = 170
+        grey[top - 24:top - 13, 75:86] = 0
+        self.assertEqual(reach_letters(grey, (60, cut, 100, bottom), 30)[1], top)
+
+    def test_block_that_stops_between_words_or_on_the_drawing_stays(self):
+        from quality import reach_letters
+        gray = np.full((700, 200), 255, np.uint8)
+        for y in range(300, 590, 25):
+            gray[y:y + 20, 70:90] = 0                   # the block's own letters
+        cv2.circle(gray, (80, 285), 9, 0, -1)          # a sign just above it, a gap away
+        self.assertEqual(reach_letters(gray, (60, 300, 100, 600), 30), (60, 300, 100, 600))
+        # A letter cut by the box end, but the column runs onto a grey drawing: no paper past it.
+        grey = np.full((700, 200), 160, np.uint8)
+        for y in range(250, 590, 25):
+            grey[y:y + 20, 70:90] = 0
+        self.assertEqual(reach_letters(grey, (60, 310, 100, 600), 30), (60, 310, 100, 600))
+        # The same on paper goes on.
+        grey[grey == 160] = 255
+        self.assertEqual(reach_letters(grey, (60, 310, 100, 600), 30)[1], 250)
+
+    def test_turned_block_is_read_line_by_line(self):
+        from quality import turned_rows
+        gray = np.full((120, 600), 255, np.uint8)
+        for k, text in enumerate(("FIRST LINE OF THE NOTE", "SECOND LINE")):
+            cv2.putText(gray, text, (10, 40 + k * 40), cv2.FONT_HERSHEY_SIMPLEX, 0.9, 0, 2)
+        rows = turned_rows(gray, (0, 0, 600, 120))
+        self.assertEqual(len(rows), 2)
+        self.assertLess(rows[0][3], rows[1][1] + 2)
+        self.assertGreater(rows[0][2] - rows[0][0], rows[1][2] - rows[1][0])  # each as wide as its letters
+
+    def test_narrow_bubble_of_short_lines_is_no_turned_line(self):
+        # Manga teste 2 p4: five short lines in a narrow bubble, a detector box twice as tall
+        # as wide over it; taken for a turned line, its lines were dropped as its letters.
+        from quality import tall_box
+        self.assertFalse(tall_box((300, 1000, 360, 1122)))
+        self.assertTrue(tall_box((100, 200, 126, 310)))  # one turned word in the panel
+
+
+class WallBetweenTest(unittest.TestCase):
+    def test_word_past_the_frame_of_a_caption_is_not_its_line(self):
+        # Manga teste 2 p11: "IT" outside a caption box was joined to "GETTING" inside it.
+        from quality import _wall_between
+        gray = np.full((60, 300), 255, np.uint8)
+        gray[:, 150:153] = 0  # the frame
+        self.assertTrue(_wall_between(gray, (10, 20, 140, 45), (160, 20, 200, 45)))
+        # Paper between two words of a line, or a comma, is no wall.
+        gray2 = np.full((60, 300), 255, np.uint8)
+        gray2[38:46, 150:153] = 0
+        self.assertFalse(_wall_between(gray2, (10, 20, 140, 45), (160, 20, 200, 45)))
+
+    def test_frame_inside_a_box_that_starts_on_the_line(self):
+        # Manga teste 2 p11 again: the last letter of "GETTING" overhung its box by a few pixels and
+        # was taken into the box of "IT", which then started on it, and the frame between them was
+        # never looked at.  A stroke that runs well above and below the row is still a wall.
+        from quality import _wall_between
+        gray = np.full((80, 300), 255, np.uint8)
+        gray[:, 150:153] = 0  # the frame
+        gray[22:44, 160:166] = 0  # an "I" past it
+        self.assertTrue(_wall_between(gray, (10, 20, 140, 45), (137, 20, 200, 45)))
+        # Letters a row tall in the rest of the line, even an "I", are no wall.
+        plain = np.full((80, 300), 255, np.uint8)
+        plain[21:45, 145:151] = 0  # an "I" at the start of the rest of the line
+        plain[21:45, 160:180] = 0
+        self.assertFalse(_wall_between(plain, (10, 20, 140, 45), (137, 20, 200, 45)))
+
+
+class StrayKanaTest(unittest.TestCase):
+    def test_one_kana_between_latin_letters_is_a_dash(self):
+        # Manga teste 2 p2: a word cut by a dash, its "I-" read as a kana, was taken for a Japanese
+        # sound effect.
+        from quality import stray_cjk
+        from engine_compat import is_sound_effect
+        self.assertEqual(stray_cjk("HE\u30c8HELLO THERE"), "HEI- HELLO THERE")  # the kana is an "I" and a dash
+        self.assertEqual(stray_cjk("STO\u3042 NOW"), "STO- NOW")
+        self.assertFalse(is_sound_effect("HE\u30c8HELLO THERE"))
+        # Real kana stays: an effect joined to a word, or Japanese alone.
+        self.assertEqual(stray_cjk("BOB\u3075\u3002\u304b"), "BOB\u3075\u3002\u304b")
+        self.assertTrue(is_sound_effect("BOB\u3075\u3002\u304b"))
+        self.assertEqual(stray_cjk("\u751f\u5f92\u4f1a"), "\u751f\u5f92\u4f1a")
+
+
+class ChapterHeadingTest(unittest.TestCase):
+    def test_heading_without_credits_is_a_heading(self):
+        # Manga teste 2 p3: a chapter number and its title in a bubble stayed in English.
+        from engine_compat import chapter_heading, is_credit
+        self.assertTrue(chapter_heading("CHAPTER 7 THE LONG ROAD HOME"))
+        self.assertTrue(is_credit("CHAPTER 7 THE LONG ROAD HOME"))  # still a credit over the art
+        # With its staff it is a credit block; a word that starts like it is no heading.
+        self.assertFalse(chapter_heading("Chapter 5 Translation: Ann Lettering: Bo"))
+        self.assertFalse(chapter_heading("CHAPTERS ARE FUN"))
+
+
+class ColumnInkTest(unittest.TestCase):
+    def test_letters_of_a_turned_line_beside_two_lines_do_not_join_them(self):
+        # Manga teste 2 p8: "ARE YOU ALRIGHT?" turned beside "SOME- / -WHERE?" hid the blank row
+        # between the two lines; one box over both was dropped by the OCR.
+        from quality import without_columns
+        mask = np.zeros((300, 300), np.uint8)
+        mask[100:118, 140:220] = 255           # SOME-
+        mask[122:140, 140:230] = 255           # -WHERE?
+        for y in range(60, 200, 14):           # the turned line: letters one under the other
+            mask[y:y + 11, 128:138] = 255
+        column = (126, 58, 140, 202)
+        ink = without_columns(mask > 0, [column])
+        self.assertFalse(ink[60:200, 128:138].any())
+        self.assertTrue(ink[100:118, 140:220].all() and ink[122:140, 140:230].all())
+        # Without a tall column nothing changes.
+        self.assertTrue(np.array_equal(without_columns(mask > 0, [(126, 58, 140, 90)]), mask > 0))
+
+
+class ShortWordTest(unittest.TestCase):
+    def page(self, top_word):
+        gray = np.full((700, 700), 255, np.uint8)
+        boxes = []
+        for k, text in enumerate(("THE SMALL TALK", "OF THE OTHERS", "ON THE PAGE")):
+            y = 560 + k * 40
+            cv2.putText(gray, text, (300, y), cv2.FONT_HERSHEY_SIMPLEX, 0.9, 0, 2)
+            (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
+            boxes.append((298, y - h - 4, 302 + w, y + 6))
+        for k, text in enumerate((top_word, "WAS", "LIKE", "SOME")):
+            (w, h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 2.6, 7)
+            cv2.putText(gray, text, (150 - w // 2, 120 + k * 95), cv2.FONT_HERSHEY_SIMPLEX, 2.6, 0, 7)
+            if text == "SOME":  # the detector boxed only the last line of the shout
+                boxes.append((150 - w // 2 - 4, 120 + k * 95 - h - 6, 150 + w // 2 + 4, 120 + k * 95 + 8))
+        return gray, boxes
+
+    def test_short_word_over_a_shout_is_a_line(self):
+        # Manga teste 2 p10: "IT" over "WAS / LIKE / SOME..." in big letters had no box; narrower
+        # than a line, it was never added and stayed in English over the translation.
+        gray, boxes = self.page("II")   # two tall strokes: narrower than tall, as "IT" in a tall font
+        repaired, _ = repair_lines(((gray < 128) * 255).astype(np.uint8), boxes, gray)
+        added = [b for b, source in repaired if source is None]
+        self.assertTrue(any(b[1] < 95 < b[3] for b in added), added)
+        self.assertTrue(any(b[1] < 190 < b[3] for b in added), added)  # "WAS" as before
+        # Wider than tall: a taller box was read as vertical text and lost.
+        word = next(b for b in added if b[1] < 95 < b[3])
+        self.assertGreater(word[2] - word[0], word[3] - word[1], word)
+
+    def test_lone_mark_beside_a_shout_is_not_a_line(self):
+        gray, boxes = self.page("")
+        cv2.circle(gray, (330, 100), 30, 0, -1)  # a blot of the drawing beside the shout
+        repaired, _ = repair_lines(((gray < 128) * 255).astype(np.uint8), boxes, gray)
+        self.assertFalse(any(b[0] <= 330 <= b[2] and b[1] <= 100 <= b[3] for b, source in repaired if source is None))
+
+
+class ArtLetteringTest(unittest.TestCase):
+    """Lettering drawn for show over the drawing: a sticker, a line along a curve, stacked letters.
+    All synthetic (the cases came from a manga's chapter opening)."""
+
+    def sticker(self, letters=235, outline=20):
+        image = np.full((200, 400, 3), 30, np.uint8)               # a dark drawing (a jacket)
+        for x in range(-200, 400, 9):
+            cv2.line(image, (x, 0), (x + 200, 199), (90, 90, 90), 1)
+        cv2.rectangle(image, (50, 55), (350, 145), (250, 250, 250), -1)   # the light halo
+        raw = np.zeros((200, 400), np.uint8)
+        cv2.putText(raw, "NEW SERIES", (90, 112), cv2.FONT_HERSHEY_DUPLEX, 1.2, 255, 5)
+        rim = (cv2.dilate(raw, np.ones((5, 5), np.uint8)) > 0) & (raw == 0)
+        image[rim] = outline
+        image[raw > 0] = letters
+        return image, raw, [quad(85, 80, 315, 120)]
+
+    def test_light_outlined_capitals_in_a_halo_are_a_sticker(self):
+        image, raw, quads = self.sticker()
+        found = quality.outlined_in_halo(image, raw, quads)
+        self.assertIsNotNone(found)
+        self.assertGreater(min(found[0]), 200)   # light letters
+        self.assertLess(max(found[1]), 80)       # dark outline
+
+    def test_dark_speech_on_paper_is_no_sticker(self):
+        image = page(size=(400, 200))
+        write(image, "HELLO THERE", (90, 112), (0, 0, 0))
+        raw = text_mask(image, (255, 255, 255))
+        self.assertIsNone(quality.outlined_in_halo(image, raw, [quad(85, 85, 300, 120)]))
+
+    def test_light_letters_without_a_halo_are_no_sticker(self):
+        image, raw, quads = self.sticker()
+        image[(raw == 0) & (image.max(axis=2) > 200)] = 30         # the halo dark like the drawing
+        self.assertIsNone(quality.outlined_in_halo(image, raw, quads))
+
+    def arc(self, bend):
+        gray = np.full((300, 400), 255, np.uint8)
+        raw = np.zeros((300, 400), np.uint8)
+        for k in range(7):
+            t = k / 6.0
+            x, y = int(60 + 260 * t), int(80 + bend * t * t)
+            cv2.rectangle(raw, (x - 10, y - 12), (x + 10, y + 12), 255, -1)
+            cv2.rectangle(raw, (x - 4, y - 6), (x + 4, y + 6), 0, -1)   # a hole: a letter, not a blot
+        gray[raw > 0] = 0
+        return gray, raw, quad(40, 50, 350, 80 + bend + 30)
+
+    def test_letters_along_a_curve_are_read_turned_upright(self):
+        gray, raw, q = self.arc(bend=100)
+        found = quality.arc_letters(gray, raw, q)
+        self.assertIsNotNone(found)
+        self.assertEqual(len(found["centres"]), 7)
+        self.assertLess(found["centres"][0][0], found["centres"][-1][0])   # left to right
+        self.assertGreater(max(found["angles"]), quality.ARC_TILT)
+        self.assertGreater(found["row"].shape[1], found["row"].shape[0])   # laid in a row
+
+    def test_a_level_line_is_no_arc(self):
+        gray, raw, q = self.arc(bend=0)
+        self.assertIsNone(quality.arc_letters(gray, raw, q))
+
+    def test_scattered_pieces_are_no_arc(self):
+        gray, raw, q = self.arc(bend=100)
+        raw[:, 150:330] = 0                                        # a wide gap between the letters
+        gray[:, 150:330] = 255
+        cv2.rectangle(raw, (330, 230), (350, 254), 255, -1)
+        self.assertIsNone(quality.arc_letters(gray, raw, q))
+
+    def column(self):
+        gray = np.full((400, 200), 255, np.uint8)
+        for k in range(5):
+            y = 40 + 50 * k
+            cv2.rectangle(gray, (90, y), (115, y + 34), 0, 3)      # stacked letters, 35 px tall
+        return gray
+
+    def test_a_stacked_column_grows_over_its_first_letters(self):
+        gray = self.column()
+        box = quality.stacked_reach(gray, (85, 140, 120, 280))     # the detector began at the third
+        self.assertLessEqual(box[1], 40)
+        self.assertGreaterEqual(box[3], 274)
+
+    def test_a_stacked_column_does_not_grow_over_the_drawing(self):
+        gray = self.column()
+        gray[:130] = 255
+        cv2.circle(gray, (102, 60), 45, 0, -1)                    # a blot of the drawing above it
+        box = quality.stacked_reach(gray, (85, 140, 120, 280))
+        self.assertGreater(box[1], 130)                           # its own first letter, not the blot
+
+
+class StackedWordsTest(unittest.TestCase):
+    def test_a_possessive_is_an_english_word(self):
+        from engine_compat import stacked_words
+        self.assertTrue(stacked_words("A MAN'S", "NAMS"))      # read stacked, the column is words
+        self.assertFalse(stacked_words("XQZ", "HELLO"))          # stacked reading is no word: kept turned
+        self.assertFalse(stacked_words("HELLO", "HELLO"))        # the same letters: nothing gained
+        self.assertTrue(quality.reads_as_speech("THE MAN'S HAT."))
+
+
+class ShoutColumnTest(unittest.TestCase):
+    """A shout scrawled letter under letter, of which the detector boxed one letter (synthetic)."""
+
+    def column(self, beside=False):
+        gray = np.full((520, 300), 255, np.uint8)
+        for k in range(6):
+            y = 30 + 70 * k
+            cv2.rectangle(gray, (120, y), (165, y + 50), 0, 6)       # letters 50 px tall, alone in their rows
+            if beside:  # a paragraph: the rest of each line beside the letter
+                cv2.rectangle(gray, (180, y), (225, y + 50), 0, 6)
+                cv2.rectangle(gray, (60, y), (105, y + 50), 0, 6)
+        return gray
+
+    def test_one_boxed_letter_grows_into_its_column(self):
+        gray = self.column()
+        box = quality.stacked_reach(gray, (118, 165, 168, 240))      # the third letter, its top cut
+        self.assertLessEqual(box[1], 30)
+        count, letters = quality.stacked_letters(gray, box)
+        self.assertEqual(count, 6)
+        self.assertEqual(quality.letters_alone(gray, box), 1.0)
+
+    def test_a_column_down_a_paragraph_is_not_alone(self):
+        gray = self.column(beside=True)
+        box = quality.stacked_reach(gray, (118, 165, 168, 240))
+        self.assertLess(quality.letters_alone(gray, box), quality.STACK_ALONE)
+
+    def test_stacked_reading_put_right(self):
+        self.assertEqual(quality.stacked_text("M Y IPADI?"), "MY IPAD!?")
+        self.assertEqual(quality.stacked_text("A MAN'S"), "A MAN'S")       # a word of one letter stays
+        self.assertEqual(quality.stacked_text("HI?"), "HI?")               # a short word's "I" is a letter
+
+
+class StutterLobeTest(unittest.TestCase):
+    def test_a_stutter_off_the_axis_is_its_own_lobe(self):
+        boxes = [(170, 481, 228, 509), (141, 498, 211, 534), (163, 530, 181, 548), (157, 552, 186, 570)]
+        self.assertEqual(quality.stutter_split(boxes, ["WHA-", "WHAT", "IS", "IT?"]), [[0], [1, 2, 3]])
+
+    def test_a_centred_stutter_stays_with_its_speech(self):
+        boxes = [(150, 481, 200, 509), (141, 510, 211, 534), (163, 540, 181, 558), (157, 562, 186, 580)]
+        self.assertIsNone(quality.stutter_split(boxes, ["WHA-", "WHAT", "IS", "IT?"]))
+
+    def test_a_first_line_that_is_no_stutter_stays(self):
+        boxes = [(170, 481, 228, 509), (141, 498, 211, 534), (163, 530, 181, 548), (157, 552, 186, 570)]
+        self.assertIsNone(quality.stutter_split(boxes, ["OH", "WHAT", "IS", "IT?"]))
+
+
+class HeavyLettersTest(unittest.TestCase):
+    def lines(self, thickness):
+        image = page(size=(400, 120))
+        for k in range(7):  # capitals 32 px tall drawn as frames of the given stroke
+            x = 20 + 38 * k
+            cv2.rectangle(image, (x, 47), (x + 26, 79), (0, 0, 0), thickness)
+        return image, [quad(15, 45, 300, 81)]
+
+    def test_bold_capitals_are_heavy(self):
+        image, quads = self.lines(9)
+        self.assertTrue(quality.heavy_letters(image, quads))
+
+    def test_usual_lettering_is_not(self):
+        image, quads = self.lines(3)
+        self.assertFalse(quality.heavy_letters(image, quads))
+
+
+class FullwidthSignTest(unittest.TestCase):
+    def test_a_fullwidth_tilde_is_no_japanese(self):
+        from quality_text import has_cjk, plain_width
+        self.assertEqual(plain_width("rostinho～ ♡"), "rostinho~ ♡")
+        self.assertFalse(has_cjk(plain_width("rostinho～！")))
+        self.assertTrue(has_cjk(plain_width("ありがとう～")))          # real Japanese stays Japanese

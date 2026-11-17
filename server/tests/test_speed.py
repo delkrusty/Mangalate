@@ -452,3 +452,174 @@ class FlatFillTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GhostTest(unittest.TestCase):
+    """Manga teste 2 p4, p7: the model left a grey ghost of the letters in narrow white bubbles.
+
+    The mask reached the outline of the bubble, so the bubble was not filled flat
+    (split_flat), and the model drew faint letters back where "I'LL / TALK / TO THE /
+    CAFE- / -TERIA..." was.  Inside the bubble, what the model left light is paper.
+    """
+
+    @staticmethod
+    def page():
+        import cv2
+        import numpy as np
+        image = np.full((300, 300, 3), 140, np.uint8)               # grey drawing around
+        cv2.ellipse(image, (150, 150), (40, 110), 0, 0, 360, (252, 252, 252), -1)
+        cv2.ellipse(image, (150, 150), (40, 110), 0, 0, 360, (0, 0, 0), 3)
+        for y in range(70, 230, 20):
+            cv2.putText(image, "ABC", (125, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 2)
+        mask = np.zeros((300, 300), np.uint8)
+        mask[55:235, 105:196] = 255                                  # up to the outline and past it
+        region = SimpleNamespace(xyxy=(120, 55, 180, 235), lines=np.array([[[120, 55], [180, 55], [180, 235], [120, 235]]]),
+                                 mangalate_background={"kind": "interior"})
+        return image, mask, region
+
+    def test_light_ghost_in_the_bubble_becomes_paper(self):
+        import numpy as np
+        image, mask, region = self.page()
+        cleaned = image.copy()
+        cleaned[mask > 0] = 200                                      # the model's faint letters
+        cleaned[60:240, 108:112] = 0                                 # and the outline it drew back
+        out = speed.settle_ghosts(cleaned, image, mask, [region])
+        inside = np.zeros(mask.shape, bool)
+        inside[80:220, 130:170] = True
+        self.assertTrue((out[inside] == 252).all())
+        self.assertTrue((out[60:240, 108:112] == 0).all())          # dark strokes stay
+        self.assertTrue((out[150, 105:107] == 200).all())          # past the outline: the drawing, as the model left it
+
+    def test_ghost_on_the_last_line_of_an_open_bubble_becomes_paper(self):
+        # Manga teste 2 p6: a white flash bubble open into the gutter; the interior stopped at the
+        # text box, and "CLOSER", touching its bottom edge, was no hole of the interior: the grey
+        # the model drew there stayed and split the room of the translation.
+        import cv2
+        import numpy as np
+        image = np.full((300, 300, 3), 140, np.uint8)
+        image[:, 60:240] = 252                                       # white down to the page edge
+        lines = []
+        for k, y in enumerate((100, 130, 160)):
+            cv2.putText(image, "WORD", (110, y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 3)
+            lines.append([[105, y - 22], [195, y - 22], [195, y + 3], [105, y + 3]])
+        region = SimpleNamespace(xyxy=(105, 78, 195, 162), lines=np.array(lines),
+                                 mangalate_background={"kind": "interior"})
+        mask = np.zeros((300, 300), np.uint8)
+        mask[74:168, 100:200] = 255
+        cleaned = image.copy()
+        cleaned[mask > 0] = 252
+        cleaned[140:165, 115:185] = 180                              # the ghost of the last line
+        out = speed.settle_ghosts(cleaned, image, mask, [region])
+        self.assertTrue((out[140:162, 115:185] == 252).all())
+        self.assertTrue((out[:, :55] == 140).all())                  # the drawing beside stays
+
+    def test_text_over_the_drawing_is_left_to_the_model(self):
+        import numpy as np
+        image, mask, region = self.page()
+        region.mangalate_background = {"kind": "tracos"}
+        cleaned = image.copy()
+        cleaned[mask > 0] = 200
+        self.assertTrue((speed.settle_ghosts(cleaned, image, mask, [region]) == cleaned).all())
+
+    def test_speech_in_a_bubble_cut_by_the_frame_gets_paper(self):
+        # Manga teste 2 p6: "AND AFTER THAT..." in a bubble the panel frame cuts read as strokes
+        # ("tracos", a speech), was cleaned by the model and kept grey specks of its letters.
+        image, mask, region = self.page()
+        region.mangalate_background = {"kind": "tracos", "fala": True}
+        cleaned = image.copy()
+        cleaned[mask > 0] = 200
+        out = speed.settle_ghosts(cleaned, image, mask, [region])
+        self.assertFalse((out == cleaned).all())
+
+
+class HaloKeptTest(unittest.TestCase):
+    """A sticker caption or a turned or stacked column is painted flat with its halo: the model
+    drew the art back under it as smears where the halo crossed the drawing (hair, a jacket)."""
+
+    def test_sticker_and_turned_columns_are_painted_flat(self):
+        for marks in ({"mangalate_sticker": ((255, 255, 255), (0, 0, 0))}, {"mangalate_turn": "cw"},
+                      {"mangalate_turn": "ccw"}, {"mangalate_turn": "stack"}, {"mangalate_turn": "arc"}):
+            self.assertTrue(speed.halo_kept(SimpleNamespace(**marks)), marks)
+        # A line along a curve too (Manga teste 2 p3): its block is the band under the curve's
+        # chord, and the model drew a hand inside it back as a smear.
+        for marks in ({}, {"mangalate_turn": None}, {"mangalate_sticker": None}):
+            self.assertFalse(speed.halo_kept(SimpleNamespace(**marks)), marks)
+
+    def test_a_flat_halo_sends_nothing_to_the_model(self):
+        import numpy as np
+        image, mask, raw, region = FlatFillTest.haloed_page(None, over_art=True)
+        region.mangalate_turn = "stack"
+        page, left = speed.paint_halos(image, mask, [region], raw)
+        self.assertFalse(left[40:135, 90:280].any())              # nothing of it left to the model
+        self.assertTrue((page[raw > 0] == 255).all())            # the old letters painted with the halo
+        # The same speech not turned: its letters and halo go to the model.
+        image, mask, raw, region = FlatFillTest.haloed_page(None, over_art=True)
+        left = speed.paint_halos(image, mask, [region], raw)[1]
+        self.assertTrue((left[raw > 0] > 0).all())
+
+
+class FlatHaloTest(unittest.TestCase):
+    def test_a_turned_word_keeps_a_light_pattern_away_from_its_letters(self):
+        # A stacked word over paper with a light drawn pattern (small animals, flowers): painted
+        # flat to the whole light ground, the pattern was wiped white far past the letters.
+        import cv2
+        import numpy as np
+        image = np.full((300, 200, 3), 255, np.uint8)
+        image[::14, :] = 215                                      # pale pattern lines on the paper
+        raw = np.zeros((300, 200), np.uint8)
+        for k, ch in enumerate("ABC"):
+            cv2.putText(raw, ch, (85, 70 + 70 * k), cv2.FONT_HERSHEY_DUPLEX, 1.6, 255, 5)
+        halo = cv2.dilate(raw, np.ones((9, 9), np.uint8)) > 0
+        image[halo] = 255
+        image[raw > 0] = 0
+        mask = cv2.dilate(raw, np.ones((11, 11), np.uint8))
+        region = SimpleNamespace(lines=np.array([[[75, 25], [125, 25], [125, 230], [75, 230]]]), xyxy=(75, 25, 125, 230),
+                                 font_size=40, mangalate_background={"kind": "tracos", "fala": True, "sobre_arte": True},
+                                 mangalate_turn="stack")
+        page = speed.paint_halos(image, mask, [region], raw)[0]
+        far = (image.min(axis=2) == 215) & (cv2.dilate(raw, np.ones((41, 41), np.uint8)) == 0)
+        self.assertTrue(far.any())
+        self.assertTrue((page[far] == image[far]).all())          # the pattern away from the letters stays
+        self.assertTrue((page[raw > 0] == 255).all())             # the old letters go
+
+    def test_a_stacked_letter_touching_a_strand_of_hair_goes_too(self):
+        # Manga teste 2 p11: the "S" of a stacked word over hair, its halo crossed by a dark strand,
+        # was taken for the drawing (quality.halo_drawing) and left whole under the translation.
+        import cv2
+        import numpy as np
+        image = np.full((300, 200, 3), 120, np.uint8)             # grey hair
+        raw = np.zeros((300, 200), np.uint8)
+        for k, ch in enumerate("ABS"):
+            cv2.putText(raw, ch, (85, 70 + 70 * k), cv2.FONT_HERSHEY_DUPLEX, 1.6, 255, 5)
+        halo = cv2.dilate(raw, np.ones((9, 9), np.uint8)) > 0
+        image[halo] = 255
+        image[raw > 0] = 0
+        cv2.line(image, (40, 215), (160, 185), (0, 0, 0), 4)       # a strand across the last letter
+        mask = cv2.dilate(raw, np.ones((11, 11), np.uint8))
+        region = SimpleNamespace(lines=np.array([[[75, 25], [125, 25], [125, 230], [75, 230]]]), xyxy=(75, 25, 125, 230),
+                                 font_size=40, mangalate_background={"kind": "tracos", "fala": True, "sobre_arte": True},
+                                 mangalate_turn="stack")
+        page = speed.paint_halos(image, mask, [region], raw)[0]
+        self.assertTrue((page[raw > 0] == 255).all())             # every old letter goes
+        self.assertTrue((page[10:20, 30:60] == 120).all())        # the hair away from them stays
+
+    def test_a_sticker_loses_the_grey_rims_of_its_old_letters(self):
+        import cv2
+        import numpy as np
+        image = np.full((200, 400, 3), 20, np.uint8)               # a dark jacket
+        cv2.rectangle(image, (60, 60), (340, 140), (255, 255, 255), -1)
+        raw = np.zeros((200, 400), np.uint8)
+        cv2.putText(raw, "SERIES", (100, 115), cv2.FONT_HERSHEY_DUPLEX, 1.5, 255, 5)
+        outline = (cv2.dilate(raw, np.ones((5, 5), np.uint8)) > 0) & (raw == 0)
+        rim = (cv2.dilate(raw, np.ones((7, 7), np.uint8)) > 0) & (raw == 0) & ~outline
+        image[outline] = 25                                        # the dark outline of light capitals...
+        image[rim] = (190, 190, 190)                               # ...and its soft grey rim
+        image[raw > 0] = 240
+        mask = cv2.dilate(raw, np.ones((5, 5), np.uint8))
+        quads = np.array([[[95, 80], [310, 80], [310, 122], [95, 122]]])
+        region = SimpleNamespace(lines=quads, xyxy=(95, 80, 310, 122), font_size=30,
+                                 mangalate_background={"kind": "tracos", "fala": True, "sobre_arte": True},
+                                 mangalate_sticker=((255, 255, 255), (0, 0, 0)))
+        page = speed.paint_halos(image, mask, [region], raw)[0]
+        self.assertFalse((page[rim] == 190).all(axis=1).any())     # no grey rim left
+        self.assertTrue((page[:40] == 20).all())                   # the jacket stays
