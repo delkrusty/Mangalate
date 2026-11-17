@@ -13,7 +13,8 @@ import string
 # are touched, and only when exactly one common word comes out.
 OCR_CONFUSIONS = (("LI", "U"), ("LJ", "U"), ("IJ", "U"), ("E", "F"), ("F", "E"), ("O", "D"), ("O", "C"), ("O", "Q"),
                   ("C", "D"), ("I", "D"), ("I", "L"), ("I", "T"), ("L", "I"), ("0", "O"), ("1", "I"), ("5", "S"),
-                  ("7", "T"), ("8", "B"), ("/", "I"), ("|", "I"), ("VV", "W"), ("RN", "M"), ("Q", "O"))
+                  ("7", "T"), ("8", "B"), ("/", "I"), ("|", "I"), ("VV", "W"), ("RN", "M"), ("Q", "O"),
+                  ("V", "U"))  # a "U" drawn open at the top like a "V" (Manga teste 2: "BVT", "JVST")
 OCR_FINAL_L = 5  # a final "L" read as "A" after an "A" ("HOSPITAA") is undone in words this long (letters)
 DIGIT_WORD_LETTERS = 3  # a word with one stray digit is retried as every letter only with this many letters
 _WORDS = None
@@ -97,8 +98,15 @@ def fix_ocr_words(text, keep=()):
     i = 0
     while i + 2 < len(parts):
         head, tail = parts[i], parts[i + 2]
-        dash = head.endswith("-") and not head.endswith("--")
-        h = head[:-1] if dash else head
+        # The letterer may repeat the hyphen at the start of the next line, or put it only there:
+        # "ENOR- / -MOUS", "CERT / -AINLY" (Manga teste 2 p5: "enor- -mous!?" came back half English).
+        ends = head.endswith("-") and not head.endswith("--")
+        if tail.startswith("-") and not tail.startswith("--") and re.match(r"-[A-Z]{2,}", tail):
+            tail = tail[1:]
+            dash = True
+        else:
+            dash = ends
+        h = head[:-1] if ends else head
         lead = re.match(r"[.…]*", h).group(0) if dash else ""  # "...FIRE- BLITZ"
         h = h[len(lead):]
         if re.fullmatch(r"[A-Z]{2,}", h) and re.fullmatch(r"[A-Z]{2,}\W*", tail):
@@ -271,3 +279,23 @@ def english_sound_effect(text):
                 and not SFX_SHAPE.search(short.upper()):
             return False
     return bool(SFX_SHAPE.search(words[0]))
+
+
+_CJK_CHAR = "[\u3040-\u30ff\u3400-\u9fff\uff66-\uff9f]"
+_STRAY_CJK = re.compile(r"(?<=[A-Za-z])\s?" + _CJK_CHAR + r"\s*(?=[A-Za-z])")
+
+
+def stray_cjk(text):
+    """One kana or kanji between Latin letters is a stroke the OCR misread: a dash.
+
+    Manga teste 2 p2: "WAI- WHAT?" read "WAトWHAT?"; with a kana in it the speech was taken for a
+    Japanese sound effect and left in English.  Two or more Japanese characters stay as read.
+    """
+    text = str(text or "")
+    if len(re.findall(_CJK_CHAR, text)) != 1:
+        return text
+    # A kana shaped like a letter and a dash keeps the letter: "ト" is an "I" with the dash on it.
+    return _STRAY_CJK.sub(lambda m: _CJK_LETTER_DASH.get(m.group(0).strip(), "-") + " ", text)
+
+
+_CJK_LETTER_DASH = {"ト": "I-", "卜": "I-", "ー": "-", "一": "-"}

@@ -78,13 +78,16 @@ def _close_leak(mask, box, open_sides):
     return mask, open_sides
 
 
-def bubble_mask(image, box, others=(), grow=GROW):
+def bubble_mask(image, box, others=(), grow=GROW, open_margin=0):
     """Interior of the bubble around ``box`` in the cleaned image, as (mask, x0, y0).
 
     ``others`` are boxes of other text regions; the space between two regions
     is split in half so they never write over each other.  The search window
     grows while the fill touches it; a side still touching the largest window
-    or the page edge is treated as open and limited to the text box.
+    or the page edge is treated as open and limited to the text box, grown by
+    ``open_margin``: the air a plan keeps from an outline is no reason to give up
+    the room the original letters had on an open side (Manga teste 2 p7: a strip
+    title of 34 px planned in the 14 px left between two margins).
     """
     x0, y0, x1, y1 = box
     size = max(x1 - x0, y1 - y0)
@@ -103,7 +106,8 @@ def bubble_mask(image, box, others=(), grow=GROW):
         return None
     # Close small holes (leftover specks after cleaning) without crossing the outline.
     mask = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8)) > 0
-    bx0, by0, bx1, by1 = x0 - wx0, y0 - wy0, x1 - wx0, y1 - wy0
+    bx0, by0, bx1, by1 = x0 - wx0 - open_margin, y0 - wy0 - open_margin, x1 - wx0 + open_margin, y1 - wy0 + open_margin
+    bx0, by0 = max(0, bx0), max(0, by0)
     if open_sides["left"]:
         mask[:, :bx0] = False
     if open_sides["right"]:
@@ -283,6 +287,37 @@ def window_font():
     return next((path for path in WINDOW_FONTS if os.path.exists(path)), None) or font_file()
 
 
+# Words drawn over the art in big letters (stacked down the drawing in a halo, outlined capitals) are
+# lettered in a comic impact face, like the original's: Bangers (SIL Open Font License, server/fonts).
+ART_FONTS = ("/mangalate/fonts/Bangers-Regular.ttf",)
+
+
+# Bangers leans like italics: stacked one letter per row, its letters zigzag down the column.  A
+# word stacked over the art takes an upright, heavy, narrow face: Anton (SIL Open Font License).
+STACK_ART_FONTS = ("/mangalate/fonts/Anton-Regular.ttf",)
+
+
+# A shout scrawled down a bubble by hand, letter under letter: a marker face, Permanent Marker
+# (Apache License 2.0).
+SHOUT_FONTS = ("/mangalate/fonts/PermanentMarker-Regular.ttf",)
+
+
+def shout_font():
+    """The font of a shout scrawled by hand; the shaped lettering's font when the image lacks it."""
+    if font_file() is None:
+        return None
+    return next((path for path in SHOUT_FONTS if os.path.exists(path)), None) or font_file()
+
+
+def art_font(stacked=False):
+    """The font of a word drawn over the art (upright when ``stacked``); the shaped lettering's font
+    when the image lacks it."""
+    if font_file() is None:  # the reader chose the engine's own layout
+        return None
+    fonts = STACK_ART_FONTS if stacked else ART_FONTS
+    return next((path for path in fonts if os.path.exists(path)), None) or font_file()
+
+
 # The original lettering is in capitals; mixed-case Portuguese at the same em size
 # reads smaller (x-height ~0.5 em against caps ~0.7 em), so the shaped plan may go
 # further than the rectangle plan when the bubble has the room.
@@ -291,9 +326,11 @@ REFERENCE = "ÉÇÃgjpq"   # tallest accents and deepest descenders: the height 
 MAX_LINES = 12
 BALANCE_STEPS = 7
 DANGLING_COST = 0.8      # a dangling word is accepted when avoiding it shrinks the letters below this share
+LONE_GAIN = 1.15         # ...and, letters under HYPHEN_BELOW of the original, when the loose layout is this much bigger
 SENTENCE_COST = 0.9      # likewise for a sentence that ends mid-line
 SHAPED_MARGIN = 0.3      # air between the letters and the outline, share of the line height (TBATE 237 p20:
                          # with 0.1 the caption text touched the box on both sides)
+SHAPED_TIGHT = 0.2       # ...and the least, for letters that came out small (plan_shaped)
 CENTRE_ASYMMETRY = 1.0   # the rows are limited only when their middle is this far from the text, in line
                          # heights: a fill leaked into the sky, not a closed bubble around the text
 CENTRE_SPARE = 2.0       # rows then kept above and below the original text box, in line heights
@@ -344,7 +381,9 @@ def wrap(words, widths, measure, strict=True, sentences=False, syllables=False):
         if measure(word) <= widths[len(lines)]:
             current = word
             continue
-        cut = syllable_cut(word, widths[len(lines)], measure) if syllables and cuttable else None
+        # ``syllables`` is True, or the shortest word that may be cut (HYPHEN_NARROW_WORD).
+        shortest = HYPHEN_WORD if syllables is True else syllables
+        cut = syllable_cut(word, widths[len(lines)], measure, shortest) if syllables and cuttable else None
         if cut is None:
             return None  # the word alone is wider than its line
         lines.append(word[:cut] + "-")
@@ -384,6 +423,8 @@ HYPHEN_SIDE = 3     # letters kept on each side of a syllable cut ("inesca-" / "
 HYPHEN_WORD = 8     # only words this long are cut: "cer-" / "teza" and "ver-" / "dade" read choppy
 HYPHEN_GAIN = 1.15  # syllable cuts are used only when they let the letters grow at least this much...
 HYPHEN_BELOW = 0.85  # ...from below this share of the original size, and never past the original
+HYPHEN_NARROW_WORD = 6    # in a very narrow bubble a word this long may be cut too ("capi-" / "tão")...
+HYPHEN_NARROW_GAIN = 1.25  # ...when the cut lets the letters grow at least this much
 _PATTERNS = None
 
 
@@ -416,13 +457,25 @@ def _patterns():
     return _PATTERNS
 
 
-def syllable_breaks(word):
+def syllable_breaks(word, shortest=HYPHEN_WORD, sides=(HYPHEN_SIDE, HYPHEN_SIDE)):
     """Where a Portuguese word may be cut at the end of a line (Liang's patterns), as letter counts.
 
     Only lower-case words of letters alone: a capital may start a name ("Shakuyaku"), which
-    is never cut.
+    is never cut.  Words shorter than ``shortest`` are never cut.  A word joined to a pronoun
+    by its hyphen ("alimentá-los") is cut in the part of letters that is long enough
+    ("alimen-" / "tá-los", Manga teste 2 p7), with ``sides`` counted on the whole word.
     """
-    if len(word) < HYPHEN_WORD or not word.isalpha() or not word.islower():
+    if "-" in word.strip("-"):
+        parts, out, start = word.split("-"), [], 0
+        total = sum(len(part) for part in parts)
+        for part in parts:
+            # Letters of the other parts count towards the sides; inside a part, two at least.
+            before = sum(c != "-" for c in word[:start])
+            sides_here = (max(2, sides[0] - before), max(2, sides[1] - (total - before - len(part))))
+            out += [start + k for k in syllable_breaks(part, shortest, sides_here)]
+            start += len(part) + 1
+        return out
+    if len(word) < shortest or not word.isalpha() or not word.islower():
         return []
     padded = f".{word}."
     weights = [0] * (len(padded) + 1)
@@ -435,16 +488,16 @@ def syllable_breaks(word):
                 break
             for i, weight in enumerate(node.get(None, ())):
                 weights[start + i] = max(weights[start + i], weight)
-    return [k for k in range(HYPHEN_SIDE, len(word) - HYPHEN_SIDE + 1) if weights[k + 1] % 2]
+    return [k for k in range(sides[0], len(word) - sides[1] + 1) if weights[k + 1] % 2]
 
 
-def syllable_cut(word, width, measure):
+def syllable_cut(word, width, measure, shortest=HYPHEN_WORD):
     """The longest head of ``word`` that, cut at a syllable with its hyphen, fits ``width``; else None."""
     letters = [i for i, c in enumerate(word) if c.isalpha()]
     if not letters:
         return None
     start, end = letters[0], letters[-1] + 1
-    fits = [k for k in reversed(syllable_breaks(word[start:end])) if measure(word[:start + k] + "-") <= width]
+    fits = [k for k in reversed(syllable_breaks(word[start:end], shortest)) if measure(word[:start + k] + "-") <= width]
     core = word[start:end].lower()
     apart = [k for k in fits if not (core[k - 1] in VOWELS and core[k] in VOWELS)]
     return start + (apart or fits)[0] if fits else None
@@ -582,6 +635,35 @@ class Measure:
         return sum(font.getlength(piece) for piece, font in self.runs(text))
 
 
+def clear_of(box, others, margin):
+    """``others`` with the boxes that only reach into the ``margin`` px around ``box`` cut back
+    to leave it clear; a box over ``box`` itself, or away from it, stays as it is.
+
+    The box of a title along a curve ended where a long margin note began (Manga teste 2 p3):
+    reaching into the note's margin, it cut the note's room in two, and the note shrank to 14 px
+    from 23."""
+    x0, y0, x1, y1 = box
+    out = []
+    for o in others:
+        ox0, oy0, ox1, oy1 = o
+        if ox0 < x1 and ox1 > x0 and oy0 < y1 and oy1 > y0:  # over the box
+            out.append(o)
+            continue
+        across = ox0 < x1 + margin and ox1 > x0 - margin
+        along = oy0 < y1 + margin and oy1 > y0 - margin
+        if across and oy1 <= y0:
+            oy1 = min(oy1, y0 - margin - 1)
+        elif across and oy0 >= y1:
+            oy0 = max(oy0, y1 + margin + 1)
+        elif along and ox1 <= x0:
+            ox1 = min(ox1, x0 - margin - 1)
+        elif along and ox0 >= x1:
+            ox0 = max(ox0, x1 + margin + 1)
+        if ox1 > ox0 and oy1 > oy0:
+            out.append(type(o)((ox0, oy0, ox1, oy1)) if isinstance(o, tuple) else [ox0, oy0, ox1, oy1])
+    return out
+
+
 def plan_shaped(image, region_box, others, text, font_path, original_size, minimum, offset=0, syllables=True,
                 scale=SHAPED_MAX_SCALE):
     """Font size and lines that follow the bubble; None to use the rectangle plan.
@@ -591,16 +673,85 @@ def plan_shaped(image, region_box, others, text, font_path, original_size, minim
     With ``syllables`` a long word may be cut at a syllable when that lets the letters grow
     by HYPHEN_GAIN (One Piece 1161 p4: "...transformando" whole in a narrow caption column
     left the letters at half the original size).
+
+    Letters well under the original are tried again with a tighter margin to the outline, kept
+    when they grow by HYPHEN_GAIN: in a narrow bubble a word one syllable longer took a line
+    more, and 2 px of margin left them at three quarters of the original (Manga teste 2 p5).
     """
-    found = bubble_mask(image, region_box, others)
-    if found is None or not font_path:
+    if not font_path:
+        return None
+    margin = max(MIN_MARGIN, int(round(original_size * SHAPED_MARGIN)))
+    planned = _plan_shaped(image, region_box, others, text, font_path, original_size, minimum, offset,
+                           syllables, scale, margin)
+    tight = max(MIN_MARGIN, int(round(original_size * SHAPED_TIGHT)))
+    if tight < margin and (planned is None or planned["size"] < HYPHEN_BELOW * original_size):
+        closer = _plan_shaped(image, region_box, others, text, font_path, original_size, minimum, offset,
+                              syllables, scale, tight)
+        if closer is not None and (planned is None or closer["size"] >= HYPHEN_GAIN * planned["size"]):
+            planned = closer
+    return planned
+
+
+def _plan_shaped(image, region_box, others, text, font_path, original_size, minimum, offset, syllables, scale,
+                 margin):
+    """plan_shaped with ``margin`` px of air to the outline."""
+    found = bubble_mask(image, region_box, others, open_margin=margin)
+    if found is None:
         return None
     mask, wx0, wy0 = found
     x0, y0, x1, y1 = region_box
-    margin = max(MIN_MARGIN, int(round(original_size * SHAPED_MARGIN)))
     inner = cv2.erode(mask.astype(np.uint8), np.ones((2 * margin + 1, 2 * margin + 1), np.uint8)) > 0
-    cx = int(round((x0 + x1) / 2 - wx0))
     cy = int(round((y0 + y1) / 2 - wy0))
+    floor = max(1, int(minimum))
+    cap = max(floor, int(round(original_size * scale)) + int(offset))
+    box_cx = int(round((x0 + x1) / 2 - wx0))
+    best = fit(inner, box_cx, cy, wx0, wy0, image, region_box, others, text, font_path, original_size,
+               margin, floor, cap, syllables)
+    # The middle of the bubble, when the text box is off it: a line of another speech joined
+    # into the region (Manga teste 2 p7, "I'LL..." in the lobe beside a tall narrow bubble)
+    # pulled the box centre aside, and the rows, symmetric around it, shrank to half the bubble.
+    middle = interior_middle(inner, box_cx, y0 - wy0, y1 - wy0)
+    if middle is not None and 2 <= abs(middle - box_cx) <= CENTRE_SHIFT * original_size:
+        moved = fit(inner, middle, cy, wx0, wy0, image, region_box, others, text, font_path, original_size,
+                    margin, floor, cap, syllables)
+        if moved is not None and (best is None or moved[0][0] > best[0][0]):
+            best = moved
+    if best is None:
+        return None
+    (lo, (lines, block_top, slot, advance)), cx = best
+    width = max(Measure(font_path, lo)(line) for line in lines)
+    x, top = cx + wx0, block_top + wy0
+    box = (int(x - width / 2), int(top), int(x + width / 2) + 1, int(top + slot + advance * (len(lines) - 1)) + 1)
+    return {"size": lo, "lines": lines, "x": x, "top": top, "slot": slot, "advance": advance,
+            "font": font_path, "box": box}
+
+
+CENTRE_SHIFT = 1.5   # the block may move this many original line heights to the middle of the bubble
+
+
+def interior_middle(inner, cx, y0, y1):
+    """Median middle of the interior spans through column ``cx`` over rows ``y0``..``y1``; None if none."""
+    h, w = inner.shape
+    if not 0 <= cx < w:
+        return None
+    middles = []
+    for y in range(max(0, y0), min(h, y1 + 1)):
+        row = inner[y]
+        if not row[cx]:
+            continue
+        l = r = cx
+        while l > 0 and row[l - 1]:
+            l -= 1
+        while r < w - 1 and row[r + 1]:
+            r += 1
+        middles.append((l + r) / 2)
+    return int(round(float(np.median(middles)))) if middles else None
+
+
+def fit(inner, cx, cy, wx0, wy0, image, region_box, others, text, font_path, original_size, margin, floor, cap,
+        syllables):
+    """((size, (lines, top, slot, advance)), cx) of the text centred on column ``cx``; None if it does not fit."""
+    x0, y0, x1, y1 = region_box
     half = half_widths(inner, cx)
     if not 0 <= cy < len(half) or half[cy] <= 0:
         return None
@@ -616,14 +767,21 @@ def plan_shaped(image, region_box, others, text, font_path, original_size, minim
     if abs((top + bottom) / 2 - cy) > CENTRE_ASYMMETRY * original_size:
         reach = max(min(cy - top, bottom - cy), int(round((y1 - y0) / 2 + CENTRE_SPARE * original_size)))
         top, bottom = max(top, cy - reach), min(bottom, cy + reach)
-    floor = max(1, int(minimum))
-    cap = max(floor, int(round(original_size * scale)) + int(offset))
     rows = (top, bottom)
 
     def largest(strict, sentences=False, cut=False, cap=cap):
         def attempt(size):
             return shaped(half, cx, rows, text, Measure(font_path, size), strict=strict, sentences=sentences,
                           syllables=cut)
+        if cut:
+            # Cutting words: whether a size fits jumps with the cuts (Manga teste 2 p7: "capi-" /
+            # "tão" fits at 17 and 18, not at 15 or 16; p5: "estron-" / "doso" at 21 and 22, not at
+            # 18 to 20, and the halving search stopped at 17), so every size is tried from the top.
+            for size in range(cap, floor - 1, -1):
+                found = attempt(size)
+                if found is not None:
+                    return size, found
+            return None
         if attempt(floor) is None:
             return None
         lo, hi = floor, cap
@@ -645,19 +803,32 @@ def plan_shaped(image, region_box, others, text, font_path, original_size, minim
             return None
         for (strict, sentences), cost in (((True, True), SENTENCE_COST), ((True, False), DANGLING_COST)):
             found = largest(strict, sentences, cut, cap)
-            if found is not None and found[0] >= min(cost * loose[0], original_size):
+            # Letters well under the original are no price for it when the loose layout is much
+            # bigger (Manga teste 2 p5: a narrow bubble lettered one word per line, the lone "O"
+            # on top avoided at 17 for 21, the original's size).
+            if (found is not None and found[0] >= min(cost * loose[0], original_size)
+                    and (found[0] >= HYPHEN_BELOW * original_size or loose[0] < LONE_GAIN * found[0])):
                 return found
         return loose
 
     def choose():
         best = preferred()
         # Worth a try only with a word that can be cut and room for the letters to grow.
-        can_cut = syllables and any(syllable_breaks(re.sub(r"[^\w]", "", word)) for word in text.split())
+        can_cut = syllables and any(syllable_breaks(re.sub(r"[^\w-]", "", word).strip("-")) for word in text.split())
         limit = max(floor, min(cap, int(round(original_size))))
         small = best is None or best[0] < HYPHEN_BELOW * original_size
         cut = preferred(True, limit) if can_cut and small and (best is None or HYPHEN_GAIN * best[0] <= limit) else None
         if cut is not None and syllable_cuts(cut[1][0], text.split()) and (best is None or cut[0] >= HYPHEN_GAIN * best[0]):
             best = cut
+        # A very narrow bubble (Manga teste 2 p7: "YES, / CAP- / -TAIN", 70 px wide): words of 6 or
+        # 7 letters may be cut too, only when that makes the letters much bigger.
+        if (syllables and (best is None or best[0] < HYPHEN_BELOW * original_size)
+                and any(syllable_breaks(re.sub(r"[^\w-]", "", word).strip("-"), HYPHEN_NARROW_WORD) for word in text.split())
+                and (best is None or HYPHEN_NARROW_GAIN * best[0] <= limit)):
+            narrow = preferred(HYPHEN_NARROW_WORD, limit)
+            if (narrow is not None and syllable_cuts(narrow[1][0], text.split())
+                    and (best is None or narrow[0] >= HYPHEN_NARROW_GAIN * best[0])):
+                best = narrow
         return best
 
     best = choose()
@@ -666,7 +837,7 @@ def plan_shaped(image, region_box, others, text, font_path, original_size, minim
     # shrank (Manhwa teste p36, two joined bubbles).  The block centred on the original text, inside
     # the same rows, is tried too and kept when its letters come out bigger.
     if others:
-        free = bubble_mask(image, region_box, ())
+        free = bubble_mask(image, region_box, (), open_margin=margin)
         if free is not None:
             fmask, fx0, fy0 = free
 
@@ -680,14 +851,7 @@ def plan_shaped(image, region_box, others, text, font_path, original_size, minim
                     centred = choose()
                     if centred is not None and (best is None or centred[0] > best[0]):
                         best = centred
-    if best is None:
-        return None
-    lo, (lines, block_top, slot, advance) = best
-    width = max(Measure(font_path, lo)(line) for line in lines)
-    x, top = cx + wx0, block_top + wy0
-    box = (int(x - width / 2), int(top), int(x + width / 2) + 1, int(top + slot + advance * (len(lines) - 1)) + 1)
-    return {"size": lo, "lines": lines, "x": x, "top": top, "slot": slot, "advance": advance,
-            "font": font_path, "box": box}
+    return None if best is None else (best, cx)
 
 
 TONE_DARK = 128       # a pixel darker than this is ink (an outline, a stroke); screentone dots are lighter
@@ -756,39 +920,120 @@ def toned_page(image, box, hull):
 STACK_ADVANCE = 1.3   # rows of stacked letters, in cap heights
 STACK_ROOM = 1.1      # the stacked letters may take this share of the original column's height...
 STACK_WIDTH = 1.6     # ...and be this many times as wide as it
+STACK_COMPACT = 1.12  # over the art (compact): rows of stacked letters, in cap heights, like the original's...
+STACK_SPACE = 0.4     # ...a space between words this share of a row...
+STACK_DOT = 0.5       # ...and each dot of "..." this share: the letters grow back to the original's size
+STACK_ACCENT = 0.3    # rows of room added above a capital with an accent ("Ã" under "M": the tilde touched it)
+ACCENTED = set("ÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÑ")
 
 
-def plan_stacked(region_box, text, font_path, minimum):
+def plan_stacked(region_box, text, font_path, minimum, compact=False):
     """Capitals stacked one per row in the column of the original ("GUYS!" in a tall bubble).
 
     A plan for draw_shaped, or None when the letters do not fit at ``minimum`` size.
-    Spaces between words become an empty row.
+    Spaces between words become an empty row; ``compact`` (a word over the art) packs the rows
+    closer and gives a space and each dot a part of a row, so the letters stay as big as the
+    original's when the translation is longer.
     """
     if not font_path:
         return None
-    chars = list(" ".join(text.split()).upper())
+    # A run of "!" and "?" is one row, side by side, as drawn ("!?").
+    chars = re.findall(r"[!?]+|.", " ".join(text.split()).upper())
     if not chars:
         return None
     x0, y0, x1, y1 = region_box
-    room, wide = (y1 - y0) * STACK_ROOM, max(1, x1 - x0) * STACK_WIDTH
+    # Over the art (compact) the column stays in the original's: past it, a shout ran off the page.
+    room, wide = (y1 - y0) * (1.0 if compact else STACK_ROOM), max(1, x1 - x0) * STACK_WIDTH
+    weight = [(STACK_SPACE if c == " " else STACK_DOT if c in (".", ",", "…") else 1.0) if compact else 1.0 for c in chars]
+    # Each row starts after the rows above it, in rows: a small one (a space, a dot) counts its share.
+    starts = [0.0] + list(np.cumsum([(weight[k] + weight[k + 1]) / 2 + (STACK_ACCENT if compact and chars[k + 1] in ACCENTED else 0.0)
+                                     for k in range(len(chars) - 1)]))
     best = None
     for size in range(int(minimum), 400):
         measure = Measure(font_path, size)
         _, top, _, bottom = measure.font.getbbox("H")
         cap = bottom - top
-        advance = cap * STACK_ADVANCE
-        if cap + advance * (len(chars) - 1) > room or max(measure(c) for c in chars) > wide:
+        advance = cap * (STACK_COMPACT if compact else STACK_ADVANCE)
+        if cap + advance * starts[-1] > room or max(measure(c) for c in chars) > wide:
             break
         best = (size, cap, advance, top)
     if best is None:
         return None
     size, cap, advance, offset = best
-    height = cap + advance * (len(chars) - 1)
+    height = cap + advance * starts[-1]
     x, top = (x0 + x1) / 2, (y0 + y1) / 2 - height / 2
     width = max(Measure(font_path, size)(c) for c in chars)
     box = (int(x - width / 2), int(top), int(x + width / 2) + 1, int(top + height) + 1)
     return {"size": size, "lines": chars, "x": x, "top": top, "slot": cap, "advance": advance,
-            "font": font_path, "box": box, "offset": offset}
+            "font": font_path, "box": box, "offset": offset, "rows": [advance * r for r in starts]}
+
+
+def plan_arc(centres, height, text, font_path, minimum):
+    """The letters of ``text`` along the path of the original letters (``centres``, in reading order,
+    letters ``height`` px tall): a line written along a curve ("CHAPTER 2!!" bent around a figure).
+    Each letter takes the step the original ones took, or a shorter one when the translation is
+    longer, the letters shrinking with it; the path runs on past its ends along its last direction.
+    A plan for draw_arc (each letter's centre and angle), or None below ``minimum``."""
+    if not font_path or len(centres) < 2:
+        return None
+    chars = list(" ".join(text.split()).upper())
+    if not chars:
+        return None
+    path = np.asarray(centres, float)
+    seg = np.hypot(*np.diff(path, axis=0).T)
+    length = float(seg.sum())
+    step = length / (len(path) - 1)
+    room = length + step  # half a step past each end
+    if len(chars) > 1 and step * (len(chars) - 1) > room - step:
+        fit = (room - step) / (len(chars) - 1)
+    else:
+        fit = step
+    size = int(height / capital_share(font_path) * min(1.0, fit / step))
+    if size < minimum:
+        return None
+    marks = np.concatenate([[0.0], np.cumsum(seg)])
+
+    def at(s):
+        """(x, y, angle) at arc length s, the ends run on straight."""
+        k = int(np.clip(np.searchsorted(marks, s) - 1, 0, len(seg) - 1))
+        a, b = path[k], path[k + 1]
+        d = (b - a) / max(1e-6, seg[k])
+        point = a + d * (s - marks[k])
+        return float(point[0]), float(point[1]), float(np.degrees(np.arctan2(d[1], d[0])))
+    start = (length - fit * (len(chars) - 1)) / 2
+    letters = [(c,) + at(start + k * fit) for k, c in enumerate(chars)]
+    xs, ys = [l[1] for l in letters], [l[2] for l in letters]
+    half = size
+    box = (int(min(xs) - half), int(min(ys) - half), int(max(xs) + half) + 1, int(max(ys) + half) + 1)
+    return {"arc": True, "size": size, "font": font_path, "letters": letters, "lines": ["".join(chars)], "box": box}
+
+
+def draw_arc(img, plan, fg, bg):
+    """Draw a plan_arc result on the RGB page (in place): each letter turned along the path."""
+    from PIL import Image, ImageDraw
+    measure = Measure(plan["font"], plan["size"])
+    stroke = max(1, int(round(plan["size"] * 0.07))) if bg is not None else 0
+    h, w = img.shape[:2]
+    for char, x, y, angle in plan["letters"]:
+        if not char.strip():
+            continue
+        side = int(plan["size"] * 2) + 2 * stroke + 4
+        layer = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(layer)
+        _, top, _, bottom = measure.font.getbbox("H")
+        draw.text((side / 2, side / 2 + (bottom - top) / 2), char, font=measure.font, anchor="ms",  # capitals centred
+                  fill=tuple(int(c) for c in fg) + (255,), stroke_width=stroke,
+                  stroke_fill=tuple(int(c) for c in bg) + (255,) if stroke else None)
+        layer = np.asarray(layer.rotate(-angle, resample=Image.BICUBIC, center=(side / 2, side / 2)))
+        left, up = int(round(x - side / 2)), int(round(y - side / 2))
+        cx0, cy0, cx1, cy1 = max(0, left), max(0, up), min(w, left + side), min(h, up + side)
+        if cx1 <= cx0 or cy1 <= cy0:
+            continue
+        part = layer[cy0 - up:cy1 - up, cx0 - left:cx1 - left]
+        alpha = part[:, :, 3:4].astype(np.float32) / 255.0
+        target = img[cy0:cy1, cx0:cx1, :3].astype(np.float32)
+        img[cy0:cy1, cx0:cx1, :3] = np.clip(target * (1 - alpha) + part[:, :, :3] * alpha, 0, 255).astype(np.uint8)
+    return img
 
 
 def draw_shaped(img, plan, fg, bg):
@@ -802,12 +1047,13 @@ def draw_shaped(img, plan, fg, bg):
     left = int(plan["x"] - max(widths) / 2) - pad
     top = int(plan["top"]) - pad
     width = int(max(widths)) + 2 * pad + 1
-    height = int(plan["slot"] + plan["advance"] * (len(plan["lines"]) - 1)) + 2 * pad + 1
+    rows = plan.get("rows") or [plan["advance"] * i for i in range(len(plan["lines"]))]
+    height = int(plan["slot"] + rows[-1]) + 2 * pad + 1
     layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(layer)
     for i, (line, lw) in enumerate(zip(plan["lines"], widths)):
         x = plan["x"] - lw / 2 - left
-        y = plan["top"] + i * plan["advance"] - plan.get("offset", measure.offset) - top
+        y = plan["top"] + rows[i] - plan.get("offset", measure.offset) - top
         base = y + measure.font.getmetrics()[0]
         for piece, font in measure.runs(line):  # on one baseline when a symbol comes from SYMBOL_FONT
             draw.text((x, base), piece, font=font, anchor="ls", fill=tuple(int(c) for c in fg) + (255,),

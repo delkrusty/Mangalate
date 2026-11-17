@@ -2,6 +2,7 @@
 import os
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import cv2
@@ -313,6 +314,16 @@ class ShapedLetteringTest(unittest.TestCase):
         # A word that fits its line is never cut.
         self.assertEqual(lettering.wrap(["Vamos", "lá"], [500], measure, syllables=True), ["Vamos lá"])
 
+    def test_word_with_a_pronoun_is_cut_before_its_hyphen(self):
+        # Manga teste 2 p7: "alimentá-los" could break neither at its hyphen ("los" is a pronoun)
+        # nor at a syllable, and a narrow lobe held the whole speech at 10 px.
+        measure = lettering.Measure(FONT, 30)
+        narrow = [measure("alimen-") + 2] * 2
+        self.assertEqual(lettering.wrap(["alimentá-los"], narrow, measure, syllables=True), ["alimen-", "tá-los"])
+        self.assertIsNone(lettering.wrap(["alimentá-los"], narrow, measure))
+        # Never closer than HYPHEN_SIDE letters to an end, the pronoun counted: "vê-los" stays whole.
+        self.assertIsNone(lettering.syllable_cut("vê-los", 1, measure))
+
     def test_narrow_bubble_grows_the_letters_by_cutting_a_long_word(self):
         # One Piece 1161 p4: a caption column 61 px wide; a long word had to fit whole on a line
         # and the letters fell to half the original size.
@@ -326,6 +337,56 @@ class ShapedLetteringTest(unittest.TestCase):
         self.assertLessEqual(cut["size"], 22)  # cut only to come back near the original, never past it
         # The roomy oval keeps every word whole.
         roomy = lettering.plan_shaped(page_with_bubble(axes=(150, 200)), (220, 240, 380, 360), [], self.TEXT, FONT, 30, 10)
+        self.assertFalse(any(line.endswith("-") for line in roomy["lines"]), roomy["lines"])
+
+    def test_very_narrow_bubble_may_cut_a_shorter_word(self):
+        # Manga teste 2 p7: "YES, / CAP- / -TAIN" in a bubble 70 px wide; "Sim, capitão" kept
+        # "capitão" whole and the letters fell to two thirds of the original.  A word of 6 or 7
+        # letters is cut only when that makes the letters much bigger.
+        image = page_with_bubble(axes=(36, 62))
+        box = (276, 262, 324, 338)
+        whole = lettering.plan_shaped(image, box, [], "Sim, capitão", FONT, 23, 8, syllables=False)
+        cut = lettering.plan_shaped(image, box, [], "Sim, capitão", FONT, 23, 8)
+        self.assertGreaterEqual(cut["size"], lettering.HYPHEN_NARROW_GAIN * whole["size"])
+        self.assertIn("capi-", cut["lines"])
+        # In a bubble with room for it, the same words stay whole: "cer-" / "teza" reads choppy.
+        roomy = lettering.plan_shaped(page_with_bubble(axes=(80, 62)), (260, 262, 340, 338), [],
+                                      "Sim, capitão", FONT, 23, 8)
+        self.assertFalse(any(line.endswith("-") for line in roomy["lines"]), roomy["lines"])
+
+    def test_small_letters_in_a_narrow_bubble_try_a_tighter_margin(self):
+        # Manga teste 2 p5: a word one syllable longer took a line more in a narrow bubble, and
+        # the margin to the outline (0.3 line heights, 8 px) left the letters at 16 for 21.
+        image = page_with_bubble(axes=(58, 110))
+        box = (252, 205, 348, 395)
+        text = "O resultado da semana passada foi assombroso!?"
+        with mock.patch.object(lettering, "SHAPED_TIGHT", lettering.SHAPED_MARGIN):
+            wide = lettering.plan_shaped(image, box, [], text, FONT, 25, 8)
+        close = lettering.plan_shaped(image, box, [], text, FONT, 25, 8)
+        self.assertLess(wide["size"], lettering.HYPHEN_BELOW * 25)
+        self.assertGreaterEqual(close["size"], lettering.HYPHEN_GAIN * wide["size"])
+        x0, y0, x1, y1 = close["box"]
+        self.assertTrue(242 < x0 and x1 < 358 and 190 < y0 and y1 < 410, close["box"])  # inside the outline
+        # Letters near the original keep the usual margin.
+        roomy = page_with_bubble(axes=(110, 150))
+        with mock.patch.object(lettering, "SHAPED_TIGHT", lettering.SHAPED_MARGIN):
+            usual = lettering.plan_shaped(roomy, (200, 170, 400, 430), [], text, FONT, 25, 8)
+        self.assertEqual(lettering.plan_shaped(roomy, (200, 170, 400, 430), [], text, FONT, 25, 8), usual)
+
+    def test_a_lone_first_word_beats_letters_far_under_the_original(self):
+        # Manga teste 2 p5: in a narrow bubble the plan with cut words reached the original size
+        # with "O" alone on the first line; the plan without a lone word won at four fifths of it.
+        image = page_with_bubble(axes=(58, 120))
+        box = (252, 195, 348, 405)
+        text = "O resultado da semana passada foi assombroso!?"
+        with mock.patch.object(lettering, "LONE_GAIN", float("inf")):  # the choice as it was
+            before = lettering.plan_shaped(image, box, [], text, FONT, 25, 8)
+        after = lettering.plan_shaped(image, box, [], text, FONT, 25, 8)
+        self.assertLess(before["size"], lettering.HYPHEN_BELOW * 25)
+        self.assertGreaterEqual(after["size"], lettering.HYPHEN_GAIN * before["size"])
+        self.assertEqual(after["lines"][0], "O")
+        # A roomy bubble still keeps the sentence whole on its lines, nothing alone.
+        roomy = lettering.plan_shaped(page_with_bubble(axes=(150, 110)), (170, 210, 430, 390), [], text, FONT, 25, 8)
         self.assertFalse(any(line.endswith("-") for line in roomy["lines"]), roomy["lines"])
 
     def test_symbol_the_font_lacks_comes_from_the_symbol_font(self):
@@ -1125,3 +1186,115 @@ class DarkBlotLayoutTest(unittest.TestCase):
         changed = (out != clean).any(axis=2)
         core = out[changed][grey[changed] >= np.percentile(grey[changed], 90)]
         self.assertLessEqual(np.abs(np.median(core, axis=0) - np.asarray(light["fg"])).max(), 12)
+
+
+class OpenPageTextTest(unittest.TestCase):
+    """Text on the open page, with no bubble around it: the title over a strip of a 4-koma.
+
+    Manga teste 2 p4-p8: the titles over each strip ("OVERRUN", capitals of 33 px) came out
+    at 10 to 14 px.  With every side open the room is the text box, and the air kept from an
+    outline was taken from it on all four sides as well: a line 34 px tall left 14 px.
+    """
+
+    LINE = 34
+
+    @staticmethod
+    def page():
+        image = np.full((600, 600, 3), 255, np.uint8)
+        cv2.rectangle(image, (40, 120), (560, 560), (0, 0, 0), 4)  # the strip under the title
+        return image
+
+    def test_a_title_on_the_page_keeps_its_size(self):
+        box = (200, 52, 390, 86)
+        plan = lettering.plan_shaped(self.page(), box, [], "Superlotação", FONT, self.LINE, 10)
+        self.assertIsNotNone(plan)
+        self.assertGreaterEqual(plan["size"], 0.8 * self.LINE)
+        x0, y0, x1, y1 = plan["box"]
+        margin = round(self.LINE * lettering.SHAPED_MARGIN)
+        # It stays where the title was, no further out than the air a bubble would keep.
+        self.assertGreaterEqual(y0, box[1] - margin)
+        self.assertLessEqual(y1, box[3] + margin)
+        self.assertLess(y1, 120)  # never onto the strip
+
+    def test_text_in_a_bubble_keeps_its_air(self):
+        image = page_with_bubble(axes=(150, 110))
+        box = (240, 270, 360, 330)
+        found = lettering.bubble_mask(image, box, [])
+        opened = lettering.bubble_mask(image, box, [], open_margin=10)
+        self.assertTrue((found[0] == opened[0]).all())  # a closed bubble: the outline sets the room
+
+
+class ArcLetteringTest(unittest.TestCase):
+    """A line written along a curve is lettered along the same path (plan_arc)."""
+    FONT = str(Path(__file__).resolve().parents[1] / "fonts" / "Bangers-Regular.ttf")
+
+    def path(self):
+        return [(60 + 40 * k, 80 + 3 * k * k) for k in range(7)]
+
+    def test_letters_follow_the_path_turned_with_it(self):
+        plan = lettering.plan_arc(self.path(), 30, "Capítulo dois", self.FONT, 10)
+        self.assertIsNotNone(plan)
+        letters = plan["letters"]
+        self.assertEqual("".join(c for c, *_ in letters), "CAPÍTULO DOIS")
+        self.assertLess(letters[0][3], letters[-1][3])            # the letters turn down with the curve
+        self.assertLess(letters[0][1], letters[-1][1])            # left to right
+        image = np.full((300, 500, 3), 255, np.uint8)
+        lettering.draw_arc(image, plan, (255, 255, 255), (0, 0, 0))
+        self.assertTrue((image < 128).any())
+
+    def test_a_longer_translation_shrinks_its_letters(self):
+        short = lettering.plan_arc(self.path(), 30, "Dois", self.FONT, 10)
+        long = lettering.plan_arc(self.path(), 30, "Capítulo dois chegou", self.FONT, 10)
+        self.assertLess(long["size"], short["size"])
+        self.assertIsNone(lettering.plan_arc(self.path(), 30, "Capítulo dois chegou", self.FONT, short["size"]))
+
+
+class StackedArtTest(unittest.TestCase):
+    """A word stacked over the art: upright face, rows packed so the letters keep their size."""
+    ANTON = str(Path(__file__).resolve().parents[1] / "fonts" / "Anton-Regular.ttf")
+
+    def test_compact_rows_keep_the_letters_bigger(self):
+        loose = lettering.plan_stacked((261, 58, 330, 455), "de um homem...", self.ANTON, 8)
+        packed = lettering.plan_stacked((261, 58, 330, 455), "de um homem...", self.ANTON, 8, compact=True)
+        self.assertGreater(packed["size"], loose["size"])
+        rows = packed["rows"]
+        self.assertTrue(all(b > a for a, b in zip(rows, rows[1:])))      # one row under the other
+        image = np.full((520, 400, 3), 255, np.uint8)
+        lettering.draw_shaped(image, packed, (0, 0, 0), (255, 255, 255))
+        self.assertTrue((image < 128).any())
+
+    def test_a_run_of_marks_is_one_row(self):
+        plan = lettering.plan_stacked((100, 0, 160, 600), "Meu iPad!?", self.ANTON, 8, compact=True)
+        self.assertEqual(plan["lines"][-1], "!?")
+        self.assertEqual(plan["lines"][:3], ["M", "E", "U"])
+
+
+class ClearOfTest(unittest.TestCase):
+    def test_a_neighbour_touching_the_margin_leaves_the_room(self):
+        # Manga teste 2 p3: the box of a title written along a curve ended where a long margin
+        # note began; reaching into the note's margin, it cut its room in two, and the note came
+        # out at 14 px instead of 23.
+        box = (100, 200, 1200, 226)
+        arc = (300, 0, 600, 200)     # ends on the note's top
+        inside = (500, 210, 520, 220)  # a box over the note itself stays as it is
+        far = (0, 0, 50, 50)
+        self.assertEqual(lettering.clear_of(box, [arc, inside, far], 4), [(300, 0, 600, 195), inside, far])
+        room = np.zeros((300, 1300, 3), np.uint8)
+        room[194:233, :] = 255  # the band of the note and its margin, as turned_plan makes it
+        text = "Name: someone. Remarks: loves to clean, always has a change of clothes."
+        plain = lettering.plan_shaped(room, box, [], text, StackedArtTest.ANTON, 26, 8)
+        cut = lettering.plan_shaped(room, box, [arc], text, StackedArtTest.ANTON, 26, 8)
+        margin = max(lettering.MIN_MARGIN, int(round(26 * lettering.SHAPED_MARGIN)))  # the plan's own
+        clear = lettering.plan_shaped(room, box, lettering.clear_of(box, [arc], margin), text, StackedArtTest.ANTON, 26, 8)
+        self.assertGreaterEqual(clear["size"], 0.9 * plain["size"])
+        self.assertGreater(clear["size"], cut["size"] if cut else 0)
+
+
+class StackedAccentTest(unittest.TestCase):
+    def test_an_accented_capital_gets_room_for_its_accent(self):
+        # Manga teste 2 p11: in "MÃOS" stacked with packed rows, the tilde touched the foot of the "M".
+        plan = lettering.plan_stacked((100, 0, 160, 600), "Mãos", StackedArtTest.ANTON, 8, compact=True)
+        rows = plan["rows"]
+        self.assertGreater(rows[1] - rows[0], 1.15 * (rows[3] - rows[2]))  # before "Ã" more than before "S"
+        plain = lettering.plan_stacked((100, 0, 160, 600), "Maos", StackedArtTest.ANTON, 8, compact=True)
+        self.assertAlmostEqual(plain["rows"][1] - plain["rows"][0], plain["rows"][3] - plain["rows"][2], delta=0.5)

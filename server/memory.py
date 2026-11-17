@@ -520,7 +520,21 @@ def kept_names(pairs):
                 start = end
             else:
                 start += 1
+    # A word kept capitalized only inside a longer kept name ("Spin" of "Iron Spin") is no name
+    # of its own: learned alone, it was written as a name in later speech (Manga teste 2 p4, p10:
+    # the end of a move's name, "a lovers' hold" -> "um abraço do Hold").
+    longer = [name for source, name in found.items() if " " in source]
+    for source in [source for source in found if " " not in source]:
+        if not any(_kept([source], _without(pair.get("translation", ""), longer)) for pair in pairs):
+            del found[source]
     return list(found.items())
+
+
+def _without(translation, names):
+    """``translation`` with every one of ``names`` blanked out."""
+    for name in names:
+        translation = re.sub(rf"(?<![\wÀ-ÿ]){re.escape(name)}(?![\wÀ-ÿ])", " ", translation)
+    return translation
 
 
 def _kept(words, translation):

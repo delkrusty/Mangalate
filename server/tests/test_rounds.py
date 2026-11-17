@@ -99,6 +99,19 @@ class Round2Test(unittest.TestCase):
                                                 [[798, 170], [841, 170], [841, 190], [798, 190]]]))
         self.assertFalse(same_block(left, right))
 
+    def test_column_that_runs_on_below_the_last_line_stays_apart(self):
+        # Manga teste 2 p7: a column of short lines beside the last line of the other lobe of a
+        # double bubble.  The right column starts at the height of that last line and was joined
+        # as its last word.
+        top = SimpleNamespace(xyxy=np.array([236, 582, 302, 616]), texts=["WE'D", "BETTER"],
+                              lines=np.array([[[269, 582], [296, 582], [296, 596], [269, 596]],
+                                              [[236, 587], [302, 587], [302, 616], [236, 616]]]))
+        column = SimpleNamespace(xyxy=np.array([317, 608, 367, 691]), texts=["GO", "HOME", "BEFORE", "THE", "RAIN"],
+                                 lines=np.array([[[x0, y0], [x1, y0], [x1, y1], [x0, y1]] for x0, y0, x1, y1 in (
+                                     (317, 608, 367, 631), (321, 625, 365, 648), (323, 642, 363, 661),
+                                     (322, 648, 366, 673), (318, 673, 365, 691))]))
+        self.assertFalse(same_block(top, column))
+
     def test_caps_answer_keeps_the_names_it_kept(self):
         from quality import sentence_case, source_names
         names = source_names("QUEEN MERIAL!", "RAINHA MERIAL!")

@@ -19,7 +19,10 @@ chat_system_template: >
   "I told you!" -> "Eu te falei!", "We did it!" -> "A gente conseguiu!"). Avoid calques such as "fazer você" + verb for "let's have you", or
   "isso não é divertido" for "that's no fun" ("assim não tem graça"). A stutter goes on the
   first word of the natural Portuguese sentence ("W-WE HAVE TO RUN" -> "T-temos que
-  correr"), never on a new word or phrase the original does not have. Never leave English
+  correr"), never on a new word or phrase the original does not have. A word cut off by a
+  dash ("LE- LEAVE IT!", "WHE-") is the start of the word the speaker meant, broken off: cut the
+  Portuguese word the same way ("Dei- Deixa isso!", "On-"), never translate the fragment as a word
+  of its own. Never leave English
   words in the translation except names, titles and terms Brazilians normally use.
   Use "você"; young or casual characters may use "pra", "tá", "né", "a gente"; keep
   standard grammar for formal speech and narration. Keep names and honorifics consistent

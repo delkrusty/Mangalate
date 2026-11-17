@@ -194,6 +194,23 @@ def _left_as_speech(region):
             and bool(re.search(r"[^\W_]", str(getattr(region, "text", "")))))
 
 
+def in_bubble(image, region_box, box):
+    """True when the middle of ``box`` is in the bubble (or strip) of the text in ``region_box``;
+    False when no bubble is found around it."""
+    import cv2
+    import numpy as np
+    import lettering
+    found = lettering.bubble_mask(image, tuple(int(v) for v in region_box))
+    if found is None:
+        return False
+    mask, wx0, wy0 = found
+    # The letters are holes in the flat interior; fill them so a point on a glyph counts.
+    contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    mask = cv2.drawContours(np.zeros(mask.shape, np.uint8), contours, -1, 1, -1) > 0
+    cx, cy = (box[0] + box[2]) // 2 - wx0, (box[1] + box[3]) // 2 - wy0
+    return 0 <= cy < mask.shape[0] and 0 <= cx < mask.shape[1] and bool(mask[cy, cx])
+
+
 def over_the_art(region):
     """Translated over what may be the drawing: speech over the art, or a system message on a
     whole panel of one tint (quality.system_card), where the tint may be a drawing."""
@@ -424,8 +441,8 @@ def is_sound_effect(text):
     Kana or kanji with only a few Latin letters around them is left as drawn.
     """
     import re
-    from quality import english_sound_effect
-    text = str(text or "")
+    from quality import english_sound_effect, stray_cjk
+    text = stray_cjk(str(text or ""))
     if not re.search(r"[\u3040-\u30ff\u3400-\u9fff\uff66-\uff9f]", text):
         return english_sound_effect(text)
     return len(re.findall(r"[A-Za-z]", text)) < 12
@@ -446,7 +463,9 @@ def is_credit(text):
     import re
     global CREDIT
     if CREDIT is None:
-        CREDIT = re.compile(r"[™©®]|\b\w{3,}scans?\b|discord|patreon|ko-?fi|www\.|\.(?:com|net|org|gg)\b"
+        # A trademark sign standing alone is a short word misread (Manga teste 2 p2: "IN" over
+        # "SHORT," read "™", and the speech was kept in English as a credit).
+        CREDIT = re.compile(r"(?<=\w)[™®]|[™®](?=\w)|©\s*\w|\b\w{3,}scans?\b|discord|patreon|ko-?fi|www\.|\.(?:com|net|org|gg)\b"
                             r"|by\s*:|\b(?:tl|pr|ts|qc|raws?|editor|proofreader|typesetter|translator|cleaner|redrawer)\s*:"
                             r"|\b(?:translation|lettering|letterer|illustrations?)\s*:"
                             r"|\btapa\w*\W{0,3}origin"
@@ -454,6 +473,21 @@ def is_credit(text):
                             r"|read (?:the |this |more |latest )?chapters? (?:at|on)|support us|our (?:web)?site",
                             re.I)
     return bool(CREDIT.search(str(text or "")))
+
+
+HEADING = None
+
+
+def chapter_heading(text):
+    """True for a chapter heading ("CHAPTER 2 ...") with no staff credit in it."""
+    import re
+    global HEADING
+    if HEADING is None:
+        HEADING = re.compile(r"^\W*(?:chapter|episode|ch\.|ep\.)\s*\d+\b", re.I)
+    text = str(text or "")
+    if not HEADING.search(text):
+        return False
+    return not is_credit(HEADING.sub("", text, count=1))
 
 
 CREDIT_ROLE = None
@@ -551,6 +585,18 @@ def join_split_blocks(regions, image, text_mask=None):
     def columns(region):
         # Two speeches side by side that the merge read as one, line by line interleaved.
         boxes = [_box(q) for q in np.asarray(region.lines)]
+        from quality import stutter_split
+        lobes = stutter_split(boxes, list(region.texts))
+        if lobes:  # a stutter in a lobe of its own: two speeches, never joined back (inside)
+            lines, texts = np.asarray(region.lines), list(region.texts)
+            parts = [type(region)(lines[g], [texts[i] for i in g], font_size=region.font_size, angle=region.angle,
+                                  prob=region.prob, fg_color=region.fg_colors, bg_color=region.bg_colors) for g in lobes]
+            for k, part in enumerate(parts):
+                part.mangalate_block = (id(region), k)
+                # The stutter's lobe is small and its rim may touch the drawing: it is told bubble or
+                # art by the speech it was split from (classify_regions).
+                part.mangalate_lobe_lines = lines[lobes[-1]]
+            return parts
         groups = column_groups(boxes)
         gaps = [min(boxes[i][0] for i in b) - max(boxes[i][2] for i in a) for a, b in zip(groups, groups[1:])]
         paragraphs = False
@@ -599,7 +645,8 @@ def fix_ocr(regions):
         # One-glyph marks the lettering font lacks ("⁈") came back from the AI and were drawn as
         # boxes (One Piece 1161 p7, p9): they are written as plain punctuation before translation.
         if isinstance(getattr(region, "text", None), str):
-            region.text = region.text.translate(PUNCTUATION_GLYPHS)
+            from quality import stray_cjk
+            region.text = stray_cjk(region.text.translate(PUNCTUATION_GLYPHS))
         try:
             text, changed = fix_ocr_words(getattr(region, "text", ""), keep)
         except Exception as exc:  # never lose a page over this
@@ -765,6 +812,30 @@ def drop_window_buttons(region):
             region.__dict__.pop(name, None)
 
 
+def mark_turned(regions, turns, arcs=None, shouts=None):
+    """Give each block whose lines were all read turned the same way (read_sideways) that way.
+
+    The engine orders vertical lines right to left, as Japanese columns are read; lines running up
+    the page ('cw') are read left to right, so their texts are put back in that order.
+    """
+    import numpy as np
+    for region in regions:
+        ways = {turns.get(_box_key(line)) for line in region.lines}
+        region.mangalate_turn = None
+        if len(ways) != 1 or None in ways:
+            continue
+        way = ways.pop()
+        region.mangalate_turn = way
+        region.mangalate_shout = way == "stack" and any(_box_key(line) in (shouts or ()) for line in region.lines)
+        if way == "arc":  # its letters' path, for the lettering
+            region.mangalate_arc = (arcs or {}).get(_box_key(region.lines[0]))
+        if way == "cw" and len(region.texts) > 1:
+            order = sorted(range(len(region.lines)), key=lambda k: float(np.asarray(region.lines[k])[:, 0].mean()))
+            region.lines = np.asarray([region.lines[k] for k in order])
+            region.texts = [region.texts[k] for k in order]
+            region.text = " ".join(str(t) for t in region.texts if t)
+
+
 def classify_regions(original_merge):
     """Decide once, before translation, which blocks are cleaned and translated.
 
@@ -779,6 +850,8 @@ def classify_regions(original_merge):
         set_aside_punctuation(ctx)
         regions = await original_merge(self, config, ctx)
         ctx.mangalate_preserved = []
+        mark_turned(regions or [], getattr(ctx, "mangalate_turns", None) or {}, getattr(ctx, "mangalate_arcs", None),
+                    getattr(ctx, "mangalate_shouts", None))
         if regions:
             regions, context_only = on_page(regions, _PAGE_ROWS.get())
             if context_only:
@@ -807,7 +880,15 @@ def classify_regions(original_merge):
             endings = []
         for region in regions:
             text = getattr(region, "text", "")
-            if is_sound_effect(text) or is_credit(text) or id(region) in follow:
+            # A chapter heading in a bubble of its own ("CHAPTER 2 / HOT, RUGGED AND BIG", Manga
+            # teste 2 p3) is read like the speech around it: translated in the bubble.  Over the
+            # art, or with staff credits, it stays as drawn, unless its letters run along an arc
+            # (read by read_arcs): a heading lettered for show, which the art gate below decides.
+            if (chapter_heading(text) and id(region) not in follow and not is_sound_effect(text)
+                    and (getattr(region, "mangalate_turn", None) == "arc"
+                         or classify_region(image, raw, region.lines).get("kind") == "interior")):
+                pass
+            elif is_sound_effect(text) or is_credit(text) or id(region) in follow:
                 if id(region) in follow and not is_sound_effect(text):
                     region.mangalate_background = {"kind": "creditos"}
                     ctx.mangalate_preserved.append(region)
@@ -815,7 +896,7 @@ def classify_regions(original_merge):
                 region.mangalate_background = {"kind": "efeito_sonoro" if is_sound_effect(text) else "creditos"}
                 ctx.mangalate_preserved.append(region)
                 continue
-            region.mangalate_background = classify_region(image, raw, region.lines)
+            region.mangalate_background = classify_region(image, raw, getattr(region, "mangalate_lobe_lines", region.lines))
             # A system window of a game webtoon (quality.system_window): translated, cleaned inside
             # its frame and lettered there in the colour and size of its letters.
             if region.mangalate_background["kind"] in ("interior", "art", "tracos"):
@@ -874,12 +955,31 @@ def classify_regions(original_merge):
                 try:
                     from quality import HALO_COVER, halo_cover, lines_unread, reads_as_speech, speech_goes_on, speech_on_paper
                     ending = " ".join(str(line.text) for owner, line in endings if owner is region)
+                    turn = getattr(region, "mangalate_turn", None)
+                    # A line written turned over the drawing is checked as it reads (Manga teste 2
+                    # p8: "ARE YOU ALRIGHT?" down the side of a bubble), and letters stacked one per
+                    # row pass, since they are lettered stacked (p11: "A MAN'S" in a halo).
+                    page, mask, quads = image, raw, region.lines
+                    if turn in ("cw", "ccw"):
+                        from quality import turn_page, turn_points
+                        page, mask = turn_page(image, turn), turn_page(raw, turn)
+                        quads = []
+                        for quad in region.lines:
+                            pts = turn_points(quad, turn, image.shape)
+                            (a, b), (c, d) = pts.min(axis=0), pts.max(axis=0)
+                            quads.append(np.array([[a, b], [c, b], [c, d], [a, d]], np.float32))
                     if reads_as_speech(f"{text} {ending}".strip(), len(region.lines) > 1):
-                        if speech_on_paper(image, raw, region.lines):
+                        # Light capitals with a thin outline in a halo, a caption drawn as a sticker over
+                        # the art (p2): their colours, for lettering the translation the same way.
+                        from quality import outlined_in_halo
+                        on_paper = turn is None and speech_on_paper(image, raw, region.lines)
+                        sticker = outlined_in_halo(image, raw, region.lines) if turn is None and not on_paper else None
+                        if on_paper:
                             region.mangalate_background["kind"] = "tracos"
                             region.mangalate_background["fala"] = True
-                        elif (speech_on_paper(image, raw, region.lines, paper_share=0, masked_share=0)
-                              and halo_cover(image, raw, region.lines) >= HALO_COVER
+                        elif ((sticker or turn == "arc" or speech_on_paper(page, mask, quads, paper_share=0, masked_share=0,
+                                                                         stacked_ok=turn == "stack"))
+                              and halo_cover(page, mask, quads) >= HALO_COVER
                               and not speech_goes_on(raw, region.lines, [q for r in regions for q in _block_lines(r)])
                               and not lines_unread(region.lines, getattr(region, "texts", None))):
                             # Dark letters with a white halo over the drawing, in both modes (Manga
@@ -892,9 +992,13 @@ def classify_regions(original_merge):
                             region.mangalate_background["kind"] = "tracos"
                             region.mangalate_background["fala"] = True
                             region.mangalate_background["sobre_arte"] = True
-                            try:  # the size of its capitals, for the lettering (the letters go with the cleaning)
-                                from quality import letter_height
+                            if sticker:
+                                region.mangalate_background["letreiro"] = True
+                                region.mangalate_sticker = sticker
+                            try:  # the size and weight of its capitals, for the lettering (the letters go with the cleaning)
+                                from quality import heavy_letters, letter_height
                                 region.mangalate_letters = letter_height(image, region.lines)
+                                region.mangalate_heavy = heavy_letters(image, region.lines)
                             except Exception as exc:
                                 print(f"Letter height skipped: {type(exc).__name__}", flush=True)
                 except Exception as exc:  # the speech stays as drawn, as before
@@ -914,6 +1018,19 @@ def classify_regions(original_merge):
                     ctx.mangalate_preserved.append(region)
                     continue
             if region.mangalate_background["kind"] in ("interior", "contorno", "tracos"):
+                try:
+                    from quality import unread_in_block
+                    unread = unread_in_block(region.lines, getattr(ctx, "mangalate_unread", None),
+                                             lambda box, region=region: in_bubble(image, region.xyxy, box))
+                except Exception as exc:  # translated as before
+                    print(f"Unread check skipped: {type(exc).__name__}", flush=True)
+                    unread = False
+                if unread:
+                    # Part of the paragraph could not be read (Manga teste 2 p14): translated
+                    # alone, the rest said something else beside the English. Kept, for review.
+                    region.mangalate_background["kind"] = "ilegivel"
+                    ctx.mangalate_preserved.append(region)
+                    continue
                 kept.append(region)
             else:
                 ctx.mangalate_preserved.append(region)
@@ -946,6 +1063,53 @@ def detection_fallback(original_detect):
     return detect
 
 
+async def second_opinion(detect, self, config, ctx, textlines, mask_raw):
+    """The lines CTD missed, from the default detector: (textlines, mask_raw) with them added.
+
+    Manga teste 2 (a 4-koma of small bubbles in bold italics): CTD left out the last line of
+    "WHAT / THE / HELL?", the "NEXT" of "HEY, / NEXT / TERM!" and the whole bubble "HALF
+    PRICE", which the default detector finds.
+    A line whose letters CTD's mask left out (quality.missed_lines) is added with its own
+    pixels of the second mask; CTD's lines stay as they were: where both found a line, CTD
+    splits and groups it better.
+    """
+    import numpy as np
+    from quality import missed_lines, _box
+    detector = getattr(getattr(config, "detector", None), "detector", None)
+    if getattr(detector, "value", detector) != "ctd" or not textlines:
+        return textlines, mask_raw
+    try:
+        retry = config.model_copy(deep=True)
+        retry.detector.detector = type(config.detector.detector)("default")
+        retry.detector.detection_size = 1536
+        second = await detect(self, retry, ctx)
+    except Exception as exc:  # CTD's lines alone, as before
+        print(f"Second detector skipped: {type(exc).__name__}", flush=True)
+        return textlines, mask_raw
+    if not second or not second[0] or second[1] is None:
+        return textlines, mask_raw
+    import cv2
+    other = np.asarray(second[1])
+    if other.shape[:2] != np.asarray(mask_raw).shape[:2]:  # its mask comes at its own detection size
+        other = cv2.resize(other, (np.asarray(mask_raw).shape[1], np.asarray(mask_raw).shape[0]),
+                           interpolation=cv2.INTER_NEAREST)
+    if other.shape != np.asarray(mask_raw).shape:
+        return textlines, mask_raw
+    lines = [line for line in second[0] if getattr(line, "direction", "h") == "h"]
+    gray = cv2.cvtColor(np.asarray(ctx.img_rgb), cv2.COLOR_RGB2GRAY)
+    added = missed_lines([_box(line.pts) for line in lines], mask_raw, gray)
+    if added:  # only their own pixels: the second mask is coarser and would join the lines of a bubble
+        mask_raw = np.asarray(mask_raw).copy()
+        for i in added:
+            x0, y0, x1, y1 = (max(0, int(v)) for v in _box(lines[i].pts))
+            mask_raw[y0:y1, x0:x1] = np.maximum(mask_raw[y0:y1, x0:x1], other[y0:y1, x0:x1])
+    print(f"Second detector: {len(added)} line(s) added", flush=True)
+    return textlines + [lines[i] for i in added], mask_raw
+
+
+TILT_KEPT = 5.0   # degrees: a line tilted more than this keeps its tilted quad after the line repair...
+TILT_SAME = 0.8   # ...when the repaired box and the quad's box cover this share of each other
+TILT_ROOM = 0.5   # line heights: a tilted speech over the drawing is lettered this far past its lines (its halo)
 SQUARE_VERTICAL = 1.5  # a "vertical" detector box at most this many times taller than wide is also checked for lines
 
 
@@ -967,6 +1131,7 @@ def repair_textlines(original_detect):
         image = getattr(ctx, "img_rgb", None)
         if image is not None and np.asarray(mask_raw).shape[:2] != np.asarray(image).shape[:2]:
             return result
+        textlines, mask_raw = await second_opinion(original_detect, self, config, ctx, textlines, mask_raw)
         horizontal = [i for i, line in enumerate(textlines) if getattr(line, "direction", "h") == "h"]
         boxes = [_box(textlines[i].pts) for i in horizontal]
         ctx.mangalate_detector_lines = [list(_box(line.pts)) for line in textlines]  # --diagnostics only
@@ -981,6 +1146,11 @@ def repair_textlines(original_detect):
         # both modes: the owner chose to translate such a speech even preserving the art, where the
         # drawing behind it may come out smeared (Manga teste p4 "IF I WIN... IN DEBT.").
         rebuild = True
+        # The letters of a turned line beside the text are not the text's: crossing the rows of two
+        # lines, they hid the blank row between them, and the pair stayed one box the OCR dropped
+        # (Manga teste 2 p8: "SOME- / -WHERE?" beside "ARE YOU ALRIGHT?" turned).
+        from quality import without_columns
+        seen = without_columns(seen, [_box(line.pts) for i, line in enumerate(textlines) if i not in set(horizontal)])
         repaired, changes = repair_lines(seen.astype(np.uint8) * 255, boxes, gray, rebuild)
         # A box the detector called vertical but about as tall as wide may hold short lines of a
         # narrow bubble ("CON- / DOMS / ?!", Grand Blue 106 p22).  It is tried on its own: when it
@@ -1048,6 +1218,18 @@ def repair_textlines(original_detect):
                 parts = cuts[i]
                 repaired[i:i + 1] = [(part, source) for part in parts]
                 changes.append(("column", (x0, y0, x1, y1), parts))
+            # One box over two speeches side by side in letters of very different sizes (a small
+            # aside in a lobe of the bubble beside the big letters).
+            from quality import size_cuts
+            try:
+                cuts = size_cuts(gray, [box for box, _ in repaired])
+            except Exception as exc:  # never lose a page over this
+                print(f"Size check skipped: {type(exc).__name__}", flush=True)
+                cuts = {}
+            for i in sorted(cuts, reverse=True):
+                box, source = repaired[i]
+                repaired[i:i + 1] = [(part, source) for part in cuts[i]]
+                changes.append(("column", box, cuts[i]))
         # Small white bubbles the detector did not see at all.
         scanned = []
         if image is not None:
@@ -1069,11 +1251,34 @@ def repair_textlines(original_detect):
             print(f"Bubble scan: {len(scanned)} bubble(s) at {ctx.mangalate_scanned}", flush=True)
         if not changes:
             return result
+        # Letters of a tall vertical line are not lines of their own: added one by one, they cut a
+        # margin label into loose letters, each read and lettered apart (Manga teste 2 p3, p8).
+        # The line stays whole and is read turned (read_sideways).
+        from quality import letters_of_columns
+        repaired = letters_of_columns(repaired, [_box(line.pts) for i, line in enumerate(textlines)
+                                                 if i not in set(horizontal) and i not in unfolded])
         lines = [line for i, line in enumerate(textlines) if i not in set(horizontal) and i not in unfolded]
+        # A tilted line keeps its tilted quad when the repair only joined or trimmed it: two detector
+        # boxes over one slanted line were joined into a level box, and the OCR read the level box
+        # as noise and dropped it (Manga teste 2 p2).
+        from quality import _overlap_share, line_tilt
+
+        def tilt(i):
+            return abs(line_tilt([textlines[i].pts]) or 0.0)
+        tilted = [i for i in horizontal if tilt(i) > TILT_KEPT]
+        used = set()
         for box, source in repaired:
             original = textlines[horizontal[source]] if source is not None else None
             if original is not None and box == boxes[source]:
+                used.add(horizontal[source])
                 lines.append(original)
+                continue
+            same = [i for i in tilted if i not in used
+                    and min(_overlap_share(box, _box(textlines[i].pts)), _overlap_share(_box(textlines[i].pts), box)) >= TILT_SAME]
+            if same:
+                keep = max(same, key=tilt)
+                used.add(keep)
+                lines.append(textlines[keep])
                 continue
             x0, y0, x1, y1 = box
             pts = np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=np.int64)
@@ -1131,11 +1336,67 @@ def bubble_layout(rendering, text_render):
         for i, region in enumerate(text_regions):
             region.mangalate_plan = None
             region.mangalate_shaped = None
-            text = region.get_translation_for_rendering()
-            if text and not has_cjk(text) and stacked(region.lines):
-                # Letters stacked one per row in a tall bubble ("GUYS!"): the translation too.
+            from quality_text import plain_width
+            text = plain_width(region.get_translation_for_rendering())  # a "～" kept from the OCR is no Japanese
+            turn = getattr(region, "mangalate_turn", None)
+            if text and not has_cjk(text) and turn in ("cw", "ccw"):
+                # A line written turned (a margin label, a sign): lettered turned the same way.
                 try:
-                    plan = lettering.plan_stacked(boxes[i], text, lettering.font_file(), max(8, round(minimum * 0.6)))
+                    shaped = turned_plan(img, region, turn, boxes, i, text, max(8, round(minimum * 0.6)),
+                                         font_size_offset or 0)
+                except Exception as exc:  # the engine's drawing
+                    print(f"Turned layout skipped: {type(exc).__name__}", flush=True)
+                    shaped = None
+                if shaped is not None:
+                    region.mangalate_shaped = shaped
+                    region.font_size = shaped["size"]
+                    x0, y0, x1, y1 = shaped["box"]
+                    points[i] = np.array([[[x0, y0], [x1, y0], [x1, y1], [x0, y1]]], dtype=np.int64)
+                    planned += 1
+                    continue
+            background = getattr(region, "mangalate_background", None) or {}
+            arc = getattr(region, "mangalate_arc", None)
+            if text and not has_cjk(text) and turn == "arc" and arc:
+                # A line along a curve: each letter of the translation on the same curve (Manga teste 2 p3).
+                try:
+                    shaped = lettering.plan_arc(arc["centres"], arc["height"], text, lettering.art_font(),
+                                                max(8, round(minimum * 0.6)))
+                except Exception as exc:  # the engine's drawing
+                    print(f"Arc layout skipped: {type(exc).__name__}", flush=True)
+                    shaped = None
+                if shaped is not None:
+                    region.mangalate_shaped = shaped
+                    region.font_size = shaped["size"]
+                    x0, y0, x1, y1 = shaped["box"]
+                    points[i] = np.array([[[x0, y0], [x1, y0], [x1, y1], [x0, y1]]], dtype=np.int64)
+                    planned += 1
+                    continue
+            if text and not has_cjk(text) and background.get("sobre_arte") and turn is None and not stacked(region.lines):
+                # Over the drawing, a tilted line, or a caption drawn as a sticker: lettered at the
+                # same tilt (Manga teste 2 p2), the sticker in the impact face of its capitals.
+                from quality import line_tilt
+                angle = line_tilt(region.lines) or 0.0
+                if background.get("letreiro") or abs(angle) > TILT_KEPT:
+                    try:
+                        shaped = tilted_plan(img, region, i, text, max(8, round(minimum * 0.6)), font_size_offset or 0, angle)
+                    except Exception as exc:  # the plans of a level speech
+                        print(f"Tilted layout skipped: {type(exc).__name__}", flush=True)
+                        shaped = None
+                    if shaped is not None:
+                        region.mangalate_shaped = shaped
+                        region.font_size = shaped["size"]
+                        x0, y0, x1, y1 = shaped["box"]
+                        points[i] = np.array([[[x0, y0], [x1, y0], [x1, y1], [x0, y1]]], dtype=np.int64)
+                        planned += 1
+                        continue
+            if text and not has_cjk(text) and stacked(region.lines):
+                # Letters stacked one per row in a tall bubble ("GUYS!"): the translation too.  Over
+                # the drawing, in a halo, in the impact face of such words (Manga teste 2 p11).
+                over = (getattr(region, "mangalate_background", None) or {}).get("sobre_arte")
+                shout = getattr(region, "mangalate_shout", False)
+                try:
+                    font = lettering.shout_font() if shout else lettering.art_font(stacked=True) if over else lettering.font_file()
+                    plan = lettering.plan_stacked(boxes[i], text, font, max(8, round(minimum * 0.6)), compact=bool(over or shout))
                 except Exception as exc:  # never lose a page over the nicer layout
                     print(f"Stacked layout skipped: {type(exc).__name__}", flush=True)
                     plan = None
@@ -1165,6 +1426,12 @@ def bubble_layout(rendering, text_render):
                     continue
             def layout(size, width, height, text=text, lang=region.target_lang):
                 return text_render.calc_horizontal(size, text, width, height, lang, False)
+            face = lettering.font_file()
+            if (getattr(region, "mangalate_background", None) or {}).get("sobre_arte") and face:
+                # Bold capitals with a halo over the drawing (classify_regions measured them on the
+                # page): bold, narrow capitals, as big as they were.
+                if getattr(region, "mangalate_heavy", False):
+                    face, text = lettering.art_font(stacked=True), text.upper()
             others = boxes[:i] + boxes[i + 1:]
             page = img
             hull = None
@@ -1182,7 +1449,7 @@ def bubble_layout(rendering, text_render):
                     print(f"Stroke room skipped: {type(exc).__name__}", flush=True)
                     page = img
             try:
-                shaped = lettering.plan_shaped(page, boxes[i], others, text, lettering.font_file(),
+                shaped = lettering.plan_shaped(page, boxes[i], others, text, face,
                                                line_height(region), max(8, round(minimum * 0.6)),
                                                offset=font_size_offset or 0)
             except Exception as exc:  # never lose a page over the nicer layout
@@ -1195,7 +1462,7 @@ def bubble_layout(rendering, text_render):
                 try:
                     toned = lettering.toned_page(img, boxes[i], hull)
                     roomy = toned is not None and lettering.plan_shaped(
-                        toned, boxes[i], others, text, lettering.font_file(), line_height(region),
+                        toned, boxes[i], others, text, face, line_height(region),
                         max(8, round(minimum * 0.6)), offset=font_size_offset or 0, scale=1.0)
                     if roomy and (shaped is None or roomy["size"] > shaped["size"]):
                         shaped = roomy
@@ -1203,17 +1470,17 @@ def bubble_layout(rendering, text_render):
                     print(f"Toned bubble skipped: {type(exc).__name__}", flush=True)
             light = getattr(region, "mangalate_light", None)
             if light and (getattr(region, "mangalate_background", None) or {}).get("kind") == "interior" \
-                    and lettering.font_file():
+                    and face:
                 # Light letters in a blot of ink: its halftone and ragged edge leave no flat patch
                 # around them, and the room was a sliver of it or none (Manhwa teste p3, p10, p20,
                 # p62, p69: letters at half the original size, or the engine's Arial).  The room is
                 # the whole blot, smoothed (lettering.dark_room); the size aims at the original capitals.
                 try:
-                    target = light["letters"] / lettering.capital_share(lettering.font_file())
+                    target = light["letters"] / lettering.capital_share(face)
                     if shaped is None or shaped["size"] < lettering.BLOCK_BELOW * target:
                         room = lettering.dark_room(img, light["ground"], line_height(region), boxes[i])
                         filled = lettering.plan_shaped(
-                            room, boxes[i], others, text, lettering.font_file(), line_height(region),
+                            room, boxes[i], others, text, face, line_height(region),
                             max(8, round(minimum * 0.6)), offset=font_size_offset or 0,
                             scale=target / line_height(region))
                         if filled and (shaped is None or filled["size"] > shaped["size"]):
@@ -1238,7 +1505,7 @@ def bubble_layout(rendering, text_render):
                     import cv2
                     target = line_height(region)
                     if letters:
-                        target = min(letters / lettering.capital_share(lettering.font_file()),
+                        target = min(letters / lettering.capital_share(face),
                                      lettering.SHAPED_MAX_SCALE * target)
                     if shaped is None or shaped["size"] < lettering.BLOCK_BELOW * target:
                         margin = max(lettering.MIN_MARGIN, int(round(line_height(region) * lettering.SHAPED_MARGIN)))
@@ -1263,7 +1530,7 @@ def bubble_layout(rendering, text_render):
                         block = np.zeros_like(img)
                         block[room] = tuple(int(c) for c in region.mangalate_halo)
                         filled = lettering.plan_shaped(
-                            block, grown, others, text, lettering.font_file(), line_height(region),
+                            block, grown, others, text, face, line_height(region),
                             max(8, round(minimum * 0.6)), offset=font_size_offset or 0,
                             scale=target / line_height(region))
                         if filled and (shaped is None or filled["size"] > shaped["size"]):
@@ -1293,6 +1560,95 @@ def bubble_layout(rendering, text_render):
             planned += 1
         print(f"Bubble layout: {planned} of {len(text_regions)} regions fitted to the bubble", flush=True)
         return points
+
+    def turned_plan(img, region, turn, boxes, i, text, minimum, offset):
+        """The plan of a turned block, made on the page turned so it reads left to right; drawn on
+        the page turned the same way (draw).  Its line height is the width of its columns."""
+        from quality import turn_page, turn_box, unturn_box
+        page = turn_page(np.asarray(img)[:, :, :3], turn)
+        box = turn_box(boxes[i], turn, img.shape)
+        others = [turn_box(b, turn, img.shape) for k, b in enumerate(boxes) if k != i]
+        widths = [float(np.ptp(np.asarray(l)[:, 0])) for l in region.lines]
+        size = float(np.median(widths)) if widths else float(region.font_size)
+        # The room is the band of its lines, a margin around it, reaching along the line onto the
+        # paper beside it (a margin label sits in a strip as narrow as its letters: planned in the
+        # strip, they came out at half the size).  The letters as tall as the original capitals.
+        import cv2
+        gray = cv2.cvtColor(page, cv2.COLOR_RGB2GRAY)
+        x0, y0, x1, y1 = box
+        crop = gray[max(0, y0):y1, max(0, x0):x1] < 128
+        rows = np.flatnonzero(crop.any(axis=1))
+        capitals = float(rows[-1] - rows[0] + 1) if len(rows) else size
+        margin = max(lettering.MIN_MARGIN, int(round(size * lettering.SHAPED_MARGIN)))
+        reach = int(round(TURNED_REACH * (x1 - x0)))
+        room = np.zeros_like(page)
+        H, W = gray.shape
+        # The reach stops at a frame across the band (the portrait at the end of a margin note,
+        # Manga teste 2 p4: the translation ran on over the drawing inside it).
+        from quality import ruled_rows
+        walls = np.flatnonzero(ruled_rows(gray[max(0, y0):y1, :].T, 0, max(1, y1 - max(0, y0))))
+        before, after = walls[walls < x0], walls[walls >= x1]
+        start = max(0, x0 - reach, int(before.max()) + 1 if len(before) else 0)
+        end = min(W, x1 + reach + 1, int(after.min()) if len(after) else W)
+        band = (slice(max(0, y0 - margin), min(H, y1 + margin + 1)), slice(start, end))
+        paper = gray[band] >= lettering.TONE_DARK
+        paper[:, max(0, x0 - band[1].start - margin):x1 - band[1].start + margin + 1] = True
+        room[band][paper] = 255
+        target = capitals / lettering.capital_share(lettering.font_file())
+        # A neighbour ending at the band (a title along a curve beside a margin note, p3) leaves
+        # its margin clear: reaching into it, it cut the band in two (lettering.clear_of).
+        others = lettering.clear_of(box, others, margin)
+        shaped = lettering.plan_shaped(room, box, others, text, lettering.font_file(), size, minimum, offset=offset,
+                                       scale=target / size)
+        if shaped is None:
+            return None
+        shaped["rotate"] = turn
+        shaped["box"] = unturn_box(shaped["box"], turn, img.shape)
+        return shaped
+
+    def tilted_plan(img, region, i, text, minimum, offset, angle):
+        """The plan of a speech over the drawing written tilted, made on the page turned level around
+        its lines and drawn turned back (draw).  The room is where its letters and halo were
+        (speed.paint_halos), closed between words and lines, and the rectangle of its lines; the
+        letters as tall as the original capitals, in the impact face for a sticker caption."""
+        import cv2
+        from quality import _quads_height, letter_height
+        h, w = img.shape[:2]
+        quads = [np.asarray(q, np.float32).reshape(4, 2) for q in region.lines]
+        centre = np.concatenate(quads).mean(axis=0)
+        matrix = cv2.getRotationMatrix2D((float(centre[0]), float(centre[1])), angle, 1.0)
+        level = [cv2.transform(q.reshape(-1, 1, 2), matrix).reshape(4, 2) for q in quads]
+        pts = np.concatenate(level)
+        box = (int(pts[:, 0].min()), int(pts[:, 1].min()), int(np.ceil(pts[:, 0].max())), int(np.ceil(pts[:, 1].max())))
+        size = _quads_height(quads)
+        room = np.zeros((h, w), np.uint8)
+        pad = int(round(TILT_ROOM * size))  # the halo reached past the lines; the plan keeps its margin inside
+        room[max(0, box[1] - pad):box[3] + pad + 1, max(0, box[0] - pad):box[2] + pad + 1] = 1
+        area = getattr(region, "mangalate_halo_area", None)
+        if area is not None and area.shape == (h, w):
+            close = 2 * int(round(size / 2)) + 1
+            turned = cv2.warpAffine(area.astype(np.uint8), matrix, (w, h), flags=cv2.INTER_NEAREST)
+            room |= cv2.morphologyEx(turned, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close, close)))
+        block = np.zeros_like(np.asarray(img)[:, :, :3])
+        block[room > 0] = 255
+        sticker = getattr(region, "mangalate_sticker", None)
+        font = lettering.art_font() if sticker else lettering.font_file()
+        level_page = cv2.warpAffine(np.ascontiguousarray(np.asarray(img)[:, :, :3]), matrix, (w, h),
+                                    flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+        capitals = letter_height(level_page, level) or size * lettering.capital_share(font)
+        target = min(capitals / lettering.capital_share(font), lettering.SHAPED_MAX_SCALE * size)
+        shaped = lettering.plan_shaped(block, box, [], text, font, size, minimum, offset=offset, scale=target / size)
+        if shaped is None:
+            return None
+        inverse = cv2.invertAffineTransform(matrix)
+        x0, y0, x1, y1 = shaped["box"]
+        corners = cv2.transform(np.float32([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]).reshape(-1, 1, 2), inverse).reshape(-1, 2)
+        shaped["turn"] = inverse
+        shaped["box"] = (int(corners[:, 0].min()), int(corners[:, 1].min()),
+                         int(np.ceil(corners[:, 0].max())), int(np.ceil(corners[:, 1].max())))
+        if sticker:  # light capitals in their dark outline, as the original
+            shaped["fg"], shaped["bg"] = sticker
+        return shaped
 
     def window_plan(img, region, window, text, others, minimum, offset):
         """A system window: the room is the inside of its frame, the letters in its condensed sans
@@ -1370,6 +1726,34 @@ def bubble_layout(rendering, text_render):
             fg = np.asarray(window["fg"], np.float32)
             img[:, :, :3] = np.clip(img[:, :, :3] * (1 - alpha) + fg * alpha, 0, 255).astype(np.uint8)
             return img
+        if shaped is not None and shaped.get("arc"):
+            fg, bg = rendering.fg_bg_compare(*region.get_font_colors())
+            return lettering.draw_arc(img, shaped, fg, None if disable_font_border else bg)
+        if shaped is not None and shaped.get("turn") is not None:
+            # A tilted speech (tilted_plan): drawn level on a layer, turned back onto the page.
+            import cv2
+            h, w = img.shape[:2]
+            if shaped.get("fg") is not None:
+                fg, bg = shaped["fg"], shaped["bg"]
+            else:
+                fg, bg = rendering.fg_bg_compare(*region.get_font_colors())
+            bg = None if disable_font_border else bg
+            colour, cover = np.zeros((h, w, 3), np.uint8), np.zeros((h, w, 3), np.uint8)
+            lettering.draw_shaped(colour, shaped, fg, bg)  # over black: its colours times their cover
+            lettering.draw_shaped(cover, shaped, (255, 255, 255), None if bg is None else (255, 255, 255))
+            inverse = np.asarray(shaped["turn"], np.float32)
+            colour = cv2.warpAffine(colour, inverse, (w, h), flags=cv2.INTER_LINEAR).astype(np.float32)
+            alpha = cv2.warpAffine(cover[:, :, 0], inverse, (w, h), flags=cv2.INTER_LINEAR).astype(np.float32)[..., None] / 255.0
+            img[:, :, :3] = np.clip(img[:, :, :3] * (1 - alpha) + colour, 0, 255).astype(np.uint8)
+            return img
+        if shaped is not None and shaped.get("rotate"):
+            # A turned block: drawn on the page turned so it reads left to right, then turned back.
+            from quality import turn_page
+            fg, bg = rendering.fg_bg_compare(*region.get_font_colors())
+            turned = turn_page(img[:, :, :3], shaped["rotate"])
+            lettering.draw_shaped(turned, shaped, fg, None if disable_font_border else bg)
+            img[:, :, :3] = turn_page(turned, "ccw" if shaped["rotate"] == "cw" else "cw")
+            return img
         if shaped is not None and shaped.get("fg") is not None:  # the measured colours (a blot of ink)
             return lettering.draw_shaped(img, shaped, shaped["fg"], None if disable_font_border else shaped["bg"])
         if shaped is not None:
@@ -1435,7 +1819,7 @@ def keep_clean_copy(original_render):
     return render
 
 
-RESCUE_PROB = 0.02
+RESCUE_PROB = 0.01  # a dropped line beside the text is read again down to this (Manga teste 2 p7: a handwritten "BUT THAT'S JUST" at 0.018)
 HALO_PROB = 0.2  # a haloed line dropped on the page is kept read on white this surely (the OCR's own bar)
 
 
@@ -1471,6 +1855,219 @@ async def read_haloed(self, config, ctx, lines):
     return {id(owner[id(copy)]): copy for copy in read if id(copy) in owner}
 
 
+TURNED_REACH = 0.15   # a turned block's room reaches this share of its length onto the paper past each end
+STACK_SURER = 0.15    # OCR confidence: a stacked reading must beat the turned one by this much
+SEED_PROB = 0.1       # OCR confidence: a column grown from one letter is kept read stacked this surely, as speech
+SIDEWAYS_TIE = 0.005  # OCR confidence: a turned reading this close to the engine's counts as as sure
+
+
+def stacked_words(stacked, turned):
+    """True when the stacked reading of a column is English words and the turned one is not, or
+    the stacked one holds all the letters of the turned one (and more)."""
+    import re
+    from quality import english_words
+    common, _ = english_words()
+
+    def words(text):
+        found = re.findall(r"[A-Za-z']+", str(text or ""))
+        return bool(found) and all(w.lower() in common or re.sub(r"'s$", "", w.lower()) in common for w in found)
+
+    def letters(text):
+        return re.sub(r"[^A-Z]", "", str(text or "").upper())
+    if not words(stacked):
+        return False
+    return not words(turned) or (letters(turned) in letters(stacked) and letters(turned) != letters(stacked))
+
+
+def _box_key(points):
+    from quality import _box
+    return tuple(int(v) for v in _box(points))
+
+
+async def read_sideways(self, config, ctx, lines):
+    """{id(lead line): (text, prob, way, members, box, colours)} for blocks of tall vertical lines
+    read turned: 'cw' (lines running up the page), 'ccw' (running down) or 'stack' (capitals one
+    per row, laid in a row).  ``members`` are the vertical lines of the block, ``box`` the block on
+    the page, ``colours`` a reading that carries the OCR's colours.
+
+    The engine reads a vertical box turned one way only, made for Japanese columns: a margin label
+    running up the page came out as noise and was cut into letters (Manga teste 2 p3, p8), and
+    "MAYBE" stacked in a bubble was read lying down (p2).  Columns side by side (a note of two or
+    three lines down the margin, p4, p6) are one block: the detector boxes over them overlap, and
+    each read a slice of its neighbours; the block is read line by line on the turned page.  The
+    caller keeps the surest reading.
+    """
+    image = getattr(ctx, "img_rgb", None)
+    if image is None:
+        return {}
+    import cv2
+    import numpy as np
+    from quality import _box, tall_box, turn_page, turn_box, stacked_row, word_pieces, sideways_blocks, turned_rows, reach_letters, reads_as_speech, stacked_text
+    tall = [line for line in lines if getattr(line, "direction", "h") == "v" and tall_box(_box(line.pts))]
+    page = np.ascontiguousarray(np.asarray(image)[:, :, :3])
+    gray = cv2.cvtColor(page, cv2.COLOR_RGB2GRAY)
+    seeds = stacked_seeds(gray, [line for line in lines if line not in tall])
+    ctx.mangalate_seeds = {id(line): letters for line, _, letters in seeds}
+    if not tall and not seeds:
+        return {}
+    from manga_translator.ocr import dispatch as dispatch_ocr
+    from manga_translator.utils import Quadrilateral
+    retry = config.ocr.model_copy(deep=True) if hasattr(config.ocr, "model_copy") else config.ocr
+    retry.prob = RESCUE_PROB
+    blocks = sideways_blocks([_box(line.pts) for line in tall]) if tall else []  # [(box, [indices]), ...]
+    # Each block reaches over the letters its boxes stopped short of (quality.reach_letters).
+    blocks = [(reach_letters(gray, box, float(np.median([_box(tall[m].pts)[2] - _box(tall[m].pts)[0] for m in members]))),
+               members) for box, members in blocks]
+    for line, column, _ in seeds:  # a column of which the detector boxed one letter: a block of its own
+        tall.append(line)
+        blocks.append((column, [len(tall) - 1]))
+    found = {}
+
+    def keep(k, text, prob, way, colours):
+        best = found.get(k)
+        if best is None or prob > best[1]:
+            found[k] = (text, prob, way, colours)
+
+    for way in ("cw", "ccw"):
+        turned = turn_page(page, way)
+        turned_gray = turn_page(gray, way)
+        copies, owner, counts = [], {}, {}
+        for k, (box, _) in enumerate(blocks):
+            rows = turned_rows(turned_gray, turn_box(box, way, page.shape))
+            pieces = [piece for row in rows for piece in word_pieces(turned_gray, row)]
+            counts[k] = len(pieces)
+            # In reading order: rows top to bottom, pieces left to right.
+            for n, (a, b, c, d) in enumerate(pieces):
+                copy = Quadrilateral(np.array([[a, b], [c, b], [c, d], [a, d]], dtype=np.int64), "", 0.0)
+                copies.append(copy)
+                owner[id(copy)] = (k, n)
+        read = {}
+        if copies:
+            for line in await dispatch_ocr(config.ocr.ocr, turned, copies, retry, self.device, self.verbose):
+                if id(line) in owner:
+                    k, n = owner[id(line)]
+                    read.setdefault(k, {})[n] = line
+        for k, parts in read.items():
+            if len(parts) < counts[k]:  # a piece unread: the block is not read this way
+                continue
+            parts = [parts[n] for n in sorted(parts)]
+            keep(k, " ".join(str(p.text).strip() for p in parts), float(np.mean([p.prob for p in parts])), way,
+                 parts[0])
+    for k, (box, members) in enumerate(blocks):
+        if len(members) != 1:
+            continue
+        # Read as it is, and on a copy where only the letters are dark around the column: dark
+        # letters with a light halo over the drawing ("HANDS..." over the hair, Manga teste 2 p11)
+        # were read with the hair as strokes ("IANDS.").  There the column also reaches the letters
+        # of its own size past its box (quality.stacked_reach: the "A" over "MAN'S").
+        tries = [(gray, box)]
+        try:
+            from quality import STACK_REACH, halo_reading, stacked_reach
+            reach = int(round(STACK_REACH * (box[2] - box[0])))
+            wide = (box[0], max(0, box[1] - reach), box[2], min(gray.shape[0], box[3] + reach))
+            clean = cv2.cvtColor(halo_reading(page, [wide]), cv2.COLOR_RGB2GRAY)
+            tries.append((clean, stacked_reach(clean, box)))
+        except Exception as exc:  # read as it is
+            print(f"Stacked halo reading skipped: {type(exc).__name__}", flush=True)
+        for source, column in tries:
+            row = stacked_row(source, column)
+            if row is None:
+                continue
+            h, w = row.shape
+            quad = Quadrilateral(np.array([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]], dtype=np.int64), "", 0.0)
+            read = await dispatch_ocr(config.ocr.ocr, cv2.cvtColor(row, cv2.COLOR_GRAY2RGB), [quad], retry,
+                                      self.device, self.verbose)
+            best = found.get(k)
+            # Turned letters laid in a row read as some word too: stacked has to be clearly surer
+            # (than a turned reading; than the other stacked one, only surer).  As sure, it wins
+            # when it reads as words and the turned reading does not, or holds its letters and
+            # more (Manga teste 2 p11: "HANDS..." for "IANDS.", "A MAN'S" for "MANS").
+            margin = 0.0 if best is not None and best[2] == "stack" else STACK_SURER
+            # A column grown from one letter (stacked_seeds) is a stacked word or nothing: read so
+            # as a line of speech (its letters put right, quality.stacked_text), the stacked reading
+            # wins.  Read turned, its letters are noise.
+            seed = id(tall[members[0]]) in ctx.mangalate_seeds
+            text = stacked_text(str(read[0].text)) if seed and read else (read[0].text if read else "")
+            spoken = seed and read and read[0].prob >= SEED_PROB and reads_as_speech(text) and not (
+                best is not None and best[2] == "stack" and reads_as_speech(str(best[0])) and best[1] >= read[0].prob)
+            if read and (best is None or read[0].prob > best[1] + margin
+                         or best[2] != "stack" and read[0].prob >= best[1] - SIDEWAYS_TIE
+                         and stacked_words(read[0].text, best[0])
+                         or spoken):
+                found[k] = (text, read[0].prob, "stack", read[0])
+                blocks[k] = (column, members)
+    out = {}
+    for k, (text, prob, way, colours) in found.items():
+        box, members = blocks[k]
+        lead = tall[members[0]]
+        if id(lead) in ctx.mangalate_seeds and (way != "stack" or not reads_as_speech(str(text))):
+            continue  # one letter's column read as something other than a stacked line of speech: as it was
+        out[id(lead)] = (text, prob, way, [tall[m] for m in members], box, colours)
+    return out
+
+
+def stacked_seeds(gray, lines):
+    """[(line, column box, letters mask)] for boxes the detector gave one letter of a word stacked
+    letter under letter (a shout scrawled down a bubble, Manga teste 2 p5: only the "I" of "MY IPAD!?"
+    was boxed, and read "H").  The column grows over the letters of its size above and below it
+    (quality.stacked_reach) to STACK_SEED letters or more; read_sideways reads it stacked and keeps
+    it only as a line of speech."""
+    from quality import STACK_ALONE, STACK_SEED, STACK_SEED_WIDE, _box, letters_alone, letters_box, stacked_letters, stacked_reach
+    from quality_text import stacked
+    found = []
+    for line in lines:
+        box = tuple(int(v) for v in _box(line.pts))
+        if box[2] - box[0] > STACK_SEED_WIDE * max(1, box[3] - box[1]):
+            continue  # a line of letters side by side
+        try:
+            column = stacked_reach(gray, box)
+            count, letters = stacked_letters(gray, column)
+        except Exception as exc:  # no column
+            print(f"Stacked seed skipped: {type(exc).__name__}", flush=True)
+            continue
+        if count < STACK_SEED:
+            continue
+        column = letters_box(letters, column)
+        x0, y0, x1, y1 = column
+        if not stacked([[[x0, y0], [x1, y0], [x1, y1], [x0, y1]]]) or letters_alone(gray, column) < STACK_ALONE:
+            continue  # not a column, or one cut down the lines of a paragraph
+        found.append((line, column, letters))
+    return found
+
+
+async def read_arcs(self, config, ctx, lost):
+    """[(line, text, prob, arc)] for dropped lines written along a curve (quality.arc_letters): each
+    letter turned upright, laid in a row and read.  Manga teste 2 p3: "CHAPTER 2!!" bent around the
+    figure was dropped by the OCR and stayed in English.  Kept when read as surely as the OCR keeps a
+    line, as English words."""
+    image, raw = getattr(ctx, "img_rgb", None), getattr(ctx, "mask_raw", None)
+    if image is None or raw is None or not lost:
+        return []
+    import cv2
+    import numpy as np
+    from quality import arc_letters, reads_as_speech
+    from manga_translator.ocr import dispatch as dispatch_ocr
+    from manga_translator.utils import Quadrilateral
+    gray = cv2.cvtColor(np.ascontiguousarray(np.asarray(image)[:, :, :3]), cv2.COLOR_RGB2GRAY)
+    raw = np.asarray(raw)
+    if raw.shape[:2] != gray.shape:
+        raw = cv2.resize(raw, (gray.shape[1], gray.shape[0]), interpolation=cv2.INTER_NEAREST)
+    retry = config.ocr.model_copy(deep=True) if hasattr(config.ocr, "model_copy") else config.ocr
+    retry.prob = RESCUE_PROB
+    found = []
+    for line in lost:
+        arc = arc_letters(gray, raw, line.pts)
+        if arc is None:
+            continue
+        h, w = arc["row"].shape
+        quad = Quadrilateral(np.array([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]], dtype=np.int64), "", 0.0)
+        read = await dispatch_ocr(config.ocr.ocr, cv2.cvtColor(arc["row"], cv2.COLOR_GRAY2RGB), [quad], retry,
+                                  self.device, self.verbose)
+        if read and read[0].prob >= HALO_PROB and reads_as_speech(str(read[0].text)):
+            found.append((line, str(read[0].text), float(read[0].prob), arc))
+    return found
+
+
 def rescue_ocr(original_ocr):
     """Read again, with a lower threshold, lines the OCR dropped inside a paragraph.
 
@@ -1487,6 +2084,12 @@ def rescue_ocr(original_ocr):
         except Exception as exc:  # the page reading stays as it is
             print(f"Halo reading skipped: {type(exc).__name__}", flush=True)
             white = {}
+        ctx.mangalate_turns, ctx.mangalate_shouts, ctx.mangalate_seeds = {}, set(), {}
+        try:
+            turned = await read_sideways(self, config, ctx, before)
+        except Exception as exc:  # the engine's reading stays
+            print(f"Sideways reading skipped: {type(exc).__name__}", flush=True)
+            turned = {}
         result = await original_ocr(self, config, ctx)
         if white:
             # The surer reading of each haloed line; one the OCR dropped on the page is kept when
@@ -1506,13 +2109,71 @@ def rescue_ocr(original_ocr):
                     result = list(result) + [line]
                 better += 1
             print(f"Halo reading: {better} of {len(white)} haloed lines read better on white", flush=True)
+        if turned:
+            # The surest of the engine's reading and the turned ones.  A block read turned replaces
+            # its vertical lines with one line over the block; one the engine dropped is kept when
+            # read turned as surely as the OCR keeps a line.
+            import numpy as np
+            from manga_translator.utils import Quadrilateral
+            kept = {id(line) for line in result}
+            ctx.mangalate_turns = {}
+            for line in before:
+                if id(line) not in turned:
+                    continue
+                text, prob, way, members, (x0, y0, x1, y1), colours = turned[id(line)]
+                engine = [float(getattr(m, "prob", 0) or 0) for m in members if id(m) in kept]
+                bar = max(engine) if engine else HALO_PROB
+                if id(line) in (getattr(ctx, "mangalate_seeds", None) or {}):
+                    bar = SEED_PROB  # one letter of a column read alone ("H" for "I") is no reading of it
+                # A tie goes to the turned reading: down the page it is the engine's own, and the
+                # way it was read is what letters the translation turned.
+                if prob < bar - SIDEWAYS_TIE or not any(ch.isalpha() for ch in str(text)):
+                    continue
+                whole = Quadrilateral(np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=np.int64),
+                                      text, max(prob, bar))
+                for name in ("fg_r", "fg_g", "fg_b", "bg_r", "bg_g", "bg_b"):
+                    if hasattr(colours, name):
+                        setattr(whole, name, getattr(colours, name))
+                gone = {id(m) for m in members}
+                result = [l for l in result if id(l) not in gone] + [whole]
+                ctx.mangalate_turns[_box_key(whole.pts)] = way
+                letters = (getattr(ctx, "mangalate_seeds", None) or {}).get(id(line))
+                if letters is not None:
+                    # A shout of which the detector marked one letter: all its letters are cleaned,
+                    # and it is lettered as a shout (lettering.shout_font).
+                    ctx.mangalate_shouts = getattr(ctx, "mangalate_shouts", set()) | {_box_key(whole.pts)}
+                    raw = getattr(ctx, "mask_raw", None)
+                    if raw is not None and np.asarray(raw).shape[:2] == letters.shape:
+                        import cv2
+                        grown = cv2.dilate(letters.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+                        ctx.mask_raw = np.where(grown, 255, np.asarray(raw)).astype(np.asarray(raw).dtype)
+            print(f"Sideways reading: {len(ctx.mangalate_turns)} of {len(turned)} tall blocks read turned", flush=True)
         kept = {id(line) for line in result}
-        lost = [line for line in before if id(line) not in kept and getattr(line, "direction", "h") == "h"]
+        # A letter read as part of a stacked column (stacked_seeds) is in that column now.
+        seeded = set(getattr(ctx, "mangalate_seeds", None) or {}) if getattr(ctx, "mangalate_shouts", None) else set()
+        lost = [line for line in before if id(line) not in kept and id(line) not in seeded
+                and getattr(line, "direction", "h") == "h"]
+        ctx.mangalate_arcs = {}
+        try:
+            arcs = await read_arcs(self, config, ctx, lost)
+        except Exception as exc:  # the dropped lines stay dropped
+            print(f"Arc reading skipped: {type(exc).__name__}", flush=True)
+            arcs = []
+        for line, text, prob, arc in arcs:
+            line.text, line.prob = text, prob
+            result = list(result) + [line]
+            ctx.mangalate_turns[_box_key(line.pts)] = "arc"
+            ctx.mangalate_arcs[_box_key(line.pts)] = arc
+        if arcs:
+            print(f"Arc reading: {len(arcs)} line(s) along a curve read", flush=True)
+            kept = {id(line) for line in result}
+            lost = [line for line in lost if id(line) not in kept]
         from quality import _box
         # --diagnostics only: what the OCR read on each line, and the lines it dropped.
         ctx.mangalate_ocr_lines = [{"caixa": list(_box(l.pts)), "texto": str(getattr(l, "text", "")),
                                     "prob": round(float(getattr(l, "prob", 0) or 0), 3)} for l in result]
         ctx.mangalate_ocr_lost = [list(_box(l.pts)) for l in lost]
+        ctx.mangalate_unread = []
         if not lost:
             return result
         import numpy as np
@@ -1559,6 +2220,11 @@ def rescue_ocr(original_ocr):
             ctx.mangalate_drawn += [list(_box(l.pts)) for l in read if len(letters(l)) >= 2 and drawing(l)]
         if not tried:
             return result
+        # Lines beside the text that stay unread: their block is left as drawn (classify_regions).
+        read_again = {_box(l.pts) for l in rescued}
+        drawn = {tuple(b) for b in ctx.mangalate_drawn}
+        ctx.mangalate_unread = [trimmed[i] for i in sorted(tried)
+                                if trimmed[i] not in read_again and trimmed[i] not in drawn]
         render = getattr(config, "render", None)
         for line in rescued:
             if getattr(render, "font_color_fg", None):
@@ -1613,7 +2279,8 @@ async def refine_mask_consistently(self, config, ctx):
         for region in ctx.text_regions or []:
             if (getattr(region, "mangalate_background", None) or {}).get("kind") != "interior":
                 continue
-            keep = line_symbols(ctx.img_rgb, region.lines) | drawing_around(ctx.img_rgb, region.lines, _line_size(region))
+            text = [q for other in ctx.text_regions if other is not region for q in np.asarray(other.lines)]
+            keep = line_symbols(ctx.img_rgb, region.lines) | drawing_around(ctx.img_rgb, region.lines, _line_size(region), text)
             hit = keep & (mask > 0)
             if hit.any():
                 mask = mask.copy()
@@ -1722,7 +2389,7 @@ def validate_page_translations(original_translate):
         if not legacy_quality() and isinstance(result, list):
             import re
             import unicodedata
-            from quality import (normalize_spacing, page_names, same_text, sentence_case, source_names, square_brackets,
+            from quality import (normalize_spacing, rejoin_numbers, page_names, same_text, sentence_case, source_names, square_brackets,
                                  tidy_start, unchanged_english)
             texts = [getattr(region, "translation", None) for region in result]
             names = page_names([t for t in texts if isinstance(t, str)])
@@ -1778,7 +2445,7 @@ def validate_page_translations(original_translate):
                     fixed = tidy_start(fixed, getattr(region, "text", ""), own)
                     window = (getattr(region, "mangalate_background", None) or {}).get("kind") == "janela"
                     fixed = square_brackets(fixed, getattr(region, "text", ""), window=window)
-                    region.translation = normalize_spacing(fixed)
+                    region.translation = rejoin_numbers(normalize_spacing(fixed), getattr(region, "text", ""))
             try:  # brackets the OCR missed on one window of the page (quality.page_window_brackets)
                 from quality import page_window_brackets
                 wins = [(getattr(r, "mangalate_background", None) or {}).get("kind") == "janela" for r in result]

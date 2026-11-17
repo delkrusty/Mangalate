@@ -45,6 +45,6 @@ python -m unittest discover -s server/tests
 
 ## Créditos e licença
 
-Base: [Mihon](https://github.com/mihonapp/mihon) (Apache 2.0). Servidor: [manga-image-translator](https://github.com/zyddnys/manga-image-translator) (GPL-3.0), rodando como serviço separado. Tradução no celular: Google ML Kit. Fonte Comic Neue (SIL OFL 1.1), ícones Material Symbols (Apache 2.0) e divisão silábica [DivSilab/LibreOffice](https://github.com/LibreOffice/dictionaries/tree/master/pt_BR) (MPL).
+Base: [Mihon](https://github.com/mihonapp/mihon) (Apache 2.0). Servidor: [manga-image-translator](https://github.com/zyddnys/manga-image-translator) (GPL-3.0), rodando como serviço separado. Tradução no celular: Google ML Kit. Fontes Comic Neue, Bangers, Anton, Bowlby One SC, Titan One, Bungee, Lilita One, Creepster, Patrick Hand, Kalam, Gochi Hand, Pathway Gothic One e PT Serif (SIL OFL 1.1) e Permanent Marker (Apache 2.0), lista em `server/fonts/README.md`, ícones Material Symbols (Apache 2.0) e divisão silábica [DivSilab/LibreOffice](https://github.com/LibreOffice/dictionaries/tree/master/pt_BR) (MPL).
 
 O app usa a licença Apache 2.0 ([LICENSE](LICENSE)). `server/engine_compat.py` é GPL-3.0, como o motor que adapta ([LICENSE.engine](server/LICENSE.engine)). Os modelos baixados têm licenças próprias.
