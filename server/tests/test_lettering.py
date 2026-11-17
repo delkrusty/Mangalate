@@ -357,8 +357,8 @@ class ShapedLetteringTest(unittest.TestCase):
     def test_small_letters_in_a_narrow_bubble_try_a_tighter_margin(self):
         # Manga teste 2 p5: a word one syllable longer took a line more in a narrow bubble, and
         # the margin to the outline (0.3 line heights, 8 px) left the letters at 16 for 21.
-        image = page_with_bubble(axes=(58, 110))
-        box = (252, 205, 348, 395)
+        image = page_with_bubble(axes=(58, 100))
+        box = (252, 215, 348, 385)
         text = "O resultado da semana passada foi assombroso!?"
         with mock.patch.object(lettering, "SHAPED_TIGHT", lettering.SHAPED_MARGIN):
             wide = lettering.plan_shaped(image, box, [], text, FONT, 25, 8)
@@ -366,7 +366,7 @@ class ShapedLetteringTest(unittest.TestCase):
         self.assertLess(wide["size"], lettering.HYPHEN_BELOW * 25)
         self.assertGreaterEqual(close["size"], lettering.HYPHEN_GAIN * wide["size"])
         x0, y0, x1, y1 = close["box"]
-        self.assertTrue(242 < x0 and x1 < 358 and 190 < y0 and y1 < 410, close["box"])  # inside the outline
+        self.assertTrue(242 < x0 and x1 < 358 and 200 < y0 and y1 < 400, close["box"])  # inside the outline
         # Letters near the original keep the usual margin.
         roomy = page_with_bubble(axes=(110, 150))
         with mock.patch.object(lettering, "SHAPED_TIGHT", lettering.SHAPED_MARGIN):
@@ -376,8 +376,8 @@ class ShapedLetteringTest(unittest.TestCase):
     def test_a_lone_first_word_beats_letters_far_under_the_original(self):
         # Manga teste 2 p5: in a narrow bubble the plan with cut words reached the original size
         # with "O" alone on the first line; the plan without a lone word won at four fifths of it.
-        image = page_with_bubble(axes=(58, 120))
-        box = (252, 195, 348, 405)
+        image = page_with_bubble(axes=(66, 120))  # the gain holds with and without raqm kerning
+        box = (244, 195, 356, 405)
         text = "O resultado da semana passada foi assombroso!?"
         with mock.patch.object(lettering, "LONE_GAIN", float("inf")):  # the choice as it was
             before = lettering.plan_shaped(image, box, [], text, FONT, 25, 8)
