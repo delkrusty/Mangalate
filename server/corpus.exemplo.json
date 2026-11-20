@@ -1,0 +1,5 @@
+[
+  {"id": "pb-1", "capitulo": "capitulo-pb.cbz", "paginas": "8-13", "obra": "Obra A", "estilo": "mangá P&B com retícula"},
+  {"id": "cor-1", "capitulo": "capitulo-colorido.cbz", "paginas": "25-30", "obra": "Obra B", "estilo": "manhwa colorido"},
+  {"id": "arte-1", "capitulo": "capitulo-pb.cbz", "paginas": "2", "obra": "Obra A", "estilo": "texto sobre a arte", "art_text": "traduzir"}
+]
