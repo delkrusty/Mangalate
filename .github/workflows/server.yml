@@ -17,7 +17,7 @@ jobs:
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
       - name: Gateway, wizard and notebook contract tests
         run: |
-          pip install -r server/requirements-gateway.txt numpy==2.5.4 opencv-python-headless
+          pip install -r server/requirements-gateway.txt numpy==2.5.4 opencv-python-headless==5.0.0.93
           python -m unittest discover -s server/tests -v
       - name: Validate Compose and CPU build
         working-directory: server

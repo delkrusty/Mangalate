@@ -2,6 +2,11 @@
 
 As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://github.com/mihonapp/mihon/blob/main/CHANGELOG.md).
 
+## Em teste
+
+### CI
+- Os testes do servidor no CI usam o OpenCV fixo em 5.0.0.93, como o numpy. O 5.1 desenha o texto das páginas sintéticas com outros pixels, e dois testes de fala com halo sobre a arte falhavam na `main` sem mudança no código.
+
 ## 0.7.3
 
 - **Balões pequenos e texto denso:** falas curtas que passavam batido agora são traduzidas, falas lado a lado ou coladas não se misturam mais, e o balão sai limpo, com letra maior nos balões estreitos.
