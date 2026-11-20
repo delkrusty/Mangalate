@@ -35,3 +35,27 @@ Use páginas próprias ou autorizadas, de mangá (preto e branco) e de webtoon (
 | Escrita | Texto dentro do balão, legível, sem palavra cortada |
 
 Uma mudança só está pronta quando melhora as páginas que motivaram a mudança sem piorar as outras. Compilar, passar nos testes ou receber HTTP 200 não basta.
+
+## Corpus e avaliação automática
+
+O corpus é a lista fixa de trechos de teste, um por estilo (mangá P&B, manhwa colorido, webtoon, balão sem contorno, texto sobre a arte, página escura...). Ele fica só no PC, em `server/teste/corpus.json`, no formato de `server/corpus.exemplo.json`. Todo capítulo novo com estilo diferente que aparecer entra no corpus como um trecho a mais, e não só como uma correção.
+
+```powershell
+py avaliacao.py rodar --rodada base-<commit>                  # roda todos os trechos e mede
+py avaliacao.py rodar --rodada base-<commit> --only pb-1,cor-1 # só alguns trechos
+py avaliacao.py medir teste-curto/<rodada>                     # mede uma rodada que já existe
+py avaliacao.py comparar teste-curto/<antes> teste-curto/<depois>
+```
+
+`rodar` usa `--no-memory`, porque a memória da obra aprende a cada rodada e duas rodadas só são comparáveis sem ela; um trecho com `"memoria": true` no corpus usa a memória. `medir` grava `avaliacao.json` e `avaliacao.md` na pasta da rodada. `comparar` grava `comparacao.md` na pasta de depois, lista as páginas cujos pixels mudaram e termina com código 1 se alguma página piorou numa métrica. As métricas, na ordem das prioridades:
+
+| Métrica | O que conta |
+|---|---|
+| `falhou` | Página que saiu como o original por erro |
+| `arte_longe` | Manchas de mudança longe de qualquer caixa de texto, onde o original tinha desenho (arte apagada ou borrada) |
+| `restos` | Balões limpos onde ainda sobrou letra antiga escura no lugar das linhas originais |
+| `fala_ingles` | Falas traduzidas que voltaram vazias, iguais ao original ou quase todas em inglês |
+| `fala_preservada` | Fala de balão ou janela deixada no original |
+| `letra_pequena` | Tradução com maiúsculas abaixo de 70% das maiúsculas originais |
+
+Os números apontam as páginas a abrir; não substituem olhar a página inteira. Uma métrica que acusa algo que, olhando, está bom é um defeito da métrica: anote o caso e ajuste a métrica numa mudança própria.

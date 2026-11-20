@@ -4,6 +4,9 @@ As mudanças do leitor herdadas do Mihon estão no [changelog do Mihon](https://
 
 ## Em teste
 
+### Avaliação automática das rodadas
+- `server/avaliacao.py` roda o corpus local de teste (`server/teste/corpus.json`, só no PC) e dá nota a cada página da rodada sem chamar IA: arte mexida longe do texto, letra antiga que sobrou no balão, fala em inglês ou deixada no original e letra pequena demais. `comparar` mostra, entre duas rodadas, as páginas que mudaram e as que pioraram. Serve para achar as páginas a abrir e para medir uma mudança no motor no corpus inteiro, não só nas páginas que a motivaram.
+
 ### CI
 - Os testes do servidor no CI usam o OpenCV fixo em 5.0.0.93, como o numpy. O 5.1 desenha o texto das páginas sintéticas com outros pixels, e dois testes de fala com halo sobre a arte falhavam na `main` sem mudança no código.
 
